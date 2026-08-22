@@ -41,6 +41,9 @@ export const deliveryMethods = pgTable(
     name: varchar("name", { length: 160 }).notNull(),
     defaultCustomerFeeSatang: integer("default_customer_fee_satang").notNull(),
     defaultInternalCostSatang: integer("default_internal_cost_satang").notNull(),
+    requiresDeliveryLocation: boolean("requires_delivery_location")
+      .notNull()
+      .default(true),
     active: boolean("active").notNull().default(true),
     notes: text("notes"),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
