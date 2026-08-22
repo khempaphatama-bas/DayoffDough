@@ -25,6 +25,7 @@ export type DeliveryMethodInput = Readonly<{
   name: string;
   defaultCustomerFeeSatang: number;
   defaultInternalCostSatang: number;
+  requiresDeliveryLocation: boolean;
   notes?: string;
 }>;
 
@@ -44,6 +45,7 @@ export type DeliveryMethod = Readonly<{
   name: string;
   defaultCustomerFeeSatang: number;
   defaultInternalCostSatang: number;
+  requiresDeliveryLocation: boolean;
   active: boolean;
   notes: string | null;
 }>;
@@ -77,6 +79,7 @@ const methodSchema = z.object({
   name: z.string().trim().min(1).max(160),
   defaultCustomerFeeSatang: moneySchema,
   defaultInternalCostSatang: moneySchema,
+  requiresDeliveryLocation: z.boolean(),
   notes: z.string().trim().max(2000).optional(),
 });
 
@@ -109,6 +112,7 @@ function toMethod(row: typeof deliveryMethods.$inferSelect): DeliveryMethod {
     name: row.name,
     defaultCustomerFeeSatang: row.defaultCustomerFeeSatang,
     defaultInternalCostSatang: row.defaultInternalCostSatang,
+    requiresDeliveryLocation: row.requiresDeliveryLocation,
     active: row.active,
     notes: row.notes,
   };

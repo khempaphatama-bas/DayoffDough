@@ -50,6 +50,8 @@ export async function createDeliveryMethodAction(
       name: parsed.data.name,
       defaultCustomerFeeSatang: parseBahtToSatang(parsed.data.customerFeeBaht),
       defaultInternalCostSatang: parseBahtToSatang(parsed.data.internalCostBaht),
+      requiresDeliveryLocation:
+        formData.get("requiresDeliveryLocation") === "on",
       notes: parsed.data.notes,
     });
     revalidatePath("/delivery");
@@ -80,6 +82,8 @@ export async function updateDeliveryMethodAction(
       name: parsed.data.name,
       defaultCustomerFeeSatang: parseBahtToSatang(parsed.data.customerFeeBaht),
       defaultInternalCostSatang: parseBahtToSatang(parsed.data.internalCostBaht),
+      requiresDeliveryLocation:
+        formData.get("requiresDeliveryLocation") === "on",
       active: formData.get("active") === "on",
       notes: parsed.data.notes,
     });

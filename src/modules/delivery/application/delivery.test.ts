@@ -52,10 +52,30 @@ describe("delivery and packaging configuration", () => {
       name: "KEX Same Day",
       defaultCustomerFeeSatang: 12000,
       defaultInternalCostSatang: 12000,
+      requiresDeliveryLocation: true,
     });
   });
 
   afterEach(async () => context.close());
+
+  it("stores whether a method requires a delivery destination", async () => {
+    const pickup = await service.createMethod(OWNER_ID, {
+      name: "รับเอง",
+      defaultCustomerFeeSatang: 0,
+      defaultInternalCostSatang: 0,
+      requiresDeliveryLocation: false,
+    });
+    expect(pickup.requiresDeliveryLocation).toBe(false);
+
+    const updated = await service.updateMethod(OWNER_ID, pickup.id, {
+      name: "รับเองหน้าร้าน",
+      defaultCustomerFeeSatang: 0,
+      defaultInternalCostSatang: 0,
+      requiresDeliveryLocation: true,
+      active: true,
+    });
+    expect(updated.requiresDeliveryLocation).toBe(true);
+  });
 
   it("accepts every supported packaging rule combination", async () => {
     const perUnit = await service.createPackagingRule(OWNER_ID, {
