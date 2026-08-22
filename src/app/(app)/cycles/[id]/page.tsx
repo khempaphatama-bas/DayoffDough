@@ -1,5 +1,4 @@
 import Link from "next/link";
-import { changeCycleStatusAction } from "@/app/(app)/cycles/actions";
 import { requireOwner } from "@/lib/auth/require-owner";
 import { db } from "@/lib/db/client";
 import {
@@ -8,6 +7,7 @@ import {
 } from "@/modules/cycles/application/cycles";
 import { CycleForm } from "@/modules/cycles/ui/cycle-form";
 import { CYCLE_STATUS_LABELS } from "@/modules/cycles/ui/cycle-list";
+import { CycleStatusForm } from "@/modules/cycles/ui/cycle-status-form";
 
 function formatCycleDate(value: string): string {
   return new Intl.DateTimeFormat("th-TH", {
@@ -30,7 +30,10 @@ export function CycleDetail({ cycle }: Readonly<{ cycle: BakeCycle }>) {
     <main className="mx-auto grid max-w-5xl gap-7 px-5 py-8">
       <header className="grid gap-5 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
         <div>
-          <Link className="text-sm font-semibold text-amber-800" href="/cycles">
+          <Link
+            className="inline-flex min-h-11 items-center text-sm font-semibold text-amber-800"
+            href="/cycles"
+          >
             ← รอบอบ
           </Link>
           <p className="mt-4 text-sm font-bold text-amber-800">
@@ -58,32 +61,7 @@ export function CycleDetail({ cycle }: Readonly<{ cycle: BakeCycle }>) {
             {CYCLE_STATUS_LABELS[cycle.status]}
           </p>
         </div>
-        <form
-          action={changeCycleStatusAction}
-          className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]"
-        >
-          <input name="cycleId" type="hidden" value={cycle.id} />
-          <label className="grid gap-2 text-sm font-semibold text-stone-700">
-            เปลี่ยนสถานะ
-            <select
-              className="min-h-11 rounded-xl border border-stone-300 bg-white px-4 text-base font-normal"
-              defaultValue={cycle.status}
-              name="status"
-            >
-              {Object.entries(CYCLE_STATUS_LABELS).map(([value, label]) => (
-                <option key={value} value={value}>
-                  {label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <button
-            className="min-h-11 self-end rounded-xl border border-stone-800 px-5 font-semibold"
-            type="submit"
-          >
-            อัปเดตสถานะ
-          </button>
-        </form>
+        <CycleStatusForm cycleId={cycle.id} status={cycle.status} />
       </section>
 
       <section className="grid gap-4 sm:grid-cols-2">

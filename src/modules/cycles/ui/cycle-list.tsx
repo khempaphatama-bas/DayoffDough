@@ -105,7 +105,7 @@ export function CycleList({
                       #{cycle.cycleNumber}
                     </p>
                     <Link
-                      className="mt-1 block font-bold text-stone-900"
+                      className="mt-1 inline-flex min-h-11 items-center font-bold text-stone-900"
                       href={`/cycles/${cycle.id}`}
                     >
                       {cycle.name}
@@ -148,7 +148,7 @@ export function CycleList({
                   #{cycle.cycleNumber}
                 </span>
                 <Link
-                  className="font-semibold text-stone-900 hover:text-amber-800"
+                  className="inline-flex min-h-11 items-center font-semibold text-stone-900 hover:text-amber-800"
                   href={`/cycles/${cycle.id}`}
                 >
                   {cycle.name}

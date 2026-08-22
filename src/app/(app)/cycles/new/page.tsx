@@ -8,7 +8,10 @@ export default async function NewCyclePage() {
   return (
     <main className="mx-auto grid max-w-4xl gap-7 px-5 py-8">
       <header>
-        <Link className="text-sm font-semibold text-amber-800" href="/cycles">
+        <Link
+          className="inline-flex min-h-11 items-center text-sm font-semibold text-amber-800"
+          href="/cycles"
+        >
           ← รอบอบ
         </Link>
         <h1 className="mt-3 text-3xl font-bold tracking-tight text-stone-900">

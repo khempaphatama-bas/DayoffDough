@@ -32,6 +32,11 @@ describe("CycleDetail", () => {
 
     expect(screen.getByRole("heading", { name: CYCLE.name })).toBeInTheDocument();
     expect(screen.getByText("รอบ #12")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "← รอบอบ" })).toHaveClass(
+      "inline-flex",
+      "min-h-11",
+      "items-center",
+    );
     expect(screen.getByRole("link", { name: "เพิ่มออเดอร์" })).toHaveAttribute(
       "href",
       `/orders/new?cycleId=${CYCLE.id}`,

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { OWNER_ID } from "@tests/fixtures/owner";
-import type { CycleActionState } from "./actions";
+import type { CycleActionState, CycleStatusActionState } from "./actions";
 
 const CYCLE_ID = "11111111-1111-4111-8111-111111111111";
 const auth = vi.hoisted(() => ({ requireOwner: vi.fn() }));
@@ -33,6 +33,10 @@ import {
 const INITIAL_STATE: CycleActionState = {
   error: null,
   fieldErrors: {},
+  saved: false,
+};
+const INITIAL_STATUS_STATE: CycleStatusActionState = {
+  error: null,
   saved: false,
 };
 
@@ -138,13 +142,14 @@ describe("cycle actions", () => {
     expect(auth.requireOwner).toHaveBeenCalledOnce();
   });
 
-  it("owner-scopes Phase 2 status changes and rejects LOCKED submissions", async () => {
+  it("owner-scopes successful Phase 2 status changes", async () => {
     const valid = new FormData();
     valid.set("cycleId", CYCLE_ID);
     valid.set("status", "IN_PRODUCTION");
 
-    await changeCycleStatusAction(valid);
+    const result = await changeCycleStatusAction(INITIAL_STATUS_STATE, valid);
 
+    expect(result).toEqual({ error: null, saved: true });
     expect(cycles.changeStatus).toHaveBeenCalledWith(
       OWNER_ID,
       CYCLE_ID,
@@ -156,17 +161,57 @@ describe("cycle actions", () => {
       ["/dashboard"],
     ]);
     expect(auth.requireOwner).toHaveBeenCalledOnce();
+  });
 
-    cycles.changeStatus.mockClear();
+  it("returns a serialized Thai state for invalid status input", async () => {
+    const invalid = new FormData();
+    invalid.set("cycleId", CYCLE_ID);
+    invalid.set("status", "NOT_A_STATUS");
+
+    const result = await changeCycleStatusAction(INITIAL_STATUS_STATE, invalid);
+
+    expect(result).toEqual({
+      error: "กรุณาตรวจสอบสถานะรอบอบ",
+      saved: false,
+    });
+    expect(auth.requireOwner).toHaveBeenCalledOnce();
+    expect(cycles.changeStatus).not.toHaveBeenCalled();
+    expect(next.revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("returns a serialized Thai state when the owned cycle cannot be changed", async () => {
+    cycles.changeStatus.mockRejectedValueOnce(new Error("Cycle not found"));
+    const missing = new FormData();
+    missing.set("cycleId", CYCLE_ID);
+    missing.set("status", "CANCELLED");
+
+    const result = await changeCycleStatusAction(INITIAL_STATUS_STATE, missing);
+
+    expect(result).toEqual({
+      error: "อัปเดตสถานะรอบอบไม่สำเร็จ กรุณาลองอีกครั้ง",
+      saved: false,
+    });
+    expect(cycles.changeStatus).toHaveBeenCalledWith(
+      OWNER_ID,
+      CYCLE_ID,
+      "CANCELLED",
+    );
+    expect(next.revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("serializes the Phase 3 locking rejection without exposing a lock action", async () => {
     cycles.changeStatus.mockRejectedValueOnce(
       new Error("Cycle locking belongs to Phase 3"),
     );
     const locked = new FormData();
     locked.set("cycleId", CYCLE_ID);
     locked.set("status", "LOCKED");
-    await expect(changeCycleStatusAction(locked)).rejects.toThrow(
-      "Cycle locking belongs to Phase 3",
-    );
+    const result = await changeCycleStatusAction(INITIAL_STATUS_STATE, locked);
+
+    expect(result).toEqual({
+      error: "อัปเดตสถานะรอบอบไม่สำเร็จ กรุณาลองอีกครั้ง",
+      saved: false,
+    });
     expect(cycles.changeStatus).toHaveBeenCalledWith(
       OWNER_ID,
       CYCLE_ID,

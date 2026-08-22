@@ -16,6 +16,11 @@ export type CycleActionState = Readonly<{
   saved: boolean;
 }>;
 
+export type CycleStatusActionState = Readonly<{
+  error: string | null;
+  saved: boolean;
+}>;
+
 const cycleStatusSchema = z.enum([
   "DRAFT",
   "OPEN",
@@ -161,21 +166,32 @@ export async function updateCycleAction(
 }
 
 export async function changeCycleStatusAction(
+  _previousState: CycleStatusActionState,
   formData: FormData,
-): Promise<void> {
+): Promise<CycleStatusActionState> {
   const owner = await requireOwner();
   const parsed = cycleStatusFormSchema.safeParse({
     cycleId: formData.get("cycleId"),
     status: formData.get("status"),
   });
-  if (!parsed.success) throw new Error("Invalid cycle status");
+  if (!parsed.success) {
+    return { error: "กรุณาตรวจสอบสถานะรอบอบ", saved: false };
+  }
 
-  await createCycleService(db).changeStatus(
-    owner.id,
-    parsed.data.cycleId,
-    parsed.data.status,
-  );
-  revalidatePath("/cycles");
-  revalidatePath(`/cycles/${parsed.data.cycleId}`);
-  revalidatePath("/dashboard");
+  try {
+    await createCycleService(db).changeStatus(
+      owner.id,
+      parsed.data.cycleId,
+      parsed.data.status,
+    );
+    revalidatePath("/cycles");
+    revalidatePath(`/cycles/${parsed.data.cycleId}`);
+    revalidatePath("/dashboard");
+    return { error: null, saved: true };
+  } catch {
+    return {
+      error: "อัปเดตสถานะรอบอบไม่สำเร็จ กรุณาลองอีกครั้ง",
+      saved: false,
+    };
+  }
 }

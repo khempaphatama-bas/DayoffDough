@@ -25,8 +25,12 @@ describe("CycleList", () => {
     expect(screen.getAllByText("เปิดรับออเดอร์").length).toBeGreaterThan(0);
     expect(screen.getAllByText("29 ส.ค. 2569").length).toBeGreaterThan(0);
     expect(screen.getAllByText("30 ส.ค. 2569").length).toBeGreaterThan(0);
-    for (const link of screen.getAllByRole("link", { name: CYCLE.name })) {
+    const detailLinks = screen.getAllByRole("link", { name: CYCLE.name });
+    expect(detailLinks).toHaveLength(2);
+    for (const link of detailLinks) {
       expect(link).toHaveAttribute("href", `/cycles/${CYCLE.id}`);
+      expect(link).toHaveClass("min-h-11", "items-center");
+      expect(link.className).toMatch(/(?:^|\s)(?:inline-)?flex(?:\s|$)/);
     }
   });
 
