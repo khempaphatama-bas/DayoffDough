@@ -1,4 +1,10 @@
 export {
+  deliveryMethods,
+  packagingConsumptionBasisEnum,
+  packagingRuleScopeEnum,
+  productPackagingRules,
+} from "@/modules/delivery/db/schema";
+export {
   inventoryCategoryEnum,
   inventoryItems,
   inventoryMovements,
