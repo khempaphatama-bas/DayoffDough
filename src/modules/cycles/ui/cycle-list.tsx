@@ -3,6 +3,8 @@ import type {
   BakeCycle,
   Phase2CycleStatus,
 } from "@/modules/cycles/application/cycles";
+import { formatSatangAsBaht } from "@/modules/money/domain/money";
+import type { CycleOrderSummary } from "@/modules/orders/application/orders";
 
 export const CYCLE_STATUS_LABELS: Readonly<
   Record<Phase2CycleStatus, string>
@@ -43,10 +45,12 @@ export function CycleList({
   cycles,
   query,
   status,
+  summaries,
 }: Readonly<{
   cycles: ReadonlyArray<BakeCycle>;
   query: string;
   status: "all" | Phase2CycleStatus;
+  summaries: ReadonlyMap<string, CycleOrderSummary>;
 }>) {
   return (
     <section className="grid gap-4">
@@ -93,7 +97,7 @@ export function CycleList({
         </div>
       ) : (
         <>
-          <div className="grid gap-3 md:hidden">
+          <div className="grid gap-3 xl:hidden">
             {cycles.map((cycle) => (
               <article
                 className="rounded-2xl border border-stone-200 bg-white p-5 shadow-sm"
@@ -126,22 +130,39 @@ export function CycleList({
                       {formatCycleDate(cycle.primaryDeliveryDate)}
                     </dd>
                   </div>
+                  <div>
+                    <dt className="text-stone-500">ออเดอร์</dt>
+                    <dd className="mt-1 font-semibold text-stone-800">
+                      {summaries.get(cycle.id)?.activeOrderCount ?? 0} ใช้งาน ·{" "}
+                      {summaries.get(cycle.id)?.cancelledOrderCount ?? 0} ยกเลิก
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-stone-500">ยอดขาย</dt>
+                    <dd className="mt-1 font-bold text-stone-900">
+                      ฿{formatSatangAsBaht(
+                        summaries.get(cycle.id)?.grandTotalSatang ?? 0,
+                      )}
+                    </dd>
+                  </div>
                 </dl>
               </article>
             ))}
           </div>
 
-          <div className="hidden overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm md:block">
-            <div className="grid grid-cols-[5rem_minmax(0,1fr)_9rem_9rem_9rem] gap-4 border-b border-stone-200 bg-stone-50 px-5 py-3 text-xs font-bold text-stone-500">
+          <div className="hidden overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm xl:block">
+            <div className="grid grid-cols-[4rem_minmax(0,1fr)_8rem_8rem_8rem_10rem_7rem] gap-4 border-b border-stone-200 bg-stone-50 px-5 py-3 text-xs font-bold text-stone-500">
               <span>รอบ</span>
               <span>ชื่อรอบอบ</span>
               <span>สถานะ</span>
               <span>วันผลิต</span>
               <span>วันส่งหลัก</span>
+              <span>ออเดอร์</span>
+              <span>ยอดขาย</span>
             </div>
             {cycles.map((cycle) => (
               <article
-                className="grid grid-cols-[5rem_minmax(0,1fr)_9rem_9rem_9rem] items-center gap-4 border-b border-stone-100 px-5 py-4 last:border-b-0"
+                className="grid grid-cols-[4rem_minmax(0,1fr)_8rem_8rem_8rem_10rem_7rem] items-center gap-4 border-b border-stone-100 px-5 py-4 last:border-b-0"
                 key={cycle.id}
               >
                 <span className="text-sm font-bold text-amber-800">
@@ -161,6 +182,15 @@ export function CycleList({
                 </span>
                 <span className="text-sm font-semibold text-stone-800">
                   {formatCycleDate(cycle.primaryDeliveryDate)}
+                </span>
+                <span className="text-sm text-stone-700">
+                  {summaries.get(cycle.id)?.activeOrderCount ?? 0} ใช้งาน ·{" "}
+                  {summaries.get(cycle.id)?.cancelledOrderCount ?? 0} ยกเลิก
+                </span>
+                <span className="font-bold text-stone-900">
+                  ฿{formatSatangAsBaht(
+                    summaries.get(cycle.id)?.grandTotalSatang ?? 0,
+                  )}
                 </span>
               </article>
             ))}

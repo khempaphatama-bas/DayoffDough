@@ -7,6 +7,7 @@ import {
   type Phase2CycleStatus,
 } from "@/modules/cycles/application/cycles";
 import { CycleList } from "@/modules/cycles/ui/cycle-list";
+import { createOrderService } from "@/modules/orders/application/orders";
 
 type CycleSearchParams = Readonly<{
   query?: string | ReadonlyArray<string>;
@@ -42,6 +43,10 @@ export default async function CyclePage({
     ...(status ? { status } : {}),
   };
   const cycles = await createCycleService(db).list(owner.id, filters);
+  const summaries = await createOrderService(db).listCycleSummaries(
+    owner.id,
+    cycles.map((cycle) => cycle.id),
+  );
 
   return (
     <main className="mx-auto grid max-w-6xl gap-7 px-5 py-8">
@@ -68,6 +73,7 @@ export default async function CyclePage({
         cycles={cycles}
         query={query}
         status={status ?? "all"}
+        summaries={summaries}
       />
     </main>
   );

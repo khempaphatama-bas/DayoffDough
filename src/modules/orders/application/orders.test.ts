@@ -519,6 +519,100 @@ describe("order service", () => {
     expect(await service.list(OTHER_OWNER_ID)).toEqual([]);
   });
 
+  it("summarizes live cycle money and demand without cancelled orders", async () => {
+    const masters = await seedMasters(context.db);
+    const [emptyCycle] = await context.db
+      .insert(bakeCycles)
+      .values({
+        ownerId: OWNER_ID,
+        name: "รอบถัดไป",
+        status: "OPEN",
+        targetProductionDate: "2026-09-05",
+        primaryDeliveryDate: "2026-09-06",
+      })
+      .returning();
+
+    await service.create(OWNER_ID, orderInput(masters));
+    await service.create(
+      OWNER_ID,
+      orderInput(masters, {
+        deliveryFeeChargedSatang: 0,
+        deliveryCostSatang: 0,
+        discountSatang: 0,
+        amountPaidSatang: 0,
+        items: [
+          {
+            productId: masters.focaccia.id,
+            quantity: 1,
+            unitPriceSatang: 0,
+          },
+        ],
+      }),
+    );
+    const cancelled = await service.create(
+      OWNER_ID,
+      orderInput(masters, {
+        deliveryFeeChargedSatang: 0,
+        deliveryCostSatang: 0,
+        discountSatang: 0,
+        amountPaidSatang: 0,
+        items: [
+          {
+            productId: masters.scone.id,
+            quantity: 4,
+            unitPriceSatang: 1000,
+          },
+        ],
+      }),
+    );
+    await service.cancel(OWNER_ID, cancelled.id);
+
+    expect(
+      await service.getCycleSummary(OWNER_ID, masters.cycle.id),
+    ).toEqual({
+      activeOrderCount: 2,
+      cancelledOrderCount: 1,
+      grandTotalSatang: 62000,
+      amountPaidSatang: 20000,
+      balanceSatang: 42000,
+      demand: [
+        {
+          productId: masters.focaccia.id,
+          productName: "Focaccia",
+          quantity: 3,
+        },
+        {
+          productId: masters.scone.id,
+          productName: "Scone",
+          quantity: 1,
+        },
+      ],
+    });
+
+    const summaries = await service.listCycleSummaries(OWNER_ID, [
+      masters.cycle.id,
+      emptyCycle!.id,
+    ]);
+    expect([...summaries.keys()]).toEqual([
+      masters.cycle.id,
+      emptyCycle!.id,
+    ]);
+    expect(summaries.get(emptyCycle!.id)).toEqual({
+      activeOrderCount: 0,
+      cancelledOrderCount: 0,
+      grandTotalSatang: 0,
+      amountPaidSatang: 0,
+      balanceSatang: 0,
+      demand: [],
+    });
+    await expect(
+      service.getCycleSummary(OTHER_OWNER_ID, masters.cycle.id),
+    ).rejects.toThrow("Cycle not found");
+    await expect(
+      service.listCycleSummaries(OTHER_OWNER_ID, [masters.cycle.id]),
+    ).rejects.toThrow("Cycle not found");
+  });
+
   it("preserves refunds on ordinary edits and supports explicit tracking restoration", async () => {
     const masters = await seedMasters(context.db);
     const created = await service.create(OWNER_ID, orderInput(masters));

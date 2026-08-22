@@ -2,10 +2,14 @@
 
 import {
   Boxes,
+  CalendarRange,
+  ClipboardList,
+  Ellipsis,
   House,
   PackageOpen,
   Settings,
   Truck,
+  UsersRound,
   type LucideIcon,
 } from "lucide-react";
 import Link from "next/link";
@@ -13,27 +17,112 @@ import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 import { APP_NAME } from "@/lib/app-meta";
 
+const DESKTOP_ROUTES = [
+  "/dashboard",
+  "/cycles",
+  "/orders",
+  "/customers",
+  "/inventory",
+  "/products",
+  "/delivery",
+  "/settings",
+] as const;
+
+const MOBILE_ROUTES = [
+  "/dashboard",
+  "/cycles",
+  "/orders",
+  "/inventory",
+  "/more",
+] as const;
+
+type RouteHref =
+  | (typeof DESKTOP_ROUTES)[number]
+  | (typeof MOBILE_ROUTES)[number];
+
 type AppRoute = Readonly<{
-  href: "/dashboard" | "/inventory" | "/products" | "/delivery" | "/settings";
+  href: RouteHref;
   label: string;
   shortLabel: string;
   icon: LucideIcon;
 }>;
 
-const APP_ROUTES: ReadonlyArray<AppRoute> = [
-  { href: "/dashboard", label: "หน้าหลัก", shortLabel: "หน้าหลัก", icon: House },
-  { href: "/inventory", label: "วัตถุดิบ", shortLabel: "วัตถุดิบ", icon: Boxes },
-  {
+const ROUTE_META: Readonly<Record<RouteHref, AppRoute>> = {
+  "/dashboard": {
+    href: "/dashboard",
+    label: "หน้าหลัก",
+    shortLabel: "หน้าหลัก",
+    icon: House,
+  },
+  "/cycles": {
+    href: "/cycles",
+    label: "รอบผลิต",
+    shortLabel: "รอบผลิต",
+    icon: CalendarRange,
+  },
+  "/orders": {
+    href: "/orders",
+    label: "ออเดอร์",
+    shortLabel: "ออเดอร์",
+    icon: ClipboardList,
+  },
+  "/customers": {
+    href: "/customers",
+    label: "ลูกค้า",
+    shortLabel: "ลูกค้า",
+    icon: UsersRound,
+  },
+  "/inventory": {
+    href: "/inventory",
+    label: "วัตถุดิบ",
+    shortLabel: "วัตถุดิบ",
+    icon: Boxes,
+  },
+  "/products": {
     href: "/products",
     label: "สินค้าและสูตร",
     shortLabel: "สินค้า",
     icon: PackageOpen,
   },
-  { href: "/delivery", label: "การจัดส่ง", shortLabel: "จัดส่ง", icon: Truck },
-  { href: "/settings", label: "ตั้งค่าร้าน", shortLabel: "ตั้งค่า", icon: Settings },
-];
+  "/delivery": {
+    href: "/delivery",
+    label: "การจัดส่ง",
+    shortLabel: "จัดส่ง",
+    icon: Truck,
+  },
+  "/settings": {
+    href: "/settings",
+    label: "ตั้งค่าร้าน",
+    shortLabel: "ตั้งค่า",
+    icon: Settings,
+  },
+  "/more": {
+    href: "/more",
+    label: "เพิ่มเติม",
+    shortLabel: "เพิ่มเติม",
+    icon: Ellipsis,
+  },
+};
 
-function isCurrentRoute(currentPath: string, href: AppRoute["href"]): boolean {
+const MORE_DESTINATIONS = [
+  "/customers",
+  "/products",
+  "/delivery",
+  "/settings",
+] as const;
+
+function isCurrentRoute(currentPath: string, href: RouteHref): boolean {
+  if (href === "/more") {
+    return (
+      currentPath === href ||
+      currentPath.startsWith(`${href}/`) ||
+      MORE_DESTINATIONS.some(
+        (destination) =>
+          currentPath === destination ||
+          currentPath.startsWith(`${destination}/`),
+      )
+    );
+  }
   return currentPath === href || currentPath.startsWith(`${href}/`);
 }
 
@@ -49,7 +138,8 @@ function Shell({
           <span className="mt-1 block text-xl font-bold tracking-tight text-stone-900">{APP_NAME}</span>
         </Link>
         <nav aria-label="เมนูหลัก" className="mt-8 grid gap-2">
-          {APP_ROUTES.map((route) => {
+          {DESKTOP_ROUTES.map((href) => {
+            const route = ROUTE_META[href];
             const active = isCurrentRoute(currentPath, route.href);
             const Icon = route.icon;
             return (
@@ -71,7 +161,8 @@ function Shell({
       <div className="pb-24 md:pb-0 md:pl-72">{children}</div>
 
       <nav aria-label="เมนูมือถือ" className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-5 border-t border-stone-200 bg-white/95 px-1 pb-[max(0.35rem,env(safe-area-inset-bottom))] pt-1 backdrop-blur md:hidden">
-        {APP_ROUTES.map((route) => {
+        {MOBILE_ROUTES.map((href) => {
+          const route = ROUTE_META[href];
           const active = isCurrentRoute(currentPath, route.href);
           const Icon = route.icon;
           return (

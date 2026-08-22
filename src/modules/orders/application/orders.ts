@@ -24,6 +24,11 @@ import {
   calculateOrderTotals,
   type OrderTotals,
 } from "@/modules/orders/domain/totals";
+import {
+  aggregateProductionDemand,
+  type ProductDemand,
+  type ProductionDemandLine,
+} from "@/modules/orders/domain/production-demand";
 import { products } from "@/modules/products/db/schema";
 
 export type OrderItemInput = Readonly<{
@@ -164,6 +169,15 @@ export type OrderFormOptions = Readonly<{
   >;
 }>;
 
+export type CycleOrderSummary = Readonly<{
+  activeOrderCount: number;
+  cancelledOrderCount: number;
+  grandTotalSatang: number;
+  amountPaidSatang: number;
+  balanceSatang: number;
+  demand: ReadonlyArray<ProductDemand>;
+}>;
+
 const uuidSchema = z.string().uuid();
 const moneySchema = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
 const orderItemSchema = z.object({
@@ -232,6 +246,25 @@ function parseOrderWrite(
     ownerId: parsedOwnerId.data,
     input: parsedInput.data,
     totals: calculateOrderTotals(parsedInput.data),
+  };
+}
+
+function checkedSummaryAdd(left: number, right: number): number {
+  const total = left + right;
+  if (!Number.isSafeInteger(total)) {
+    throw new Error("Cycle summary exceeds the safe integer range");
+  }
+  return total;
+}
+
+function emptyCycleSummary(): CycleOrderSummary {
+  return {
+    activeOrderCount: 0,
+    cancelledOrderCount: 0,
+    grandTotalSatang: 0,
+    amountPaidSatang: 0,
+    balanceSatang: 0,
+    demand: [],
   };
 }
 
@@ -432,6 +465,159 @@ async function requireOrderDetail(
 }
 
 export function createOrderService(db: DatabaseClient) {
+  async function listCycleSummaries(
+    ownerId: string,
+    cycleIds: ReadonlyArray<string>,
+  ): Promise<ReadonlyMap<string, CycleOrderSummary>> {
+    const parsedOwnerId = uuidSchema.safeParse(ownerId);
+    const parsedCycleIds = z.array(uuidSchema).safeParse(cycleIds);
+    if (!parsedOwnerId.success || !parsedCycleIds.success) {
+      throw new Error("Cycle not found");
+    }
+    const uniqueCycleIds = [...new Set(parsedCycleIds.data)];
+    if (uniqueCycleIds.length === 0) return new Map();
+
+    const cycleRows = await db
+      .select({ id: bakeCycles.id })
+      .from(bakeCycles)
+      .where(
+        and(
+          eq(bakeCycles.ownerId, parsedOwnerId.data),
+          inArray(bakeCycles.id, uniqueCycleIds),
+        ),
+      );
+    if (cycleRows.length !== uniqueCycleIds.length) {
+      throw new Error("Cycle not found");
+    }
+
+    const summaryByCycleId = new Map<string, CycleOrderSummary>(
+      uniqueCycleIds.map((cycleId) => [cycleId, emptyCycleSummary()]),
+    );
+    const orderRows = await db
+      .select({
+        id: orders.id,
+        bakeCycleId: orders.bakeCycleId,
+        fulfillmentStatus: orders.fulfillmentStatus,
+        deliveryFeeChargedSatang: orders.deliveryFeeChargedSatang,
+        discountSatang: orders.discountSatang,
+        amountPaidSatang: orders.amountPaidSatang,
+      })
+      .from(orders)
+      .where(
+        and(
+          eq(orders.ownerId, parsedOwnerId.data),
+          inArray(orders.bakeCycleId, uniqueCycleIds),
+        ),
+      );
+    if (orderRows.length === 0) return summaryByCycleId;
+
+    const orderIds = orderRows.map((order) => order.id);
+    const itemRows = await db
+      .select({
+        orderId: orderItems.orderId,
+        productId: orderItems.productId,
+        quantity: orderItems.quantity,
+        unitPriceSatang: orderItems.unitPriceSatang,
+      })
+      .from(orderItems)
+      .where(
+        and(
+          eq(orderItems.ownerId, parsedOwnerId.data),
+          inArray(orderItems.orderId, orderIds),
+        ),
+      );
+    const productIds = [...new Set(itemRows.map((item) => item.productId))];
+    const productRows =
+      productIds.length === 0
+        ? []
+        : await db
+            .select({ id: products.id, name: products.name })
+            .from(products)
+            .where(
+              and(
+                eq(products.ownerId, parsedOwnerId.data),
+                inArray(products.id, productIds),
+              ),
+            );
+    const productNameById = new Map(
+      productRows.map((product) => [product.id, product.name]),
+    );
+    const itemsByOrderId = new Map<
+      string,
+      Array<(typeof itemRows)[number]>
+    >();
+    for (const item of itemRows) {
+      const grouped = itemsByOrderId.get(item.orderId);
+      if (grouped) grouped.push(item);
+      else itemsByOrderId.set(item.orderId, [item]);
+    }
+    const demandLinesByCycleId = new Map<string, ProductionDemandLine[]>();
+
+    for (const order of orderRows) {
+      const previous = summaryByCycleId.get(order.bakeCycleId);
+      if (!previous) throw new Error("Cycle not found");
+      const status = order.fulfillmentStatus as OrderFulfillmentStatus;
+      const items = itemsByOrderId.get(order.id) ?? [];
+      const demandLines = demandLinesByCycleId.get(order.bakeCycleId) ?? [];
+      for (const item of items) {
+        demandLines.push({
+          productId: item.productId,
+          productName:
+            productNameById.get(item.productId) ?? "Unknown product",
+          quantity: item.quantity,
+          fulfillmentStatus: status,
+        });
+      }
+      demandLinesByCycleId.set(order.bakeCycleId, demandLines);
+
+      if (status === "CANCELLED") {
+        summaryByCycleId.set(order.bakeCycleId, {
+          ...previous,
+          cancelledOrderCount: checkedSummaryAdd(
+            previous.cancelledOrderCount,
+            1,
+          ),
+        });
+        continue;
+      }
+
+      const totals = calculateOrderTotals({
+        items,
+        discountSatang: order.discountSatang,
+        deliveryFeeChargedSatang: order.deliveryFeeChargedSatang,
+        amountPaidSatang: order.amountPaidSatang,
+      });
+      summaryByCycleId.set(order.bakeCycleId, {
+        ...previous,
+        activeOrderCount: checkedSummaryAdd(previous.activeOrderCount, 1),
+        grandTotalSatang: checkedSummaryAdd(
+          previous.grandTotalSatang,
+          totals.grandTotalSatang,
+        ),
+        amountPaidSatang: checkedSummaryAdd(
+          previous.amountPaidSatang,
+          order.amountPaidSatang,
+        ),
+        balanceSatang: checkedSummaryAdd(
+          previous.balanceSatang,
+          totals.balanceSatang,
+        ),
+      });
+    }
+
+    for (const cycleId of uniqueCycleIds) {
+      const summary = summaryByCycleId.get(cycleId);
+      if (!summary) throw new Error("Cycle not found");
+      summaryByCycleId.set(cycleId, {
+        ...summary,
+        demand: aggregateProductionDemand(
+          demandLinesByCycleId.get(cycleId) ?? [],
+        ),
+      });
+    }
+    return summaryByCycleId;
+  }
+
   async function transitionFulfillmentStatus(
     ownerId: string,
     orderId: string,
@@ -539,6 +725,18 @@ export function createOrderService(db: DatabaseClient) {
   }
 
   return {
+    async getCycleSummary(
+      ownerId: string,
+      cycleId: string,
+    ): Promise<CycleOrderSummary> {
+      const summaries = await listCycleSummaries(ownerId, [cycleId]);
+      const summary = summaries.get(cycleId);
+      if (!summary) throw new Error("Cycle not found");
+      return summary;
+    },
+
+    listCycleSummaries,
+
     async formOptions(
       ownerId: string,
       include?: OrderFormOptionIncludes,

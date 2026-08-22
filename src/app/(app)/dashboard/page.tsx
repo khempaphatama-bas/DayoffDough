@@ -1,20 +1,38 @@
 import Link from "next/link";
 import { requireOwner } from "@/lib/auth/require-owner";
 import { db } from "@/lib/db/client";
+import { createCycleService } from "@/modules/cycles/application/cycles";
 import { createDeliveryService } from "@/modules/delivery/application/delivery";
 import { createInventoryService } from "@/modules/inventory/application/inventory";
+import { createOrderService } from "@/modules/orders/application/orders";
 import { createProductService } from "@/modules/products/application/products";
 import { evaluateMasterDataReadiness } from "@/modules/readiness/domain/readiness";
 import { createSettingsService } from "@/modules/settings/application/settings";
+import {
+  CurrentCycleCard,
+  selectNearestOpenCycle,
+} from "./current-cycle-card";
 
 export default async function DashboardPage() {
   const owner = await requireOwner();
-  const [settings, inventory, products, delivery] = await Promise.all([
+  const [settings, inventory, products, delivery, openCycles] = await Promise.all([
     createSettingsService(db).get(owner.id),
     createInventoryService(db).listItems(owner.id),
     createProductService(db).listProducts(owner.id),
     createDeliveryService(db).listDeliveryConfiguration(owner.id),
+    createCycleService(db).list(owner.id, { status: "OPEN" }),
   ]);
+  const cycleSummaries = await createOrderService(db).listCycleSummaries(
+    owner.id,
+    openCycles.map((cycle) => cycle.id),
+  );
+  const currentCycle = selectNearestOpenCycle(openCycles);
+  const currentCycleSummary = currentCycle
+    ? (cycleSummaries.get(currentCycle.id) ?? null)
+    : null;
+  if (currentCycle && !currentCycleSummary) {
+    throw new Error("Cycle summary not found");
+  }
   const activeProducts = products.filter((product) => product.active);
   const readiness = evaluateMasterDataReadiness({
     settingsConfigured: settings !== null,
@@ -33,9 +51,18 @@ export default async function DashboardPage() {
     <main className="mx-auto grid max-w-6xl gap-8 px-5 py-8 md:px-8 md:py-10">
       <header className="max-w-3xl">
         <p className="mb-2 text-sm font-semibold text-amber-800">Day Off Dough OS</p>
-        <h1 className="text-3xl font-bold tracking-tight text-stone-900 sm:text-4xl">จัดข้อมูลตั้งต้นของร้านให้พร้อม</h1>
-        <p className="mt-3 leading-7 text-stone-600">Phase แรกช่วยเก็บต้นทุนวัตถุดิบ สินค้า สูตร บรรจุภัณฑ์ และวิธีส่ง ก่อนเริ่มรับออเดอร์เป็น Bake Cycle</p>
+        <h1 className="text-3xl font-bold tracking-tight text-stone-900 sm:text-4xl">ภาพรวมงานหลังร้านวันนี้</h1>
+        <p className="mt-3 leading-7 text-stone-600">ดูรอบผลิตถัดไป ออเดอร์ ยอดขาย และความพร้อมของข้อมูลตั้งต้นในที่เดียว</p>
       </header>
+
+      {currentCycle && currentCycleSummary ? (
+        <CurrentCycleCard
+          cycle={currentCycle}
+          summary={currentCycleSummary}
+        />
+      ) : (
+        <CurrentCycleCard cycle={null} summary={null} />
+      )}
 
       <section className={`rounded-3xl border p-6 ${readiness.ready ? "border-emerald-200 bg-emerald-50 text-emerald-950" : "border-amber-200 bg-amber-50 text-amber-950"}`}>
         <p className="text-sm font-semibold">สถานะความพร้อม</p>
