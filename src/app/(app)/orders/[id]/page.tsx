@@ -1,6 +1,12 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { createQuickCustomerAction } from "@/app/(app)/customers/actions";
+import {
+  cancelOrderAction,
+  markOrderRefundedAction,
+  restoreOrderPaymentTrackingAction,
+  updateFulfillmentStatusAction,
+} from "@/app/(app)/orders/actions";
 import { requireOwner } from "@/lib/auth/require-owner";
 import { db } from "@/lib/db/client";
 import {
@@ -10,6 +16,13 @@ import {
 import type { OrderFormValues } from "@/modules/orders/domain/order-form";
 import { formatSatangAsBaht } from "@/modules/money/domain/money";
 import { OrderForm } from "@/modules/orders/ui/order-form";
+import {
+  OrderStatusActions,
+} from "@/modules/orders/ui/order-status-actions";
+import {
+  ORDER_FULFILLMENT_STATUS_LABELS,
+  ORDER_PAYMENT_STATUS_LABELS,
+} from "@/modules/orders/ui/order-status-labels";
 
 export default async function OrderDetailPage({
   params,
@@ -74,6 +87,70 @@ export default async function OrderDetailPage({
           {order.customerName} · {order.cycleName}
         </p>
       </header>
+      <section className="grid gap-5 rounded-3xl border border-stone-200 bg-white p-5 shadow-sm lg:grid-cols-[minmax(0,1fr)_minmax(18rem,.7fr)]">
+        <div>
+          <h2 className="text-xl font-bold text-stone-900">สรุปออเดอร์</h2>
+          <dl className="mt-4 grid gap-4 text-sm sm:grid-cols-2 lg:grid-cols-3">
+            <div>
+              <dt className="text-stone-500">ลูกค้า</dt>
+              <dd className="mt-1 font-semibold text-stone-900">
+                {order.customerName}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-stone-500">รอบผลิต</dt>
+              <dd className="mt-1 font-semibold text-stone-900">
+                {order.cycleName}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-stone-500">วิธีจัดส่ง</dt>
+              <dd className="mt-1 font-semibold text-stone-900">
+                {order.deliveryMethodName ?? "ยังไม่กำหนด"}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-stone-500">ยอดสุทธิ</dt>
+              <dd className="mt-1 text-lg font-bold text-stone-900">
+                ฿{formatSatangAsBaht(order.totals.grandTotalSatang)}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-stone-500">ชำระแล้ว</dt>
+              <dd className="mt-1 text-lg font-bold text-stone-900">
+                ฿{formatSatangAsBaht(order.amountPaidSatang)}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-stone-500">คงเหลือ</dt>
+              <dd className="mt-1 text-lg font-bold text-stone-900">
+                ฿{formatSatangAsBaht(order.totals.balanceSatang)}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-stone-500">การชำระเงิน</dt>
+              <dd className="mt-1 font-semibold text-stone-900">
+                {ORDER_PAYMENT_STATUS_LABELS[order.paymentStatus]}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-stone-500">การจัดเตรียม</dt>
+              <dd className="mt-1 font-semibold text-stone-900">
+                {ORDER_FULFILLMENT_STATUS_LABELS[order.fulfillmentStatus]}
+              </dd>
+            </div>
+          </dl>
+        </div>
+        <OrderStatusActions
+          cancelOrder={cancelOrderAction}
+          fulfillmentStatus={order.fulfillmentStatus}
+          markOrderRefunded={markOrderRefundedAction}
+          orderId={order.id}
+          paymentStatus={order.paymentStatus}
+          restoreOrderPaymentTracking={restoreOrderPaymentTrackingAction}
+          updateFulfillmentStatus={updateFulfillmentStatusAction}
+        />
+      </section>
       <OrderForm
         createQuickCustomer={createQuickCustomerAction}
         initialValues={initialValues}

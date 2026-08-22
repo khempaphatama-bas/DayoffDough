@@ -7,10 +7,15 @@ import type {
 } from "@/modules/orders/application/orders";
 
 const mocks = vi.hoisted(() => ({
+  cancelOrderAction: vi.fn(),
   get: vi.fn(),
   formOptions: vi.fn(),
+  markOrderRefundedAction: vi.fn(),
   notFound: vi.fn(),
   requireOwner: vi.fn(),
+  restoreOrderPaymentTrackingAction: vi.fn(),
+  saveOrderAction: vi.fn(),
+  updateFulfillmentStatusAction: vi.fn(),
 }));
 
 vi.mock("next/navigation", () => ({ notFound: mocks.notFound }));
@@ -24,7 +29,13 @@ vi.mock("@/modules/orders/application/orders", () => ({
     formOptions: mocks.formOptions,
   }),
 }));
-vi.mock("@/app/(app)/orders/actions", () => ({ saveOrderAction: vi.fn() }));
+vi.mock("@/app/(app)/orders/actions", () => ({
+  cancelOrderAction: mocks.cancelOrderAction,
+  markOrderRefundedAction: mocks.markOrderRefundedAction,
+  restoreOrderPaymentTrackingAction: mocks.restoreOrderPaymentTrackingAction,
+  saveOrderAction: mocks.saveOrderAction,
+  updateFulfillmentStatusAction: mocks.updateFulfillmentStatusAction,
+}));
 vi.mock("@/app/(app)/customers/actions", () => ({
   createQuickCustomerAction: vi.fn(),
 }));
@@ -166,6 +177,14 @@ describe("OrderDetailPage", () => {
     render(await OrderDetailPage({ params: Promise.resolve({ id: ORDER_ID }) }));
 
     expect(screen.getByRole("heading", { name: "แก้ไขออเดอร์" })).toBeInTheDocument();
+    expect(screen.getByText("ยอดสุทธิ")).toBeInTheDocument();
+    expect(screen.getByText("฿761.50")).toBeInTheDocument();
+    expect(screen.getByText("฿200.00")).toBeInTheDocument();
+    expect(screen.getByText("฿561.50")).toBeInTheDocument();
+    expect(screen.getByText("KEX เก่า")).toBeInTheDocument();
+    expect(screen.getAllByText("ชำระบางส่วน").length).toBeGreaterThan(0);
+    expect(screen.getByText("ยืนยันแล้ว")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "ยกเลิกออเดอร์" })).toBeInTheDocument();
     expect(screen.getByLabelText("ลูกค้า")).toHaveValue(CUSTOMER_ID);
     expect(screen.getByLabelText("รอบผลิต")).toHaveValue(CYCLE_ID);
     expect(screen.getByLabelText("วิธีจัดส่ง")).toHaveValue(METHOD_ID);

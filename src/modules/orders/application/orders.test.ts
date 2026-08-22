@@ -561,4 +561,106 @@ describe("order service", () => {
       service.restorePaymentTracking(OTHER_OWNER_ID, created.id),
     ).rejects.toThrow("Order not found");
   });
+
+  it("moves a new order directly to packed and cancels without deleting its items", async () => {
+    const masters = await seedMasters(context.db);
+    const created = await service.create(OWNER_ID, orderInput(masters));
+
+    expect(created.fulfillmentStatus).toBe("NEW");
+    const packed = await service.updateFulfillmentStatus(
+      OWNER_ID,
+      created.id,
+      "PACKED",
+    );
+    expect(packed.fulfillmentStatus).toBe("PACKED");
+
+    const cancelled = await service.cancel(OWNER_ID, created.id);
+    expect(cancelled.fulfillmentStatus).toBe("CANCELLED");
+    expect(cancelled.items).toHaveLength(2);
+    await expect(service.get(OWNER_ID, created.id)).resolves.toMatchObject({
+      fulfillmentStatus: "CANCELLED",
+      items: [
+        expect.objectContaining({ productId: masters.focaccia.id }),
+        expect.objectContaining({ productId: masters.scone.id }),
+      ],
+    });
+  });
+
+  it.each([
+    [0, "UNPAID"],
+    [20000, "PARTIAL"],
+    [62000, "PAID"],
+  ] as const)(
+    "restores a refunded order with %i satang paid to %s",
+    async (amountPaidSatang, expectedStatus) => {
+      const masters = await seedMasters(context.db);
+      const created = await service.create(
+        OWNER_ID,
+        orderInput(masters, { amountPaidSatang }),
+      );
+      await service.markRefunded(OWNER_ID, created.id);
+
+      const edited = await service.update(
+        OWNER_ID,
+        created.id,
+        orderInput(masters, { amountPaidSatang }),
+      );
+      expect(edited.paymentStatus).toBe("REFUNDED");
+
+      const restored = await service.restorePaymentTracking(
+        OWNER_ID,
+        created.id,
+      );
+      expect(restored.paymentStatus).toBe(expectedStatus);
+    },
+  );
+
+  it("combines every list filter while keeping customer search owner-scoped", async () => {
+    const masters = await seedMasters(context.db);
+    const foreign = await seedMasters(context.db, OTHER_OWNER_ID, " foreign");
+    const [otherCustomer] = await context.db
+      .insert(customers)
+      .values({
+        ownerId: OWNER_ID,
+        name: "คุณอ้อม",
+        contactHandle: "@aom",
+      })
+      .returning();
+
+    const matching = await service.create(
+      OWNER_ID,
+      orderInput(masters, { amountPaidSatang: 62000 }),
+    );
+    await service.updateFulfillmentStatus(OWNER_ID, matching.id, "PACKED");
+    await service.create(
+      OWNER_ID,
+      orderInput(masters, {
+        customerId: otherCustomer!.id,
+        amountPaidSatang: 62000,
+      }),
+    );
+    await createOrderService(context.db).create(
+      OTHER_OWNER_ID,
+      orderInput(foreign, { amountPaidSatang: 62000 }),
+    );
+
+    const listed = await service.list(OWNER_ID, {
+      query: "เมย์",
+      bakeCycleId: masters.cycle.id,
+      customerId: masters.customer.id,
+      paymentStatus: "PAID",
+      fulfillmentStatus: "PACKED",
+    });
+
+    expect(listed).toEqual([
+      expect.objectContaining({
+        id: matching.id,
+        ownerId: OWNER_ID,
+        customerId: masters.customer.id,
+        bakeCycleId: masters.cycle.id,
+        paymentStatus: "PAID",
+        fulfillmentStatus: "PACKED",
+      }),
+    ]);
+  });
 });

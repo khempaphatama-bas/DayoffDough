@@ -16,7 +16,34 @@ export type OrderActionState = Readonly<{
   fieldErrors: Readonly<Record<string, string>>;
 }>;
 
+export type OrderStatusActionState = Readonly<{
+  error: string | null;
+  saved: boolean;
+}>;
+
 const orderIdSchema = z.string().uuid();
+const fulfillmentStatusFormSchema = z.object({
+  orderId: orderIdSchema,
+  status: z.enum([
+    "NEW",
+    "CONFIRMED",
+    "IN_PRODUCTION",
+    "PACKED",
+    "DELIVERED",
+  ]),
+});
+const cancelOrderFormSchema = z.object({
+  orderId: orderIdSchema,
+  status: z.literal("CANCELLED"),
+});
+const refundOrderFormSchema = z.object({
+  orderId: orderIdSchema,
+  status: z.literal("REFUNDED"),
+});
+const restorePaymentFormSchema = z.object({
+  orderId: orderIdSchema,
+  status: z.literal("RESTORE"),
+});
 const THAI_FIELD_ERRORS: Readonly<Record<string, string>> = {
   customerId: "กรุณาเลือกลูกค้า",
   bakeCycleId: "กรุณาเลือกรอบผลิต",
@@ -121,4 +148,132 @@ export async function saveOrderAction(
   }
 
   redirect(`/orders/${result.id}`);
+}
+
+function revalidateOrderStatusPaths(
+  order: Readonly<{
+    id: string;
+    bakeCycleId: string;
+    customerId: string;
+  }>,
+): void {
+  revalidatePath("/orders");
+  revalidatePath(`/orders/${order.id}`);
+  revalidatePath("/cycles");
+  revalidatePath(`/cycles/${order.bakeCycleId}`);
+  revalidatePath(`/customers/${order.customerId}`);
+  revalidatePath("/dashboard");
+}
+
+export async function updateFulfillmentStatusAction(
+  _previousState: OrderStatusActionState,
+  formData: FormData,
+): Promise<OrderStatusActionState> {
+  const owner = await requireOwner();
+  const parsed = fulfillmentStatusFormSchema.safeParse({
+    orderId: formData.get("orderId"),
+    status: formData.get("status"),
+  });
+  if (!parsed.success) {
+    return { error: "กรุณาตรวจสอบสถานะออเดอร์", saved: false };
+  }
+
+  try {
+    const order = await createOrderService(db).updateFulfillmentStatus(
+      owner.id,
+      parsed.data.orderId,
+      parsed.data.status,
+    );
+    revalidateOrderStatusPaths(order);
+    return { error: null, saved: true };
+  } catch {
+    return {
+      error: "อัปเดตสถานะออเดอร์ไม่สำเร็จ กรุณาลองอีกครั้ง",
+      saved: false,
+    };
+  }
+}
+
+export async function cancelOrderAction(
+  _previousState: OrderStatusActionState,
+  formData: FormData,
+): Promise<OrderStatusActionState> {
+  const owner = await requireOwner();
+  const parsed = cancelOrderFormSchema.safeParse({
+    orderId: formData.get("orderId"),
+    status: formData.get("status"),
+  });
+  if (!parsed.success) {
+    return { error: "กรุณาตรวจสอบการยกเลิกออเดอร์", saved: false };
+  }
+
+  try {
+    const order = await createOrderService(db).cancel(
+      owner.id,
+      parsed.data.orderId,
+    );
+    revalidateOrderStatusPaths(order);
+    return { error: null, saved: true };
+  } catch {
+    return {
+      error: "ยกเลิกออเดอร์ไม่สำเร็จ กรุณาลองอีกครั้ง",
+      saved: false,
+    };
+  }
+}
+
+export async function markOrderRefundedAction(
+  _previousState: OrderStatusActionState,
+  formData: FormData,
+): Promise<OrderStatusActionState> {
+  const owner = await requireOwner();
+  const parsed = refundOrderFormSchema.safeParse({
+    orderId: formData.get("orderId"),
+    status: formData.get("status"),
+  });
+  if (!parsed.success) {
+    return { error: "กรุณาตรวจสอบสถานะการชำระเงิน", saved: false };
+  }
+
+  try {
+    const order = await createOrderService(db).markRefunded(
+      owner.id,
+      parsed.data.orderId,
+    );
+    revalidateOrderStatusPaths(order);
+    return { error: null, saved: true };
+  } catch {
+    return {
+      error: "บันทึกการคืนเงินไม่สำเร็จ กรุณาลองอีกครั้ง",
+      saved: false,
+    };
+  }
+}
+
+export async function restoreOrderPaymentTrackingAction(
+  _previousState: OrderStatusActionState,
+  formData: FormData,
+): Promise<OrderStatusActionState> {
+  const owner = await requireOwner();
+  const parsed = restorePaymentFormSchema.safeParse({
+    orderId: formData.get("orderId"),
+    status: formData.get("status"),
+  });
+  if (!parsed.success) {
+    return { error: "กรุณาตรวจสอบสถานะการชำระเงิน", saved: false };
+  }
+
+  try {
+    const order = await createOrderService(db).restorePaymentTracking(
+      owner.id,
+      parsed.data.orderId,
+    );
+    revalidateOrderStatusPaths(order);
+    return { error: null, saved: true };
+  } catch {
+    return {
+      error: "คืนค่าการติดตามการชำระเงินไม่สำเร็จ กรุณาลองอีกครั้ง",
+      saved: false,
+    };
+  }
 }

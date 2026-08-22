@@ -1,8 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  cancel: vi.fn(),
   create: vi.fn(),
+  markRefunded: vi.fn(),
+  restorePaymentTracking: vi.fn(),
   update: vi.fn(),
+  updateFulfillmentStatus: vi.fn(),
   createOrderService: vi.fn(),
   redirect: vi.fn(),
   requireOwner: vi.fn(),
@@ -19,7 +23,13 @@ vi.mock("@/modules/orders/application/orders", () => ({
   createOrderService: mocks.createOrderService,
 }));
 
-import { saveOrderAction } from "./actions";
+import {
+  cancelOrderAction,
+  markOrderRefundedAction,
+  restoreOrderPaymentTrackingAction,
+  saveOrderAction,
+  updateFulfillmentStatusAction,
+} from "./actions";
 
 const OWNER_ID = "00000000-0000-4000-8000-000000000001";
 const CUSTOMER_ID = "00000000-0000-4000-8000-000000000010";
@@ -65,11 +75,24 @@ describe("saveOrderAction", () => {
     vi.clearAllMocks();
     mocks.requireOwner.mockResolvedValue({ id: OWNER_ID, email: "owner@example.com" });
     mocks.createOrderService.mockReturnValue({
+      cancel: mocks.cancel,
       create: mocks.create,
+      markRefunded: mocks.markRefunded,
+      restorePaymentTracking: mocks.restorePaymentTracking,
       update: mocks.update,
+      updateFulfillmentStatus: mocks.updateFulfillmentStatus,
     });
     mocks.create.mockResolvedValue({ id: ORDER_ID, bakeCycleId: CYCLE_ID });
     mocks.update.mockResolvedValue({ id: ORDER_ID, bakeCycleId: CYCLE_ID });
+    const statusResult = {
+      id: ORDER_ID,
+      bakeCycleId: CYCLE_ID,
+      customerId: CUSTOMER_ID,
+    };
+    mocks.cancel.mockResolvedValue(statusResult);
+    mocks.markRefunded.mockResolvedValue(statusResult);
+    mocks.restorePaymentTracking.mockResolvedValue(statusResult);
+    mocks.updateFulfillmentStatus.mockResolvedValue(statusResult);
     mocks.redirect.mockImplementation(() => {
       throw new Error("NEXT_REDIRECT");
     });
@@ -139,4 +162,101 @@ describe("saveOrderAction", () => {
     });
     expect(mocks.redirect).not.toHaveBeenCalled();
   });
+
+  it.each([
+    [
+      "updates fulfillment",
+      updateFulfillmentStatusAction,
+      "PACKED",
+      mocks.updateFulfillmentStatus,
+      [OWNER_ID, ORDER_ID, "PACKED"],
+    ],
+    [
+      "cancels",
+      cancelOrderAction,
+      "CANCELLED",
+      mocks.cancel,
+      [OWNER_ID, ORDER_ID],
+    ],
+    [
+      "marks refunded",
+      markOrderRefundedAction,
+      "REFUNDED",
+      mocks.markRefunded,
+      [OWNER_ID, ORDER_ID],
+    ],
+    [
+      "restores payment tracking",
+      restoreOrderPaymentTrackingAction,
+      "RESTORE",
+      mocks.restorePaymentTracking,
+      [OWNER_ID, ORDER_ID],
+    ],
+  ] as const)(
+    "%s with authentication, validation, and all affected revalidations",
+    async (_name, action, status, mutation, expectedArguments) => {
+      const data = new FormData();
+      data.set("orderId", ORDER_ID);
+      data.set("status", status);
+
+      await expect(
+        action({ error: null, saved: false }, data),
+      ).resolves.toEqual({ error: null, saved: true });
+
+      expect(mocks.requireOwner).toHaveBeenCalledOnce();
+      expect(mutation).toHaveBeenCalledWith(...expectedArguments);
+      expect(mocks.revalidatePath.mock.calls.map(([path]) => path)).toEqual([
+        "/orders",
+        `/orders/${ORDER_ID}`,
+        "/cycles",
+        `/cycles/${CYCLE_ID}`,
+        `/customers/${CUSTOMER_ID}`,
+        "/dashboard",
+      ]);
+    },
+  );
+
+  it("returns a serializable Thai status error for untrusted values", async () => {
+    const data = new FormData();
+    data.set("orderId", "not-an-order-id");
+    data.set("status", "DELETED");
+
+    await expect(
+      updateFulfillmentStatusAction({ error: null, saved: false }, data),
+    ).resolves.toEqual({
+      error: "กรุณาตรวจสอบสถานะออเดอร์",
+      saved: false,
+    });
+    expect(mocks.requireOwner).toHaveBeenCalledOnce();
+    expect(mocks.updateFulfillmentStatus).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [cancelOrderAction, "PACKED", "กรุณาตรวจสอบการยกเลิกออเดอร์", mocks.cancel],
+    [
+      markOrderRefundedAction,
+      "PAID",
+      "กรุณาตรวจสอบสถานะการชำระเงิน",
+      mocks.markRefunded,
+    ],
+    [
+      restoreOrderPaymentTrackingAction,
+      "REFUNDED",
+      "กรุณาตรวจสอบสถานะการชำระเงิน",
+      mocks.restorePaymentTracking,
+    ],
+  ] as const)(
+    "rejects an incorrect explicit status intent before mutation",
+    async (action, status, error, mutation) => {
+      const data = new FormData();
+      data.set("orderId", ORDER_ID);
+      data.set("status", status);
+
+      await expect(
+        action({ error: null, saved: false }, data),
+      ).resolves.toEqual({ error, saved: false });
+      expect(mocks.requireOwner).toHaveBeenCalledOnce();
+      expect(mutation).not.toHaveBeenCalled();
+    },
+  );
 });
