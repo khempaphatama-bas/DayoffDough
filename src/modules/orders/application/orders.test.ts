@@ -586,6 +586,59 @@ describe("order service", () => {
     });
   });
 
+  it("rejects backward fulfillment transitions without changing the order", async () => {
+    const masters = await seedMasters(context.db);
+    const created = await service.create(OWNER_ID, orderInput(masters));
+    await service.updateFulfillmentStatus(OWNER_ID, created.id, "PACKED");
+
+    await expect(
+      service.updateFulfillmentStatus(OWNER_ID, created.id, "CONFIRMED"),
+    ).rejects.toThrow("Invalid fulfillment transition");
+    await expect(service.get(OWNER_ID, created.id)).resolves.toMatchObject({
+      fulfillmentStatus: "PACKED",
+    });
+  });
+
+  it("requires explicit cancellation and never revives a cancelled order", async () => {
+    const masters = await seedMasters(context.db);
+    const created = await service.create(OWNER_ID, orderInput(masters));
+
+    await expect(
+      service.updateFulfillmentStatus(OWNER_ID, created.id, "CANCELLED"),
+    ).rejects.toThrow("Invalid fulfillment transition");
+    await expect(service.get(OWNER_ID, created.id)).resolves.toMatchObject({
+      fulfillmentStatus: "NEW",
+    });
+
+    await service.cancel(OWNER_ID, created.id);
+    await expect(
+      service.updateFulfillmentStatus(OWNER_ID, created.id, "NEW"),
+    ).rejects.toThrow("Invalid fulfillment transition");
+    await expect(service.get(OWNER_ID, created.id)).resolves.toMatchObject({
+      fulfillmentStatus: "CANCELLED",
+      items: [
+        expect.objectContaining({ productId: masters.focaccia.id }),
+        expect.objectContaining({ productId: masters.scone.id }),
+      ],
+    });
+  });
+
+  it("allows no transition or cancellation after delivery", async () => {
+    const masters = await seedMasters(context.db);
+    const created = await service.create(OWNER_ID, orderInput(masters));
+    await service.updateFulfillmentStatus(OWNER_ID, created.id, "DELIVERED");
+
+    await expect(
+      service.updateFulfillmentStatus(OWNER_ID, created.id, "PACKED"),
+    ).rejects.toThrow("Invalid fulfillment transition");
+    await expect(service.cancel(OWNER_ID, created.id)).rejects.toThrow(
+      "Invalid fulfillment transition",
+    );
+    await expect(service.get(OWNER_ID, created.id)).resolves.toMatchObject({
+      fulfillmentStatus: "DELIVERED",
+    });
+  });
+
   it.each([
     [0, "UNPAID"],
     [20000, "PARTIAL"],

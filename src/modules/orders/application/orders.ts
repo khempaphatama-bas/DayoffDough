@@ -203,6 +203,13 @@ const orderFormIncludesSchema = z.object({
   deliveryMethodId: uuidSchema.nullable(),
 });
 const fulfillmentStatusSchema = z.enum(orderFulfillmentStatus);
+const fulfillmentFlow: ReadonlyArray<OrderFulfillmentStatus> = [
+  "NEW",
+  "CONFIRMED",
+  "IN_PRODUCTION",
+  "PACKED",
+  "DELIVERED",
+];
 
 type OrderRow = typeof orders.$inferSelect;
 type OrderWriteInput = z.infer<typeof orderInputSchema>;
@@ -425,10 +432,11 @@ async function requireOrderDetail(
 }
 
 export function createOrderService(db: DatabaseClient) {
-  async function updateFulfillmentStatus(
+  async function transitionFulfillmentStatus(
     ownerId: string,
     orderId: string,
     status: OrderFulfillmentStatus,
+    explicitCancellation: boolean,
   ): Promise<OrderDetail> {
     const parsedOwnerId = uuidSchema.safeParse(ownerId);
     const parsedOrderId = uuidSchema.safeParse(orderId);
@@ -442,6 +450,36 @@ export function createOrderService(db: DatabaseClient) {
     }
 
     return db.transaction(async (tx) => {
+      const [existing] = await tx
+        .select({ fulfillmentStatus: orders.fulfillmentStatus })
+        .from(orders)
+        .where(
+          and(
+            eq(orders.ownerId, parsedOwnerId.data),
+            eq(orders.id, parsedOrderId.data),
+          ),
+        )
+        .limit(1);
+      if (!existing) throw new Error("Order not found");
+
+      const currentStatus =
+        existing.fulfillmentStatus as OrderFulfillmentStatus;
+      const currentIndex = fulfillmentFlow.indexOf(currentStatus);
+      const nextIndex = fulfillmentFlow.indexOf(parsedStatus.data);
+      const canCancel =
+        explicitCancellation &&
+        parsedStatus.data === "CANCELLED" &&
+        currentStatus !== "CANCELLED" &&
+        currentStatus !== "DELIVERED";
+      const canMoveForward =
+        !explicitCancellation &&
+        parsedStatus.data !== "CANCELLED" &&
+        currentIndex >= 0 &&
+        nextIndex > currentIndex;
+      if (!canCancel && !canMoveForward) {
+        throw new Error("Invalid fulfillment transition");
+      }
+
       const [updated] = await tx
         .update(orders)
         .set({ fulfillmentStatus: parsedStatus.data, updatedAt: new Date() })
@@ -449,16 +487,25 @@ export function createOrderService(db: DatabaseClient) {
           and(
             eq(orders.ownerId, parsedOwnerId.data),
             eq(orders.id, parsedOrderId.data),
+            eq(orders.fulfillmentStatus, existing.fulfillmentStatus),
           ),
         )
         .returning({ id: orders.id });
-      if (!updated) throw new Error("Order not found");
+      if (!updated) throw new Error("Invalid fulfillment transition");
       return requireOrderDetail(
         tx,
         parsedOwnerId.data,
         parsedOrderId.data,
       );
     });
+  }
+
+  async function updateFulfillmentStatus(
+    ownerId: string,
+    orderId: string,
+    status: OrderFulfillmentStatus,
+  ): Promise<OrderDetail> {
+    return transitionFulfillmentStatus(ownerId, orderId, status, false);
   }
 
   async function markRefunded(
@@ -774,7 +821,7 @@ export function createOrderService(db: DatabaseClient) {
     updateFulfillmentStatus,
 
     async cancel(ownerId: string, orderId: string): Promise<OrderDetail> {
-      return updateFulfillmentStatus(ownerId, orderId, "CANCELLED");
+      return transitionFulfillmentStatus(ownerId, orderId, "CANCELLED", true);
     },
 
     markRefunded,

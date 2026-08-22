@@ -231,6 +231,23 @@ describe("saveOrderAction", () => {
     expect(mocks.updateFulfillmentStatus).not.toHaveBeenCalled();
   });
 
+  it("returns a serializable Thai failure when the service rejects a transition", async () => {
+    mocks.updateFulfillmentStatus.mockRejectedValueOnce(
+      new Error("Invalid fulfillment transition"),
+    );
+    const data = new FormData();
+    data.set("orderId", ORDER_ID);
+    data.set("status", "CONFIRMED");
+
+    await expect(
+      updateFulfillmentStatusAction({ error: null, saved: false }, data),
+    ).resolves.toEqual({
+      error: "อัปเดตสถานะออเดอร์ไม่สำเร็จ กรุณาลองอีกครั้ง",
+      saved: false,
+    });
+    expect(mocks.revalidatePath).not.toHaveBeenCalled();
+  });
+
   it.each([
     [cancelOrderAction, "PACKED", "กรุณาตรวจสอบการยกเลิกออเดอร์", mocks.cancel],
     [
