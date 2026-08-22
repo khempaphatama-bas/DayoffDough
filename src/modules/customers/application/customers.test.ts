@@ -52,4 +52,85 @@ describe("customer service", () => {
       "Customer not found",
     );
   });
+
+  it("rejects another owner's delivery method as a customer default", async () => {
+    const method = await createDeliveryService(context.db).createMethod(OWNER_ID, {
+      name: "Owner delivery",
+      defaultCustomerFeeSatang: 5000,
+      defaultInternalCostSatang: 4000,
+      requiresDeliveryLocation: true,
+    });
+
+    await expect(
+      service.create(OTHER_OWNER_ID, {
+        name: "Cross-owner customer",
+        defaultDeliveryMethodId: method.id,
+      }),
+    ).rejects.toThrow("Delivery method not found");
+  });
+
+  it("searches contact handles and phone text case-insensitively", async () => {
+    const handleCustomer = await service.create(OWNER_ID, {
+      name: "Handle customer",
+      contactHandle: "@MayBakery",
+      defaultDeliveryMethodId: null,
+    });
+    const phoneCustomer = await service.create(OWNER_ID, {
+      name: "Phone customer",
+      phone: "TEL-MAY-081",
+      defaultDeliveryMethodId: null,
+    });
+
+    expect(await service.list(OWNER_ID, { query: "@maybakery" })).toEqual([
+      expect.objectContaining({ id: handleCustomer.id }),
+    ]);
+    expect(await service.list(OWNER_ID, { query: "tel-may-081" })).toEqual([
+      expect.objectContaining({ id: phoneCustomer.id }),
+    ]);
+  });
+
+  it("orders active customers first and then by name", async () => {
+    const alpha = await service.create(OWNER_ID, {
+      name: "Alpha",
+      defaultDeliveryMethodId: null,
+    });
+    const zulu = await service.create(OWNER_ID, {
+      name: "Zulu",
+      defaultDeliveryMethodId: null,
+    });
+    const inactive = await service.create(OWNER_ID, {
+      name: "Aardvark inactive",
+      defaultDeliveryMethodId: null,
+    });
+    await service.update(OWNER_ID, inactive.id, {
+      name: inactive.name,
+      defaultDeliveryMethodId: null,
+      active: false,
+    });
+
+    expect((await service.list(OWNER_ID)).map((customer) => customer.id)).toEqual([
+      alpha.id,
+      zulu.id,
+      inactive.id,
+    ]);
+  });
+
+  it("does not allow another owner to update a customer", async () => {
+    const customer = await service.create(OWNER_ID, {
+      name: "Original name",
+      defaultDeliveryMethodId: null,
+    });
+
+    await expect(
+      service.update(OTHER_OWNER_ID, customer.id, {
+        name: "Leaked update",
+        defaultDeliveryMethodId: null,
+        active: false,
+      }),
+    ).rejects.toThrow("Customer not found");
+    await expect(service.get(OWNER_ID, customer.id)).resolves.toMatchObject({
+      name: "Original name",
+      active: true,
+    });
+  });
 });

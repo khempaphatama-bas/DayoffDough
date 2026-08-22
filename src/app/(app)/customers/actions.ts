@@ -40,6 +40,17 @@ const customerUpdateFormSchema = customerFormSchema.extend({
   customerId: z.string().uuid(),
   active: z.boolean(),
 });
+const THAI_FIELD_ERRORS: Readonly<Record<string, string>> = {
+  name: "กรุณากรอกชื่อลูกค้าให้ถูกต้อง",
+  contactHandle: "ช่องทางติดต่อต้องไม่เกิน 200 ตัวอักษร",
+  phone: "เบอร์โทรต้องไม่เกิน 200 ตัวอักษร",
+  defaultDeliveryMethodId: "วิธีส่งประจำไม่ถูกต้อง",
+  defaultDeliveryLocation: "สถานที่จัดส่งประจำต้องไม่เกิน 2,000 ตัวอักษร",
+  defaultDeliveryNote: "หมายเหตุการส่งประจำต้องไม่เกิน 2,000 ตัวอักษร",
+  notes: "หมายเหตุลูกค้าต้องไม่เกิน 2,000 ตัวอักษร",
+  customerId: "รหัสลูกค้าไม่ถูกต้อง",
+  active: "สถานะลูกค้าไม่ถูกต้อง",
+};
 
 function readCustomerForm(formData: FormData) {
   return {
@@ -79,7 +90,8 @@ function toFieldErrors(
   const errors: Record<string, Array<string>> = {};
   for (const issue of issues) {
     const field = issue.path.join(".");
-    errors[field] = [...(errors[field] ?? []), issue.message];
+    const message = THAI_FIELD_ERRORS[field] ?? "ข้อมูลไม่ถูกต้อง";
+    errors[field] = [...(errors[field] ?? []), message];
   }
   return errors;
 }
