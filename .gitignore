@@ -2,6 +2,7 @@
 
 .next/
 node_modules/
+.pnpm-store/
 .env*
 !.env.example
 coverage/
