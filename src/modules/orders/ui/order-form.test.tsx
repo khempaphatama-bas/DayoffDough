@@ -14,9 +14,11 @@ vi.mock("@/app/(app)/orders/actions", () => ({
 import { OrderForm } from "./order-form";
 
 const CUSTOMER_ID = "00000000-0000-4000-8000-000000000010";
+const CUSTOMER_WITH_UNAVAILABLE_DEFAULT_ID = "00000000-0000-4000-8000-000000000012";
 const CYCLE_ID = "00000000-0000-4000-8000-000000000020";
 const KEX_ID = "00000000-0000-4000-8000-000000000030";
 const PICKUP_ID = "00000000-0000-4000-8000-000000000031";
+const UNAVAILABLE_METHOD_ID = "00000000-0000-4000-8000-000000000032";
 const FOCACCIA_ID = "00000000-0000-4000-8000-000000000040";
 const SCONE_ID = "00000000-0000-4000-8000-000000000050";
 
@@ -156,6 +158,53 @@ describe("OrderForm", () => {
     await user.selectOptions(screen.getByLabelText("วิธีจัดส่ง"), PICKUP_ID);
     expect(screen.queryByText("กรุณาระบุสถานที่จัดส่ง")).not.toBeInTheDocument();
     expect(screen.getByLabelText("ค่าส่งที่เรียกเก็บ (บาท)")).toHaveValue("0.00");
+  });
+
+  it("ignores a customer delivery default that is unavailable in create options", async () => {
+    actions.saveOrderAction.mockResolvedValue({ error: null, fieldErrors: {} });
+    const user = userEvent.setup();
+    const { container } = render(
+      <OrderForm
+        createQuickCustomer={successfulQuickCustomer}
+        initialValues={INITIAL_VALUES}
+        mode="create"
+        options={{
+          ...OPTIONS,
+          customers: [
+            ...OPTIONS.customers,
+            {
+              id: CUSTOMER_WITH_UNAVAILABLE_DEFAULT_ID,
+              name: "คุณนิด",
+              contactHandle: null,
+              phone: null,
+              defaultDeliveryMethodId: UNAVAILABLE_METHOD_ID,
+              defaultDeliveryLocation: "ลาดพร้าว กรุงเทพฯ",
+              defaultDeliveryNote: "ฝาก รปภ.",
+              active: true,
+            },
+          ],
+        }}
+      />,
+    );
+
+    await user.selectOptions(
+      screen.getByLabelText("ลูกค้า"),
+      CUSTOMER_WITH_UNAVAILABLE_DEFAULT_ID,
+    );
+
+    expect(screen.getByLabelText("วิธีจัดส่ง")).toHaveValue("");
+    const payload = container.querySelector<HTMLInputElement>(
+      'input[name="payload"]',
+    );
+    expect(payload).not.toBeNull();
+    expect(JSON.parse(payload!.value)).toMatchObject({
+      customerId: CUSTOMER_WITH_UNAVAILABLE_DEFAULT_ID,
+      deliveryMethodId: "",
+      deliveryFeeChargedBaht: "0.00",
+      deliveryCostBaht: "0.00",
+      deliveryLocation: "ลาดพร้าว กรุงเทพฯ",
+      deliveryNote: "ฝาก รปภ.",
+    });
   });
 
   it("creates and selects an inline customer without resetting order lines", async () => {

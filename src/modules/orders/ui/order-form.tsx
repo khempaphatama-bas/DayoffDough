@@ -123,7 +123,7 @@ export function OrderForm({
     setValues((current) => ({
       ...current,
       customerId: selectedCustomer.id,
-      deliveryMethodId: selectedCustomer.defaultDeliveryMethodId ?? "",
+      deliveryMethodId: method?.id ?? "",
       deliveryLocation: selectedCustomer.defaultDeliveryLocation ?? "",
       deliveryNote: selectedCustomer.defaultDeliveryNote ?? "",
       deliveryFeeChargedBaht: method

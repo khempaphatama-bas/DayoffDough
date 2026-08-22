@@ -168,6 +168,7 @@ describe("OrderDetailPage", () => {
     expect(screen.getByRole("heading", { name: "แก้ไขออเดอร์" })).toBeInTheDocument();
     expect(screen.getByLabelText("ลูกค้า")).toHaveValue(CUSTOMER_ID);
     expect(screen.getByLabelText("รอบผลิต")).toHaveValue(CYCLE_ID);
+    expect(screen.getByLabelText("วิธีจัดส่ง")).toHaveValue(METHOD_ID);
     expect(screen.getAllByRole("option", { name: /Focaccia เก่า/ })).toHaveLength(2);
     expect(screen.getByLabelText("ราคาต่อหน่วย รายการที่ 1 (บาท)")).toHaveValue("220.50");
     expect(screen.getByLabelText("ต้นทุนจัดส่ง (บาท)")).toHaveValue("115.50");
