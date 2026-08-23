@@ -96,6 +96,16 @@ export const orders = pgTable(
   },
   (table) => [
     unique("orders_owner_id_id_unique").on(table.ownerId, table.id),
+    unique("orders_owner_customer_id_unique").on(
+      table.ownerId,
+      table.customerId,
+      table.id,
+    ),
+    unique("orders_owner_delivery_method_id_unique").on(
+      table.ownerId,
+      table.deliveryMethodId,
+      table.id,
+    ),
     foreignKey({
       name: "orders_owned_customer_fk",
       columns: [table.ownerId, table.customerId],
@@ -161,6 +171,11 @@ export const orderItems = pgTable(
   },
   (table) => [
     unique("order_items_owner_id_id_unique").on(table.ownerId, table.id),
+    unique("order_items_owner_product_id_unique").on(
+      table.ownerId,
+      table.productId,
+      table.id,
+    ),
     foreignKey({
       name: "order_items_owned_order_fk",
       columns: [table.ownerId, table.orderId],

@@ -92,6 +92,27 @@ export const productPackagingRules = pgTable(
       table.ownerId,
       table.id,
     ),
+    unique("packaging_rules_owner_item_id_unique").on(
+      table.ownerId,
+      table.inventoryItemId,
+      table.id,
+    ),
+    unique("packaging_rules_owner_product_id_unique").on(
+      table.ownerId,
+      table.productId,
+      table.id,
+    ),
+    unique("packaging_rules_owner_delivery_id_unique").on(
+      table.ownerId,
+      table.deliveryMethodId,
+      table.id,
+    ),
+    unique("packaging_rules_owner_scope_basis_id_unique").on(
+      table.ownerId,
+      table.scope,
+      table.consumptionBasis,
+      table.id,
+    ),
     foreignKey({
       name: "packaging_rules_owned_product_fk",
       columns: [table.ownerId, table.productId],

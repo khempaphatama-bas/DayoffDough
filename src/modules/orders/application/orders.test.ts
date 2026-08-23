@@ -853,12 +853,14 @@ describe("order service", () => {
     await expect(
       service.updateFulfillmentStatus(OWNER_ID, created.id, "NEW"),
     ).rejects.toThrow("Invalid fulfillment transition");
-    await expect(service.get(OWNER_ID, created.id)).resolves.toMatchObject({
+    const persisted = await service.get(OWNER_ID, created.id);
+    expect(persisted.items).toHaveLength(2);
+    expect(persisted).toMatchObject({
       fulfillmentStatus: "CANCELLED",
-      items: [
+      items: expect.arrayContaining([
         expect.objectContaining({ productId: masters.focaccia.id }),
         expect.objectContaining({ productId: masters.scone.id }),
-      ],
+      ]),
     });
   });
 

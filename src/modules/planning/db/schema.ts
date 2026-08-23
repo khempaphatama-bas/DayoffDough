@@ -122,6 +122,11 @@ export const cyclePlanningSnapshots = pgTable(
       table.bakeCycleId,
       table.generation,
     ),
+    unique("cycle_planning_snapshots_owner_cycle_id_unique").on(
+      table.ownerId,
+      table.bakeCycleId,
+      table.id,
+    ),
     unique("cycle_planning_snapshots_owner_lock_request_unique").on(
       table.ownerId,
       table.lockRequestId,
@@ -242,15 +247,29 @@ export const cycleOrderSnapshots = pgTable(
       table.planningSnapshotId,
       table.sourceOrderId,
     ),
+    unique("cycle_order_snapshots_owner_snapshot_id_unique").on(
+      table.ownerId,
+      table.planningSnapshotId,
+      table.id,
+    ),
     foreignKey({
       name: "cycle_order_snapshots_owned_snapshot_fk",
       columns: [table.ownerId, table.planningSnapshotId],
       foreignColumns: [cyclePlanningSnapshots.ownerId, cyclePlanningSnapshots.id],
     }).onDelete("restrict"),
     foreignKey({
-      name: "cycle_order_snapshots_owned_source_order_fk",
-      columns: [table.ownerId, table.sourceOrderId],
-      foreignColumns: [orders.ownerId, orders.id],
+      name: "cycle_order_snapshots_owned_source_order_customer_fk",
+      columns: [table.ownerId, table.sourceCustomerId, table.sourceOrderId],
+      foreignColumns: [orders.ownerId, orders.customerId, orders.id],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "cycle_order_snapshots_owned_source_order_delivery_fk",
+      columns: [
+        table.ownerId,
+        table.sourceDeliveryMethodId,
+        table.sourceOrderId,
+      ],
+      foreignColumns: [orders.ownerId, orders.deliveryMethodId, orders.id],
     }).onDelete("restrict"),
     foreignKey({
       name: "cycle_order_snapshots_owned_source_customer_fk",
@@ -308,13 +327,21 @@ export const cycleOrderItemSnapshots = pgTable(
     }).onDelete("restrict"),
     foreignKey({
       name: "cycle_order_item_snapshots_owned_order_snapshot_fk",
-      columns: [table.ownerId, table.orderSnapshotId],
-      foreignColumns: [cycleOrderSnapshots.ownerId, cycleOrderSnapshots.id],
+      columns: [
+        table.ownerId,
+        table.planningSnapshotId,
+        table.orderSnapshotId,
+      ],
+      foreignColumns: [
+        cycleOrderSnapshots.ownerId,
+        cycleOrderSnapshots.planningSnapshotId,
+        cycleOrderSnapshots.id,
+      ],
     }).onDelete("restrict"),
     foreignKey({
       name: "cycle_order_item_snapshots_owned_source_item_fk",
-      columns: [table.ownerId, table.sourceOrderItemId],
-      foreignColumns: [orderItems.ownerId, orderItems.id],
+      columns: [table.ownerId, table.sourceProductId, table.sourceOrderItemId],
+      foreignColumns: [orderItems.ownerId, orderItems.productId, orderItems.id],
     }).onDelete("restrict"),
     foreignKey({
       name: "cycle_order_item_snapshots_owned_source_product_fk",
@@ -374,6 +401,17 @@ export const cycleRecipePlans = pgTable(
       table.planningSnapshotId,
       table.sourceProductId,
     ),
+    unique("cycle_recipe_plans_owner_snapshot_id_unique").on(
+      table.ownerId,
+      table.planningSnapshotId,
+      table.id,
+    ),
+    unique("cycle_recipe_plans_owner_snapshot_product_id_unique").on(
+      table.ownerId,
+      table.planningSnapshotId,
+      table.sourceProductId,
+      table.id,
+    ),
     foreignKey({
       name: "cycle_recipe_plans_owned_snapshot_fk",
       columns: [table.ownerId, table.planningSnapshotId],
@@ -386,13 +424,17 @@ export const cycleRecipePlans = pgTable(
     }).onDelete("restrict"),
     foreignKey({
       name: "cycle_recipe_plans_owned_source_recipe_fk",
-      columns: [table.ownerId, table.sourceRecipeId],
-      foreignColumns: [recipes.ownerId, recipes.id],
+      columns: [table.ownerId, table.sourceProductId, table.sourceRecipeId],
+      foreignColumns: [recipes.ownerId, recipes.productId, recipes.id],
     }).onDelete("restrict"),
     foreignKey({
       name: "cycle_recipe_plans_owned_source_version_fk",
-      columns: [table.ownerId, table.sourceRecipeVersionId],
-      foreignColumns: [recipeVersions.ownerId, recipeVersions.id],
+      columns: [table.ownerId, table.sourceRecipeId, table.sourceRecipeVersionId],
+      foreignColumns: [
+        recipeVersions.ownerId,
+        recipeVersions.recipeId,
+        recipeVersions.id,
+      ],
     }).onDelete("restrict"),
     index("cycle_recipe_plans_owner_snapshot_idx").on(
       table.ownerId,
@@ -454,6 +496,23 @@ export const cycleProductPlans = pgTable(
       table.planningSnapshotId,
       table.recipePlanId,
     ),
+    unique("cycle_product_plans_owner_snapshot_id_unique").on(
+      table.ownerId,
+      table.planningSnapshotId,
+      table.id,
+    ),
+    unique("cycle_product_plans_owner_snapshot_product_id_unique").on(
+      table.ownerId,
+      table.planningSnapshotId,
+      table.sourceProductId,
+      table.id,
+    ),
+    unique("cycle_product_plans_owner_snapshot_recipe_id_unique").on(
+      table.ownerId,
+      table.planningSnapshotId,
+      table.recipePlanId,
+      table.id,
+    ),
     foreignKey({
       name: "cycle_product_plans_owned_snapshot_fk",
       columns: [table.ownerId, table.planningSnapshotId],
@@ -466,8 +525,18 @@ export const cycleProductPlans = pgTable(
     }).onDelete("restrict"),
     foreignKey({
       name: "cycle_product_plans_owned_recipe_plan_fk",
-      columns: [table.ownerId, table.recipePlanId],
-      foreignColumns: [cycleRecipePlans.ownerId, cycleRecipePlans.id],
+      columns: [
+        table.ownerId,
+        table.planningSnapshotId,
+        table.sourceProductId,
+        table.recipePlanId,
+      ],
+      foreignColumns: [
+        cycleRecipePlans.ownerId,
+        cycleRecipePlans.planningSnapshotId,
+        cycleRecipePlans.sourceProductId,
+        cycleRecipePlans.id,
+      ],
     }).onDelete("restrict"),
     index("cycle_product_plans_owner_snapshot_idx").on(
       table.ownerId,
@@ -522,6 +591,17 @@ export const cycleInventoryPriceSnapshots = pgTable(
       table.planningSnapshotId,
       table.inventoryItemId,
     ),
+    unique("cycle_inventory_price_snapshots_owner_snapshot_id_unique").on(
+      table.ownerId,
+      table.planningSnapshotId,
+      table.id,
+    ),
+    unique("cycle_inventory_price_snapshots_snapshot_item_id_unique").on(
+      table.ownerId,
+      table.planningSnapshotId,
+      table.inventoryItemId,
+      table.id,
+    ),
     foreignKey({
       name: "cycle_inventory_price_snapshots_owned_snapshot_fk",
       columns: [table.ownerId, table.planningSnapshotId],
@@ -534,8 +614,12 @@ export const cycleInventoryPriceSnapshots = pgTable(
     }).onDelete("restrict"),
     foreignKey({
       name: "cycle_inventory_price_snapshots_owned_source_price_fk",
-      columns: [table.ownerId, table.sourcePriceId],
-      foreignColumns: [inventoryPrices.ownerId, inventoryPrices.id],
+      columns: [table.ownerId, table.inventoryItemId, table.sourcePriceId],
+      foreignColumns: [
+        inventoryPrices.ownerId,
+        inventoryPrices.inventoryItemId,
+        inventoryPrices.id,
+      ],
     }).onDelete("restrict"),
     index("cycle_inventory_price_snapshots_owner_snapshot_idx").on(
       table.ownerId,
@@ -607,18 +691,40 @@ export const cycleMaterialRequirements = pgTable(
     }).onDelete("restrict"),
     foreignKey({
       name: "cycle_material_requirements_owned_product_plan_fk",
-      columns: [table.ownerId, table.productPlanId],
-      foreignColumns: [cycleProductPlans.ownerId, cycleProductPlans.id],
+      columns: [
+        table.ownerId,
+        table.planningSnapshotId,
+        table.recipePlanId,
+        table.productPlanId,
+      ],
+      foreignColumns: [
+        cycleProductPlans.ownerId,
+        cycleProductPlans.planningSnapshotId,
+        cycleProductPlans.recipePlanId,
+        cycleProductPlans.id,
+      ],
     }).onDelete("restrict"),
     foreignKey({
       name: "cycle_material_requirements_owned_recipe_plan_fk",
-      columns: [table.ownerId, table.recipePlanId],
-      foreignColumns: [cycleRecipePlans.ownerId, cycleRecipePlans.id],
+      columns: [table.ownerId, table.planningSnapshotId, table.recipePlanId],
+      foreignColumns: [
+        cycleRecipePlans.ownerId,
+        cycleRecipePlans.planningSnapshotId,
+        cycleRecipePlans.id,
+      ],
     }).onDelete("restrict"),
     foreignKey({
       name: "cycle_material_requirements_owned_source_ingredient_fk",
-      columns: [table.ownerId, table.sourceRecipeIngredientId],
-      foreignColumns: [recipeIngredients.ownerId, recipeIngredients.id],
+      columns: [
+        table.ownerId,
+        table.inventoryItemId,
+        table.sourceRecipeIngredientId,
+      ],
+      foreignColumns: [
+        recipeIngredients.ownerId,
+        recipeIngredients.inventoryItemId,
+        recipeIngredients.id,
+      ],
     }).onDelete("restrict"),
     foreignKey({
       name: "cycle_material_requirements_owned_inventory_item_fk",
@@ -627,9 +733,16 @@ export const cycleMaterialRequirements = pgTable(
     }).onDelete("restrict"),
     foreignKey({
       name: "cycle_material_requirements_owned_price_snapshot_fk",
-      columns: [table.ownerId, table.priceSnapshotId],
+      columns: [
+        table.ownerId,
+        table.planningSnapshotId,
+        table.inventoryItemId,
+        table.priceSnapshotId,
+      ],
       foreignColumns: [
         cycleInventoryPriceSnapshots.ownerId,
+        cycleInventoryPriceSnapshots.planningSnapshotId,
+        cycleInventoryPriceSnapshots.inventoryItemId,
         cycleInventoryPriceSnapshots.id,
       ],
     }).onDelete("restrict"),
@@ -701,13 +814,72 @@ export const cyclePackagingRequirements = pgTable(
     }).onDelete("restrict"),
     foreignKey({
       name: "cycle_packaging_requirements_owned_product_plan_fk",
-      columns: [table.ownerId, table.productPlanId],
-      foreignColumns: [cycleProductPlans.ownerId, cycleProductPlans.id],
+      columns: [
+        table.ownerId,
+        table.planningSnapshotId,
+        table.sourceProductId,
+        table.productPlanId,
+      ],
+      foreignColumns: [
+        cycleProductPlans.ownerId,
+        cycleProductPlans.planningSnapshotId,
+        cycleProductPlans.sourceProductId,
+        cycleProductPlans.id,
+      ],
     }).onDelete("restrict"),
     foreignKey({
       name: "cycle_packaging_requirements_owned_source_rule_fk",
-      columns: [table.ownerId, table.sourcePackagingRuleId],
-      foreignColumns: [productPackagingRules.ownerId, productPackagingRules.id],
+      columns: [
+        table.ownerId,
+        table.inventoryItemId,
+        table.sourcePackagingRuleId,
+      ],
+      foreignColumns: [
+        productPackagingRules.ownerId,
+        productPackagingRules.inventoryItemId,
+        productPackagingRules.id,
+      ],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "cycle_packaging_requirements_owned_rule_product_fk",
+      columns: [
+        table.ownerId,
+        table.sourceProductId,
+        table.sourcePackagingRuleId,
+      ],
+      foreignColumns: [
+        productPackagingRules.ownerId,
+        productPackagingRules.productId,
+        productPackagingRules.id,
+      ],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "cycle_packaging_requirements_owned_rule_delivery_fk",
+      columns: [
+        table.ownerId,
+        table.sourceDeliveryMethodId,
+        table.sourcePackagingRuleId,
+      ],
+      foreignColumns: [
+        productPackagingRules.ownerId,
+        productPackagingRules.deliveryMethodId,
+        productPackagingRules.id,
+      ],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "cycle_packaging_requirements_owned_rule_scope_basis_fk",
+      columns: [
+        table.ownerId,
+        table.scope,
+        table.consumptionBasis,
+        table.sourcePackagingRuleId,
+      ],
+      foreignColumns: [
+        productPackagingRules.ownerId,
+        productPackagingRules.scope,
+        productPackagingRules.consumptionBasis,
+        productPackagingRules.id,
+      ],
     }).onDelete("restrict"),
     foreignKey({
       name: "cycle_packaging_requirements_owned_source_product_fk",
@@ -726,9 +898,16 @@ export const cyclePackagingRequirements = pgTable(
     }).onDelete("restrict"),
     foreignKey({
       name: "cycle_packaging_requirements_owned_price_snapshot_fk",
-      columns: [table.ownerId, table.priceSnapshotId],
+      columns: [
+        table.ownerId,
+        table.planningSnapshotId,
+        table.inventoryItemId,
+        table.priceSnapshotId,
+      ],
       foreignColumns: [
         cycleInventoryPriceSnapshots.ownerId,
+        cycleInventoryPriceSnapshots.planningSnapshotId,
+        cycleInventoryPriceSnapshots.inventoryItemId,
         cycleInventoryPriceSnapshots.id,
       ],
     }).onDelete("restrict"),
@@ -796,8 +975,12 @@ export const cycleProductCostSnapshots = pgTable(
     }).onDelete("restrict"),
     foreignKey({
       name: "cycle_product_cost_snapshots_owned_product_plan_fk",
-      columns: [table.ownerId, table.productPlanId],
-      foreignColumns: [cycleProductPlans.ownerId, cycleProductPlans.id],
+      columns: [table.ownerId, table.planningSnapshotId, table.productPlanId],
+      foreignColumns: [
+        cycleProductPlans.ownerId,
+        cycleProductPlans.planningSnapshotId,
+        cycleProductPlans.id,
+      ],
     }).onDelete("restrict"),
     index("cycle_product_cost_snapshots_owner_snapshot_idx").on(
       table.ownerId,

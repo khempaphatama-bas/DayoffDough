@@ -58,6 +58,11 @@ export const recipes = pgTable(
   (table) => [
     unique("recipes_owner_product_unique").on(table.ownerId, table.productId),
     unique("recipes_owner_id_id_unique").on(table.ownerId, table.id),
+    unique("recipes_owner_product_id_unique").on(
+      table.ownerId,
+      table.productId,
+      table.id,
+    ),
     foreignKey({
       name: "recipes_owned_product_fk",
       columns: [table.ownerId, table.productId],
@@ -97,6 +102,11 @@ export const recipeVersions = pgTable(
       table.versionCode,
     ),
     unique("recipe_versions_owner_id_id_unique").on(table.ownerId, table.id),
+    unique("recipe_versions_owner_recipe_id_unique").on(
+      table.ownerId,
+      table.recipeId,
+      table.id,
+    ),
     foreignKey({
       name: "recipe_versions_owned_recipe_fk",
       columns: [table.ownerId, table.recipeId],
@@ -140,6 +150,11 @@ export const recipeIngredients = pgTable(
   },
   (table) => [
     unique("recipe_ingredients_owner_id_id_unique").on(table.ownerId, table.id),
+    unique("recipe_ingredients_owner_item_id_unique").on(
+      table.ownerId,
+      table.inventoryItemId,
+      table.id,
+    ),
     foreignKey({
       name: "recipe_ingredients_owned_version_fk",
       columns: [table.ownerId, table.recipeVersionId],
