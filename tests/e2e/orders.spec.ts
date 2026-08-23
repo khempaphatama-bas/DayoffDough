@@ -71,6 +71,58 @@ test("owner creates and cancels a duplicate-line order without losing history", 
   await expect(orderPage).toContainText("คงเหลือ ฿560.00");
   await expect(orderPage).toContainText("ชำระบางส่วน");
 
+  const statusActions = page.getByRole("region", {
+    name: "จัดการสถานะออเดอร์",
+  });
+  await statusActions
+    .getByRole("button", { name: "แพ็กเสร็จแล้ว" })
+    .click();
+  await expect(statusActions).toContainText("อัปเดตการจัดเตรียมแล้ว", {
+    timeout: 15_000,
+  });
+  await page.reload();
+  await expect(
+    page.getByRole("heading", { name: "แก้ไขออเดอร์" }),
+  ).toBeVisible();
+  await expect(
+    statusActions.getByRole("button", { name: "แพ็กเสร็จแล้ว" }),
+  ).toHaveCount(0);
+  await expect(orderPage).toContainText("การจัดเตรียมแพ็กเสร็จแล้ว");
+
+  await statusActions
+    .getByRole("button", { name: "บันทึกคืนเงิน" })
+    .click();
+  await expect(statusActions).toContainText("บันทึกการคืนเงินแล้ว", {
+    timeout: 15_000,
+  });
+  await page.reload();
+  await expect(
+    page.getByRole("heading", { name: "แก้ไขออเดอร์" }),
+  ).toBeVisible();
+  await expect(
+    statusActions.getByRole("button", {
+      name: "กลับมาติดตามการชำระเงิน",
+    }),
+  ).toBeVisible();
+  await expect(orderPage).toContainText("การชำระเงินคืนเงินแล้ว");
+
+  await statusActions
+    .getByRole("button", { name: "กลับมาติดตามการชำระเงิน" })
+    .click();
+  await expect(statusActions).toContainText(
+    "กลับมาติดตามการชำระเงินแล้ว",
+    { timeout: 15_000 },
+  );
+  await page.reload();
+  await expect(
+    page.getByRole("heading", { name: "แก้ไขออเดอร์" }),
+  ).toBeVisible();
+  await expect(
+    statusActions.getByRole("button", { name: "บันทึกคืนเงิน" }),
+  ).toBeVisible();
+  await expect(orderPage).toContainText("การชำระเงินชำระบางส่วน");
+  await expect(orderPage).toContainText("คงเหลือ฿560.00");
+
   await page
     .getByRole("link", { name: "รอบผลิต", exact: true })
     .filter({ visible: true })

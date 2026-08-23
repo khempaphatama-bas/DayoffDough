@@ -64,7 +64,10 @@ export async function configureShopSettings(page: Page): Promise<void> {
   await page.getByLabel("ค่าแรงต่อชั่วโมง (บาท)").fill("120");
   await page.getByLabel("ค่าเผื่อสูญเสียเริ่มต้น (%)").fill("3");
   await page.getByRole("button", { name: "บันทึกการตั้งค่า" }).click();
-  await expect(page.getByText("บันทึกการตั้งค่าร้านแล้ว")).toBeVisible();
+  await expect(page.getByRole("main")).toContainText(
+    "บันทึกการตั้งค่าร้านแล้ว",
+    { timeout: 15_000 },
+  );
 }
 
 export async function createInventoryItem(
