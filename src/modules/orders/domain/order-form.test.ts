@@ -89,4 +89,51 @@ describe("order form boundary", () => {
     expect(calculateOrderFormTotals({ ...VALID_FORM, customerId: "" }))
       .toBeNull();
   });
+
+  it("reports an excessive discount on the discount field before persistence", () => {
+    const result = orderFormSchema.safeParse({
+      ...VALID_FORM,
+      deliveryFeeChargedBaht: "0",
+      discountBaht: "1000",
+    });
+
+    expect(result.success).toBe(false);
+    if (result.success) throw new Error("Expected discount validation to fail");
+    expect(result.error.issues).toContainEqual(
+      expect.objectContaining({
+        path: ["discountBaht"],
+        message: "ส่วนลดต้องไม่เกินยอดสินค้าและค่าส่ง",
+      }),
+    );
+  });
+
+  it("accepts PostgreSQL integer maxima and rejects the next satang or quantity", () => {
+    expect(
+      orderFormSchema.safeParse({
+        ...VALID_FORM,
+        deliveryCostBaht: "21474836.47",
+        items: [{ ...VALID_FORM.items[0], quantity: "2147483647" }],
+      }).success,
+    ).toBe(true);
+
+    const money = orderFormSchema.safeParse({
+      ...VALID_FORM,
+      deliveryCostBaht: "21474836.48",
+    });
+    expect(money.success).toBe(false);
+    if (money.success) throw new Error("Expected money limit failure");
+    expect(money.error.issues).toContainEqual(
+      expect.objectContaining({ path: ["deliveryCostBaht"] }),
+    );
+
+    const quantity = orderFormSchema.safeParse({
+      ...VALID_FORM,
+      items: [{ ...VALID_FORM.items[0], quantity: "2147483648" }],
+    });
+    expect(quantity.success).toBe(false);
+    if (quantity.success) throw new Error("Expected quantity limit failure");
+    expect(quantity.error.issues).toContainEqual(
+      expect.objectContaining({ path: ["items", 0, "quantity"] }),
+    );
+  });
 });

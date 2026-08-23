@@ -32,6 +32,7 @@ export type OrderFormValues = Readonly<{
 }>;
 
 const uuidSchema = z.string().uuid("กรุณาเลือกรายการ");
+const POSTGRES_INTEGER_MAX = 2_147_483_647;
 const optionalUuidSchema = z.union([z.literal(""), uuidSchema]);
 const optionalDateSchema = z.union([z.literal(""), z.iso.date()]);
 const bahtSchema = z
@@ -44,38 +45,77 @@ const bahtSchema = z
     } catch {
       return false;
     }
-  }, "จำนวนเงินไม่ถูกต้อง");
+  }, "จำนวนเงินไม่ถูกต้อง")
+  .refine((value) => {
+    try {
+      return parseBahtToSatang(value) <= POSTGRES_INTEGER_MAX;
+    } catch {
+      return false;
+    }
+  }, "จำนวนเงินมากเกินไป");
 const quantitySchema = z
   .string()
   .regex(/^[1-9]\d*$/, "จำนวนต้องเป็นเลขจำนวนเต็มที่มากกว่า 0")
-  .refine((value) => Number.isSafeInteger(Number(value)), "จำนวนมากเกินไป");
+  .refine(
+    (value) =>
+      Number.isSafeInteger(Number(value)) &&
+      Number(value) <= POSTGRES_INTEGER_MAX,
+    "จำนวนมากเกินไป",
+  );
 
-export const orderFormSchema = z.object({
-  customerId: uuidSchema,
-  bakeCycleId: uuidSchema,
-  sourceChannel: z.enum(["", "INSTAGRAM", "FACEBOOK", "PHONE", "OTHER"]),
-  requestedDeliveryDate: optionalDateSchema,
-  confirmedDeliveryDate: optionalDateSchema,
-  deliveryMethodId: optionalUuidSchema,
-  deliveryFeeChargedBaht: bahtSchema,
-  deliveryCostBaht: bahtSchema,
-  deliveryFeePayer: z.enum(["CUSTOMER", "BAKERY", "SHARED"]),
-  discountBaht: bahtSchema,
-  amountPaidBaht: bahtSchema,
-  deliveryLocation: z.string().trim().max(2000),
-  deliveryNote: z.string().trim().max(2000),
-  specialInstructions: z.string().trim().max(2000),
-  items: z
-    .array(
-      z.object({
-        productId: uuidSchema,
-        quantity: quantitySchema,
-        unitPriceBaht: bahtSchema,
-        lineNote: z.string().trim().max(2000),
-      }),
-    )
-    .min(1, "กรุณาเพิ่มสินค้าอย่างน้อย 1 รายการ"),
-}) satisfies z.ZodType<OrderFormValues>;
+export const orderFormSchema = z
+  .object({
+    customerId: uuidSchema,
+    bakeCycleId: uuidSchema,
+    sourceChannel: z.enum(["", "INSTAGRAM", "FACEBOOK", "PHONE", "OTHER"]),
+    requestedDeliveryDate: optionalDateSchema,
+    confirmedDeliveryDate: optionalDateSchema,
+    deliveryMethodId: optionalUuidSchema,
+    deliveryFeeChargedBaht: bahtSchema,
+    deliveryCostBaht: bahtSchema,
+    deliveryFeePayer: z.enum(["CUSTOMER", "BAKERY", "SHARED"]),
+    discountBaht: bahtSchema,
+    amountPaidBaht: bahtSchema,
+    deliveryLocation: z.string().trim().max(2000),
+    deliveryNote: z.string().trim().max(2000),
+    specialInstructions: z.string().trim().max(2000),
+    items: z
+      .array(
+        z.object({
+          productId: uuidSchema,
+          quantity: quantitySchema,
+          unitPriceBaht: bahtSchema,
+          lineNote: z.string().trim().max(2000),
+        }),
+      )
+      .min(1, "กรุณาเพิ่มสินค้าอย่างน้อย 1 รายการ"),
+  })
+  .superRefine((values, context) => {
+    const discount = bahtSchema.safeParse(values.discountBaht);
+    const delivery = bahtSchema.safeParse(values.deliveryFeeChargedBaht);
+    const validItems = values.items.every(
+      (item) =>
+        quantitySchema.safeParse(item.quantity).success &&
+        bahtSchema.safeParse(item.unitPriceBaht).success,
+    );
+    if (!discount.success || !delivery.success || !validItems) return;
+
+    const discountSatang = BigInt(parseBahtToSatang(discount.data));
+    const deliverySatang = BigInt(parseBahtToSatang(delivery.data));
+    const subtotalSatang = values.items.reduce(
+      (total, item) =>
+        total +
+        BigInt(item.quantity) * BigInt(parseBahtToSatang(item.unitPriceBaht)),
+      0n,
+    );
+    if (discountSatang > subtotalSatang + deliverySatang) {
+      context.addIssue({
+        code: "custom",
+        path: ["discountBaht"],
+        message: "ส่วนลดต้องไม่เกินยอดสินค้าและค่าส่ง",
+      });
+    }
+  }) satisfies z.ZodType<OrderFormValues>;
 
 export function normalizeOrderForm(values: OrderFormValues): OrderInput {
   return {

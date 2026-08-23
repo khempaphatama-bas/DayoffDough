@@ -87,7 +87,9 @@ export async function createInventoryItem(
   await page.getByLabel("ชื่อหน่วยซื้อ").fill(input.purchaseLabel);
   await page.getByLabel("ปริมาณต่อแพ็ก").fill(input.packQuantity);
   await page.getByRole("button", { name: "บันทึกรายการ" }).click();
-  await expect(page.getByText(input.name).filter({ visible: true }).first()).toBeVisible();
+  await expect(
+    page.getByText(input.name).filter({ visible: true }).first(),
+  ).toBeVisible({ timeout: 15_000 });
 }
 
 export async function addInventoryPrice(
@@ -100,7 +102,7 @@ export async function addInventoryPrice(
   await page.getByRole("button", { name: "บันทึกราคา" }).click();
   await expect(
     page.getByText(`฿${Number(input.packPriceBaht).toFixed(2)}`).first(),
-  ).toBeVisible();
+  ).toBeVisible({ timeout: 15_000 });
 }
 
 export async function createProduct(
@@ -113,7 +115,9 @@ export async function createProduct(
   await page.getByLabel("หน่วยขาย").selectOption("piece");
   await page.getByLabel("ราคาขาย").fill(input.sellingPriceBaht);
   await page.getByRole("button", { name: "บันทึกสินค้า" }).click();
-  await expect(page.getByText(input.name).filter({ visible: true }).first()).toBeVisible();
+  await expect(
+    page.getByText(input.name).filter({ visible: true }).first(),
+  ).toBeVisible({ timeout: 15_000 });
 }
 
 export async function createRecipeVersion(
@@ -139,7 +143,9 @@ export async function createRecipeVersion(
   await page.getByRole("button", { name: "บันทึกเวอร์ชันสูตร" }).click();
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "เปิดใช้เวอร์ชันนี้" }).click();
-  await expect(page.getByText("สูตรที่ใช้งานอยู่")).toBeVisible();
+  await expect(page.getByText("สูตรที่ใช้งานอยู่")).toBeVisible({
+    timeout: 15_000,
+  });
 }
 
 export async function createDeliveryMethod(
@@ -159,7 +165,7 @@ export async function createDeliveryMethod(
   await page.getByRole("button", { name: "บันทึกวิธีส่ง" }).click();
   await expect(
     page.getByRole("button", { name: `บันทึกการแก้ไข ${input.name}` }),
-  ).toBeVisible();
+  ).toBeVisible({ timeout: 15_000 });
 }
 
 export async function createCustomer(

@@ -191,6 +191,11 @@ describe("OrderDetailPage", () => {
     expect(screen.getAllByRole("option", { name: /Focaccia เก่า/ })).toHaveLength(2);
     expect(screen.getByLabelText("ราคาต่อหน่วย รายการที่ 1 (บาท)")).toHaveValue("220.50");
     expect(screen.getByLabelText("ต้นทุนจัดส่ง (บาท)")).toHaveValue("115.50");
+    expect(
+      screen.getByText(
+        "รอบผลิตนี้เริ่มผลิตหรือเสร็จสิ้นแล้ว กรุณาตรวจสอบก่อนแก้ไขออเดอร์",
+      ),
+    ).toBeInTheDocument();
   });
 
   it("turns only the exact missing-order service error into not found", async () => {

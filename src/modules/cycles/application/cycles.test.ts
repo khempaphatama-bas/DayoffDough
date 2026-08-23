@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { Logger } from "drizzle-orm/logger";
 import { OTHER_OWNER_ID, OWNER_ID } from "@tests/fixtures/owner";
 import { createTestDatabase } from "@tests/helpers/test-db";
 import {
@@ -25,6 +26,34 @@ describe("cycle service", () => {
   });
 
   afterEach(async () => context.close());
+
+  it("locks the owned cycle row before changing its status", async () => {
+    const queries: string[] = [];
+    await context.close();
+    context = await createTestDatabase({
+      logger: {
+        logQuery(query: string) {
+          queries.push(query);
+        },
+      } satisfies Logger,
+    });
+    service = createCycleService(context.db);
+    const cycle = await service.create(OWNER_ID, {
+      ...BASE_INPUT,
+      status: "OPEN",
+    });
+
+    queries.length = 0;
+    await service.changeStatus(OWNER_ID, cycle.id, "CANCELLED");
+
+    expect(
+      queries.some(
+        (query) =>
+          query.includes('from "bake_cycles"') &&
+          query.toLowerCase().includes("for update"),
+      ),
+    ).toBe(true);
+  });
 
   it("creates numbered cycles and blocks Phase 3 locking", async () => {
     const first = await service.create(OWNER_ID, {

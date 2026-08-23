@@ -1,6 +1,10 @@
 "use client";
 
-import { useActionState } from "react";
+import {
+  startTransition,
+  useActionState,
+  type FormEvent,
+} from "react";
 import {
   createCustomerAction,
   type CustomerActionState,
@@ -42,10 +46,16 @@ export function CustomerForm({
   const action = customer ? updateCustomerAction : createCustomerAction;
   const [state, formAction, pending] = useActionState(action, INITIAL_STATE);
 
+  function submitCustomer(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    startTransition(() => formAction(formData));
+  }
+
   return (
     <form
-      action={formAction}
       className="grid gap-4 rounded-3xl border border-stone-200 bg-white p-5 shadow-sm md:grid-cols-2"
+      onSubmit={submitCustomer}
     >
       {customer ? (
         <input name="customerId" type="hidden" value={customer.id} />

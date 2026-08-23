@@ -1,6 +1,7 @@
 import { and, desc, eq, ilike } from "drizzle-orm";
 import { z } from "zod";
 import type { DatabaseClient } from "@/lib/db/types";
+import { lockOwnedBakeCycle } from "@/lib/db/row-locks";
 import { bakeCycles } from "@/modules/cycles/db/schema";
 
 export type Phase2CycleStatus =
@@ -148,18 +149,27 @@ export function createCycleService(db: DatabaseClient) {
       ) {
         throw new Error("Invalid cycle status");
       }
-      const [row] = await db
-        .update(bakeCycles)
-        .set({ status: parsedStatus.data, updatedAt: new Date() })
-        .where(
-          and(
-            eq(bakeCycles.ownerId, parsedOwnerId.data),
-            eq(bakeCycles.id, parsedCycleId.data),
-          ),
-        )
-        .returning();
-      if (!row) throw new Error("Cycle not found");
-      return toBakeCycle(row);
+      return db.transaction(async (tx) => {
+        const existing = await lockOwnedBakeCycle(
+          tx,
+          parsedOwnerId.data,
+          parsedCycleId.data,
+        );
+        if (!existing) throw new Error("Cycle not found");
+
+        const [row] = await tx
+          .update(bakeCycles)
+          .set({ status: parsedStatus.data, updatedAt: new Date() })
+          .where(
+            and(
+              eq(bakeCycles.ownerId, parsedOwnerId.data),
+              eq(bakeCycles.id, parsedCycleId.data),
+            ),
+          )
+          .returning();
+        if (!row) throw new Error("Cycle not found");
+        return toBakeCycle(row);
+      });
     },
 
     async get(ownerId: string, cycleId: string): Promise<BakeCycle> {

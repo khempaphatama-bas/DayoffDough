@@ -16,6 +16,7 @@ import { OrderForm } from "./order-form";
 const CUSTOMER_ID = "00000000-0000-4000-8000-000000000010";
 const CUSTOMER_WITH_UNAVAILABLE_DEFAULT_ID = "00000000-0000-4000-8000-000000000012";
 const CYCLE_ID = "00000000-0000-4000-8000-000000000020";
+const ADVANCED_CYCLE_ID = "00000000-0000-4000-8000-000000000021";
 const KEX_ID = "00000000-0000-4000-8000-000000000030";
 const PICKUP_ID = "00000000-0000-4000-8000-000000000031";
 const UNAVAILABLE_METHOD_ID = "00000000-0000-4000-8000-000000000032";
@@ -337,5 +338,85 @@ describe("OrderForm", () => {
     expect(screen.getByText("จำนวนสินค้าไม่ถูกต้อง")).toBeInTheDocument();
     expect(screen.getByRole("spinbutton", { name: /^จำนวน รายการที่ 1/ }))
       .toHaveValue(7);
+  });
+
+  it("keeps an excessive discount and renders its Thai field error adjacent", async () => {
+    actions.saveOrderAction.mockResolvedValue({
+      error: "กรุณาตรวจสอบข้อมูลออเดอร์",
+      fieldErrors: {
+        discountBaht: "ส่วนลดต้องไม่เกินยอดสินค้าและค่าส่ง",
+      },
+    });
+    const user = userEvent.setup();
+    render(
+      <OrderForm
+        createQuickCustomer={successfulQuickCustomer}
+        initialValues={{
+          ...INITIAL_VALUES,
+          customerId: CUSTOMER_ID,
+          items: [{
+            ...INITIAL_VALUES.items[0]!,
+            productId: FOCACCIA_ID,
+            unitPriceBaht: "220.00",
+          }],
+        }}
+        mode="create"
+        options={OPTIONS}
+      />,
+    );
+
+    const discount = screen.getByLabelText("ส่วนลด (บาท)");
+    await user.clear(discount);
+    await user.type(discount, "1000");
+    await user.click(
+      screen.getAllByRole("button", { name: "บันทึกออเดอร์" })[0]!,
+    );
+
+    expect(await screen.findByText("ส่วนลดต้องไม่เกินยอดสินค้าและค่าส่ง"))
+      .toBeInTheDocument();
+    expect(discount.closest("label")).toHaveTextContent(
+      "ส่วนลดต้องไม่เกินยอดสินค้าและค่าส่ง",
+    );
+    expect(discount).toHaveValue("1000");
+  });
+
+  it("warns for advanced cycles and updates when the selected cycle changes", async () => {
+    actions.saveOrderAction.mockResolvedValue({ error: null, fieldErrors: {} });
+    const user = userEvent.setup();
+    render(
+      <OrderForm
+        createQuickCustomer={successfulQuickCustomer}
+        initialValues={INITIAL_VALUES}
+        mode="edit"
+        options={{
+          ...OPTIONS,
+          bakeCycles: [
+            ...OPTIONS.bakeCycles,
+            {
+              id: ADVANCED_CYCLE_ID,
+              cycleNumber: 13,
+              name: "รอบที่กำลังผลิต",
+              status: "IN_PRODUCTION",
+              targetProductionDate: "2026-09-05",
+              primaryDeliveryDate: "2026-09-06",
+            },
+          ],
+        }}
+        orderId="00000000-0000-4000-8000-000000000060"
+      />,
+    );
+
+    const warning =
+      "รอบผลิตนี้เริ่มผลิตหรือเสร็จสิ้นแล้ว กรุณาตรวจสอบก่อนแก้ไขออเดอร์";
+    expect(screen.queryByText(warning)).not.toBeInTheDocument();
+
+    await user.selectOptions(
+      screen.getByLabelText("รอบผลิต"),
+      ADVANCED_CYCLE_ID,
+    );
+    expect(screen.getByText(warning)).toBeInTheDocument();
+
+    await user.selectOptions(screen.getByLabelText("รอบผลิต"), CYCLE_ID);
+    expect(screen.queryByText(warning)).not.toBeInTheDocument();
   });
 });

@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, type FormEvent } from "react";
 import {
   changeCycleStatusAction,
   type CycleStatusActionState,
@@ -22,10 +22,21 @@ export function CycleStatusForm({
     INITIAL_STATE,
   );
 
+  function confirmCancellation(event: FormEvent<HTMLFormElement>) {
+    const formData = new FormData(event.currentTarget);
+    if (
+      formData.get("status") === "CANCELLED" &&
+      !window.confirm("ยืนยันยกเลิกรอบผลิตนี้หรือไม่?")
+    ) {
+      event.preventDefault();
+    }
+  }
+
   return (
     <form
       action={formAction}
       className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]"
+      onSubmit={confirmCancellation}
     >
       <input name="cycleId" type="hidden" value={cycleId} />
       <label className="grid gap-2 text-sm font-semibold text-stone-700">

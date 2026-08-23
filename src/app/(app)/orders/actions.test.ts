@@ -151,6 +151,29 @@ describe("saveOrderAction", () => {
     expect(mocks.update).not.toHaveBeenCalled();
   });
 
+  it("returns an excessive discount beside discountBaht without mutating", async () => {
+    const data = formData();
+    data.set(
+      "payload",
+      JSON.stringify({
+        ...VALID_PAYLOAD,
+        deliveryFeeChargedBaht: "0",
+        discountBaht: "1000",
+      }),
+    );
+
+    await expect(
+      saveOrderAction({ error: null, fieldErrors: {} }, data),
+    ).resolves.toEqual({
+      error: "กรุณาตรวจสอบข้อมูลออเดอร์",
+      fieldErrors: {
+        discountBaht: "ส่วนลดต้องไม่เกินยอดสินค้าและค่าส่ง",
+      },
+    });
+    expect(mocks.create).not.toHaveBeenCalled();
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+
   it("returns an expected Thai save error without redirecting or losing client state", async () => {
     mocks.create.mockRejectedValue(new Error("Customer not found"));
 

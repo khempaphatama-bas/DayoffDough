@@ -97,10 +97,25 @@ export function OrderStatusActions({
     }
   }
 
+  function confirmDelivery(event: FormEvent<HTMLFormElement>) {
+    const submitter = (event.nativeEvent as SubmitEvent)
+      .submitter as HTMLButtonElement | null;
+    if (
+      submitter?.value === "DELIVERED" &&
+      !window.confirm("ยืนยันว่าออเดอร์นี้จัดส่งแล้วหรือไม่?")
+    ) {
+      event.preventDefault();
+    }
+  }
+
   return (
     <section className="grid gap-4" aria-label="จัดการสถานะออเดอร์">
       {availableForwardActions.length > 0 ? (
-        <form action={fulfillmentAction} className="flex flex-wrap gap-2">
+        <form
+          action={fulfillmentAction}
+          className="flex flex-wrap gap-2"
+          onSubmit={confirmDelivery}
+        >
           <input name="orderId" type="hidden" value={orderId} />
           {availableForwardActions.map((action) => (
             <button
@@ -147,7 +162,8 @@ export function OrderStatusActions({
             </button>
           </form>
         )}
-        {fulfillmentStatus !== "CANCELLED" ? (
+        {fulfillmentStatus !== "CANCELLED" &&
+        fulfillmentStatus !== "DELIVERED" ? (
           <form action={cancelAction} onSubmit={confirmCancellation}>
             <input name="orderId" type="hidden" value={orderId} />
             <input name="status" type="hidden" value="CANCELLED" />

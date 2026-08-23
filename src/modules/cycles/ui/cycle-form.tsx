@@ -1,6 +1,10 @@
 "use client";
 
-import { useActionState } from "react";
+import {
+  startTransition,
+  useActionState,
+  type FormEvent,
+} from "react";
 import {
   createCycleAction,
   type CycleActionState,
@@ -36,10 +40,16 @@ export function CycleForm({
   const action = cycle ? updateCycleAction : createCycleAction;
   const [state, formAction, pending] = useActionState(action, INITIAL_STATE);
 
+  function submitCycle(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    startTransition(() => formAction(formData));
+  }
+
   return (
     <form
-      action={formAction}
       className="grid gap-4 rounded-3xl border border-stone-200 bg-white p-5 shadow-sm md:grid-cols-2"
+      onSubmit={submitCycle}
     >
       {cycle ? <input name="cycleId" type="hidden" value={cycle.id} /> : null}
       <label className="grid gap-2 text-sm font-semibold text-stone-700 md:col-span-2">

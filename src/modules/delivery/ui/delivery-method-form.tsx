@@ -1,6 +1,11 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import {
+  startTransition,
+  useActionState,
+  useState,
+  type FormEvent,
+} from "react";
 import {
   createDeliveryMethodAction,
   type DeliveryActionState,
@@ -16,10 +21,15 @@ export function DeliveryMethodForm() {
     createDeliveryMethodAction,
     INITIAL_STATE,
   );
+  function submitMethod(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    startTransition(() => formAction(formData));
+  }
   return (
     <section className="grid gap-4">
       <button className="min-h-11 justify-self-start rounded-xl bg-stone-900 px-5 font-semibold text-white" onClick={() => setOpen((value) => !value)} type="button">เพิ่มวิธีส่ง</button>
-      {open ? <form action={formAction} className="grid gap-4 rounded-3xl border border-stone-200 bg-white p-5 shadow-sm md:grid-cols-2">
+      {open ? <form className="grid gap-4 rounded-3xl border border-stone-200 bg-white p-5 shadow-sm md:grid-cols-2" onSubmit={submitMethod}>
         <label className="grid gap-2 text-sm font-semibold text-stone-700">ชื่อวิธีส่ง<input className="min-h-11 rounded-xl border border-stone-300 px-4 text-base font-normal" name="name" required /></label>
         <label className="grid gap-2 text-sm font-semibold text-stone-700">ค่าส่งที่เรียกเก็บ<input className="min-h-11 rounded-xl border border-stone-300 px-4 text-base font-normal" min="0" name="customerFeeBaht" required step="0.01" type="number" /></label>
         <label className="grid gap-2 text-sm font-semibold text-stone-700">ต้นทุนขนส่ง<input className="min-h-11 rounded-xl border border-stone-300 px-4 text-base font-normal" min="0" name="internalCostBaht" required step="0.01" type="number" /></label>
@@ -41,7 +51,12 @@ export function DeliveryMethodEditForm({ method }: Readonly<{ method: { id: stri
     updateDeliveryMethodAction,
     INITIAL_STATE,
   );
-  return <form action={formAction} className="grid gap-3 rounded-2xl border border-stone-200 bg-white p-5">
+  function submitMethod(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    startTransition(() => formAction(formData));
+  }
+  return <form className="grid gap-3 rounded-2xl border border-stone-200 bg-white p-5" onSubmit={submitMethod}>
     <input name="methodId" type="hidden" value={method.id} />
     <label className="grid gap-2 text-sm font-semibold text-stone-700">ชื่อวิธีส่ง<input className="min-h-11 rounded-xl border border-stone-300 px-4 text-base font-normal" defaultValue={method.name} name="name" required /></label>
     <div className="grid gap-3 sm:grid-cols-2"><label className="grid gap-2 text-sm font-semibold text-stone-700">ค่าส่งที่เรียกเก็บ<input className="min-h-11 rounded-xl border border-stone-300 px-4 text-base font-normal" defaultValue={formatSatangAsBaht(method.defaultCustomerFeeSatang)} min="0" name="customerFeeBaht" required step="0.01" type="number" /></label><label className="grid gap-2 text-sm font-semibold text-stone-700">ต้นทุนขนส่ง<input className="min-h-11 rounded-xl border border-stone-300 px-4 text-base font-normal" defaultValue={formatSatangAsBaht(method.defaultInternalCostSatang)} min="0" name="internalCostBaht" required step="0.01" type="number" /></label></div>

@@ -9,6 +9,10 @@ import {
 } from "drizzle-orm";
 import { z } from "zod";
 import type { DatabaseClient } from "@/lib/db/types";
+import {
+  lockOwnedBakeCycle,
+  lockOwnedOrder,
+} from "@/lib/db/row-locks";
 import { customers } from "@/modules/customers/db/schema";
 import { bakeCycles } from "@/modules/cycles/db/schema";
 import { deliveryMethods } from "@/modules/delivery/db/schema";
@@ -180,10 +184,11 @@ export type CycleOrderSummary = Readonly<{
 }>;
 
 const uuidSchema = z.string().uuid();
-const moneySchema = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
+const POSTGRES_INTEGER_MAX = 2_147_483_647;
+const moneySchema = z.number().int().min(0).max(POSTGRES_INTEGER_MAX);
 const orderItemSchema = z.object({
   productId: uuidSchema,
-  quantity: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
+  quantity: z.number().int().min(1).max(POSTGRES_INTEGER_MAX),
   unitPriceSatang: moneySchema,
   lineNote: z.string().trim().max(2000).optional(),
 });
@@ -283,16 +288,7 @@ async function validateOwnedReferences(
     .limit(1);
   if (!customer) throw new Error("Customer not found");
 
-  const [cycle] = await reader
-    .select({ id: bakeCycles.id, status: bakeCycles.status })
-    .from(bakeCycles)
-    .where(
-      and(
-        eq(bakeCycles.ownerId, ownerId),
-        eq(bakeCycles.id, input.bakeCycleId),
-      ),
-    )
-    .limit(1);
+  const cycle = await lockOwnedBakeCycle(reader, ownerId, input.bakeCycleId);
   if (!cycle) throw new Error("Cycle not found");
   if (cycle.status === "CANCELLED") {
     throw new Error("Cancelled cycle cannot accept orders");
@@ -715,6 +711,13 @@ export function createOrderService(db: DatabaseClient) {
     }
 
     return db.transaction(async (tx) => {
+      const existing = await lockOwnedOrder(
+        tx,
+        parsedOwnerId.data,
+        parsedOrderId.data,
+      );
+      if (!existing) throw new Error("Order not found");
+
       const [updated] = await tx
         .update(orders)
         .set({ paymentStatus: "REFUNDED", updatedAt: new Date() })
@@ -722,10 +725,11 @@ export function createOrderService(db: DatabaseClient) {
           and(
             eq(orders.ownerId, parsedOwnerId.data),
             eq(orders.id, parsedOrderId.data),
+            eq(orders.paymentStatus, existing.paymentStatus),
           ),
         )
         .returning({ id: orders.id });
-      if (!updated) throw new Error("Order not found");
+      if (!updated) throw new Error("Payment status changed");
       return requireOrderDetail(
         tx,
         parsedOwnerId.data,
@@ -905,21 +909,16 @@ export function createOrderService(db: DatabaseClient) {
       if (!parsedOrderId.success) throw new Error("Order not found");
 
       return db.transaction(async (tx) => {
-        const [existing] = await tx
-          .select({ paymentStatus: orders.paymentStatus })
-          .from(orders)
-          .where(
-            and(
-              eq(orders.ownerId, parsed.ownerId),
-              eq(orders.id, parsedOrderId.data),
-            ),
-          )
-          .limit(1);
+        const existing = await lockOwnedOrder(
+          tx,
+          parsed.ownerId,
+          parsedOrderId.data,
+        );
         if (!existing) throw new Error("Order not found");
 
         await validateOwnedReferences(tx, parsed.ownerId, parsed.input);
         const { items, ...header } = parsed.input;
-        await tx
+        const [updated] = await tx
           .update(orders)
           .set({
             ...header,
@@ -933,8 +932,11 @@ export function createOrderService(db: DatabaseClient) {
             and(
               eq(orders.ownerId, parsed.ownerId),
               eq(orders.id, parsedOrderId.data),
+              eq(orders.paymentStatus, existing.paymentStatus),
             ),
-          );
+          )
+          .returning({ id: orders.id });
+        if (!updated) throw new Error("Payment status changed");
         await tx
           .delete(orderItems)
           .where(
@@ -1045,12 +1047,18 @@ export function createOrderService(db: DatabaseClient) {
       }
 
       return db.transaction(async (tx) => {
+        const existing = await lockOwnedOrder(
+          tx,
+          parsedOwnerId.data,
+          parsedOrderId.data,
+        );
+        if (!existing) throw new Error("Order not found");
         const detail = await requireOrderDetail(
           tx,
           parsedOwnerId.data,
           parsedOrderId.data,
         );
-        await tx
+        const [updated] = await tx
           .update(orders)
           .set({
             paymentStatus: detail.totals.paymentStatus,
@@ -1060,8 +1068,11 @@ export function createOrderService(db: DatabaseClient) {
             and(
               eq(orders.ownerId, parsedOwnerId.data),
               eq(orders.id, parsedOrderId.data),
+              eq(orders.paymentStatus, existing.paymentStatus),
             ),
-          );
+          )
+          .returning({ id: orders.id });
+        if (!updated) throw new Error("Payment status changed");
         return requireOrderDetail(
           tx,
           parsedOwnerId.data,

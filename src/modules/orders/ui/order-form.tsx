@@ -98,6 +98,12 @@ export function OrderForm({
   const selectedMethod = options.deliveryMethods.find(
     (method) => method.id === values.deliveryMethodId,
   );
+  const selectedCycle = options.bakeCycles.find(
+    (cycle) => cycle.id === values.bakeCycleId,
+  );
+  const showAdvancedCycleWarning =
+    selectedCycle?.status === "IN_PRODUCTION" ||
+    selectedCycle?.status === "COMPLETED";
   const showMissingLocation = Boolean(
     selectedMethod?.requiresDeliveryLocation &&
       values.deliveryLocation.trim() === "",
@@ -379,6 +385,14 @@ export function OrderForm({
           </select>
           <FieldError error={state.fieldErrors.bakeCycleId} />
         </label>
+        {showAdvancedCycleWarning ? (
+          <p
+            aria-live="polite"
+            className="rounded-xl bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-900 md:col-span-2"
+          >
+            รอบผลิตนี้เริ่มผลิตหรือเสร็จสิ้นแล้ว กรุณาตรวจสอบก่อนแก้ไขออเดอร์
+          </p>
+        ) : null}
         <label className="grid gap-2 text-sm font-semibold text-stone-700">
           ช่องทางออเดอร์
           <select

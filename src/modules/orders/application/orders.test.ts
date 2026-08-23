@@ -1,5 +1,6 @@
 import { and, eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { Logger } from "drizzle-orm/logger";
 import { OTHER_OWNER_ID, OWNER_ID } from "@tests/fixtures/owner";
 import { createTestDatabase } from "@tests/helpers/test-db";
 import type { DatabaseClient } from "@/lib/db/types";
@@ -122,6 +123,100 @@ describe("order service", () => {
   });
 
   afterEach(async () => context.close());
+
+  it("locks the owned cycle before create and rejects after cancellation", async () => {
+    const queries: string[] = [];
+    await context.close();
+    context = await createTestDatabase({
+      logger: {
+        logQuery(query: string) {
+          queries.push(query);
+        },
+      } satisfies Logger,
+    });
+    service = createOrderService(context.db);
+    const masters = await seedMasters(context.db);
+
+    queries.length = 0;
+    await service.create(OWNER_ID, orderInput(masters));
+    expect(
+      queries.some(
+        (query) =>
+          query.includes('from "bake_cycles"') &&
+          query.toLowerCase().includes("for update"),
+      ),
+    ).toBe(true);
+
+    await context.db
+      .update(bakeCycles)
+      .set({ status: "CANCELLED" })
+      .where(
+        and(
+          eq(bakeCycles.ownerId, OWNER_ID),
+          eq(bakeCycles.id, masters.cycle.id),
+        ),
+      );
+    await expect(
+      service.create(OWNER_ID, orderInput(masters)),
+    ).rejects.toThrow("Cancelled cycle cannot accept orders");
+  });
+
+  it("serializes payment-state mutations with an order lock and compare-and-swap", async () => {
+    const queries: string[] = [];
+    await context.close();
+    context = await createTestDatabase({
+      logger: {
+        logQuery(query: string) {
+          queries.push(query);
+        },
+      } satisfies Logger,
+    });
+    service = createOrderService(context.db);
+    const masters = await seedMasters(context.db);
+    const created = await service.create(OWNER_ID, orderInput(masters));
+
+    async function expectSerializedPaymentMutation(
+      mutate: () => Promise<unknown>,
+    ) {
+      queries.length = 0;
+      await mutate();
+      expect(
+        queries.some(
+          (query) =>
+            query.includes('from "orders"') &&
+            query.toLowerCase().includes("for update"),
+        ),
+      ).toBe(true);
+      const updateQuery = queries.find((query) =>
+        query.toLowerCase().startsWith('update "orders"'),
+      );
+      expect(updateQuery).toBeDefined();
+      expect(updateQuery!.slice(updateQuery!.toLowerCase().indexOf(" where ")))
+        .toContain('"orders"."payment_status"');
+    }
+
+    await expectSerializedPaymentMutation(() =>
+      service.markRefunded(OWNER_ID, created.id),
+    );
+    await expectSerializedPaymentMutation(() =>
+      service.update(
+        OWNER_ID,
+        created.id,
+        orderInput(masters, { amountPaidSatang: 62000 }),
+      ),
+    );
+    await expect(service.get(OWNER_ID, created.id)).resolves.toMatchObject({
+      paymentStatus: "REFUNDED",
+      amountPaidSatang: 62000,
+    });
+    await expectSerializedPaymentMutation(() =>
+      service.restorePaymentTracking(OWNER_ID, created.id),
+    );
+    await expect(service.get(OWNER_ID, created.id)).resolves.toMatchObject({
+      paymentStatus: "PAID",
+      amountPaidSatang: 62000,
+    });
+  });
 
   it("creates a multi-item order and keeps copied commercial values historical", async () => {
     const masters = await seedMasters(context.db);
@@ -350,6 +445,45 @@ describe("order service", () => {
         .from(orders)
         .where(eq(orders.ownerId, OWNER_ID)),
     ).toHaveLength(0);
+  });
+
+  it("rejects persisted money and quantity above PostgreSQL integer range", async () => {
+    const masters = await seedMasters(context.db);
+    const maximum = await service.create(
+      OWNER_ID,
+      orderInput(masters, {
+        deliveryFeeChargedSatang: 0,
+        deliveryCostSatang: 2_147_483_647,
+        discountSatang: 0,
+        amountPaidSatang: 0,
+        items: [{
+          productId: masters.focaccia.id,
+          quantity: 1,
+          unitPriceSatang: 2_147_483_647,
+        }],
+      }),
+    );
+    expect(maximum.deliveryCostSatang).toBe(2_147_483_647);
+    expect(maximum.items[0]?.unitPriceSatang).toBe(2_147_483_647);
+
+    await expect(
+      service.create(
+        OWNER_ID,
+        orderInput(masters, { deliveryCostSatang: 2_147_483_648 }),
+      ),
+    ).rejects.toThrow("Invalid order");
+    await expect(
+      service.create(
+        OWNER_ID,
+        orderInput(masters, {
+          items: [{
+            productId: masters.focaccia.id,
+            quantity: 2_147_483_648,
+            unitPriceSatang: 1,
+          }],
+        }),
+      ),
+    ).rejects.toThrow("Invalid order");
   });
 
   it("returns active create options and re-includes historical edit references", async () => {

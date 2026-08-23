@@ -54,7 +54,7 @@ const THAI_FIELD_ERRORS: Readonly<Record<string, string>> = {
   deliveryFeeChargedBaht: "ค่าส่งที่เรียกเก็บไม่ถูกต้อง",
   deliveryCostBaht: "ต้นทุนจัดส่งไม่ถูกต้อง",
   deliveryFeePayer: "ผู้รับภาระค่าส่งไม่ถูกต้อง",
-  discountBaht: "ส่วนลดไม่ถูกต้อง",
+  discountBaht: "ส่วนลดต้องไม่เกินยอดสินค้าและค่าส่ง",
   amountPaidBaht: "ยอดชำระแล้วไม่ถูกต้อง",
   deliveryLocation: "สถานที่จัดส่งต้องไม่เกิน 2,000 ตัวอักษร",
   deliveryNote: "หมายเหตุการส่งต้องไม่เกิน 2,000 ตัวอักษร",
