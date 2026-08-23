@@ -97,6 +97,7 @@ export function calculateRequirementCost(
   const unitCost = calculateUnitCostSatang(
     price.packPriceSatang,
     price.packBaseQuantity,
+    "PLANNING_EXACT",
   );
   return roundAtomicSatang(unitCost.mul(quantity));
 }

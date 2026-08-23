@@ -6,6 +6,15 @@ describe("calculateUnitCostSatang", () => {
     expect(calculateUnitCostSatang(5500, "1000").toString()).toBe("5.5");
   });
 
+  it("keeps default consumer rounding for a nonterminating unit cost", () => {
+    expect(
+      calculateUnitCostSatang(1, "3")
+        .div(100)
+        .toDecimalPlaces(4)
+        .toString(),
+    ).toBe("0.0033");
+  });
+
   it("rejects an empty purchase pack", () => {
     expect(() => calculateUnitCostSatang(5500, "0")).toThrow(
       "Pack base quantity must be greater than zero",
