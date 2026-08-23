@@ -513,6 +513,62 @@ function cycleCostValues(
   };
 }
 
+async function seedProductPackagingRequirement(db: TestDatabase) {
+  const scenario = await seedIntegrityScenario(db);
+  const recipePlan = await insertRecipePlan(db, {
+    snapshotId: scenario.snapshotA.id,
+    product: scenario.productA,
+    recipe: scenario.recipeA,
+    version: scenario.versionA,
+  });
+  const productPlan = await insertProductPlan(db, {
+    snapshotId: scenario.snapshotA.id,
+    product: scenario.productA,
+    recipePlanId: recipePlan.id,
+  });
+  const priceSnapshot = await insertPriceSnapshot(db, {
+    snapshotId: scenario.snapshotA.id,
+    item: scenario.box,
+    price: scenario.boxPrice,
+  });
+  const values: typeof cyclePackagingRequirements.$inferInsert = {
+    ownerId: OWNER_ID,
+    planningSnapshotId: scenario.snapshotA.id,
+    productPlanId: productPlan.id,
+    sourcePackagingRuleId: scenario.ruleA.id,
+    scope: "PRODUCT",
+    consumptionBasis: "PER_PRODUCT_UNIT",
+    sourceProductId: scenario.productA.id,
+    targetName: scenario.productA.name,
+    inventoryItemId: scenario.box.id,
+    inventoryItemName: scenario.box.name,
+    baseUnit: scenario.box.baseUnit,
+    priceSnapshotId: priceSnapshot.id,
+    ruleQuantity: "1",
+    multiplier: "1",
+    plannedRequirement: "1",
+  };
+
+  return { values };
+}
+
+async function expectConstraintViolation(
+  operation: () => Promise<unknown>,
+  constraint: string,
+) {
+  let rejection: unknown;
+  try {
+    await operation();
+  } catch (error) {
+    rejection = error;
+  }
+
+  expect(rejection).toBeInstanceOf(Error);
+  expect(
+    (rejection as Error & { cause?: { constraint?: string } }).cause,
+  ).toMatchObject({ constraint });
+}
+
 describe("Phase 3A planning relationship integrity", () => {
   let context: Awaited<ReturnType<typeof createTestDatabase>>;
 
@@ -1318,6 +1374,73 @@ describe("Phase 3A planning relationship integrity", () => {
         sourceDeliveryMethodId: scenario.deliveryMethod.id,
       }),
     ).rejects.toThrow();
+  });
+
+  it("rejects a missing product-plan target via the local scope-target check", async () => {
+    const { values } = await seedProductPackagingRequirement(context.db);
+
+    await expectConstraintViolation(
+      () =>
+        context.db.insert(cyclePackagingRequirements).values({
+          ...values,
+          productPlanId: null,
+        }),
+      "cycle_packaging_requirements_scope_target",
+    );
+  });
+
+  it("reports the local packaging basis check before overlapping source lineage rejection", async () => {
+    const { values } = await seedProductPackagingRequirement(context.db);
+
+    await expectConstraintViolation(
+      () =>
+        context.db.insert(cyclePackagingRequirements).values({
+          ...values,
+          consumptionBasis: "PER_DELIVERY",
+        }),
+      "cycle_packaging_requirements_basis_valid",
+    );
+  });
+
+  it("rejects whitespace-only batch override reasons and accepts Thai text", async () => {
+    const scenario = await seedIntegrityScenario(context.db);
+    const recipePlan = await insertRecipePlan(context.db, {
+      snapshotId: scenario.snapshotA.id,
+      product: scenario.productA,
+      recipe: scenario.recipeA,
+      version: scenario.versionA,
+    });
+    const whitespaceReasons = ["   ", "\t", "\n", "\r", " \t\r\n "] as const;
+
+    for (const overrideReason of whitespaceReasons) {
+      await expectConstraintViolation(
+        () =>
+          insertProductPlan(context.db, {
+            snapshotId: scenario.snapshotA.id,
+            product: scenario.productA,
+            recipePlanId: recipePlan.id,
+            overrides: {
+              selectedBatchCount: "2",
+              overrideReason,
+              plannedOutput: "2",
+            },
+          }),
+        "cycle_product_plans_override_reason",
+      );
+    }
+
+    const valid = await insertProductPlan(context.db, {
+      snapshotId: scenario.snapshotA.id,
+      product: scenario.productA,
+      recipePlanId: recipePlan.id,
+      overrides: {
+        selectedBatchCount: "2",
+        overrideReason: "ปรับจำนวนรอบอบตามแผน",
+        plannedOutput: "2",
+      },
+    });
+
+    expect(valid.overrideReason).toBe("ปรับจำนวนรอบอบตามแผน");
   });
 
   it("restricts deletion of referenced source and planning parent rows", async () => {

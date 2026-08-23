@@ -1,0 +1,2 @@
+ALTER TABLE "cycle_product_plans" DROP CONSTRAINT "cycle_product_plans_override_reason";--> statement-breakpoint
+ALTER TABLE "cycle_product_plans" ADD CONSTRAINT "cycle_product_plans_override_reason" CHECK (("cycle_product_plans"."selected_batch_count" = "cycle_product_plans"."suggested_batch_count" AND "cycle_product_plans"."override_reason" IS NULL) OR ("cycle_product_plans"."selected_batch_count" <> "cycle_product_plans"."suggested_batch_count" AND "cycle_product_plans"."override_reason" IS NOT NULL AND "cycle_product_plans"."override_reason" ~ '[^[:space:]]'));

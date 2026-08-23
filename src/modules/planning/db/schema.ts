@@ -573,7 +573,7 @@ export const cycleProductPlans = pgTable(
     ),
     check(
       "cycle_product_plans_override_reason",
-      sql`(${table.selectedBatchCount} = ${table.suggestedBatchCount} AND ${table.overrideReason} IS NULL) OR (${table.selectedBatchCount} <> ${table.suggestedBatchCount} AND ${table.overrideReason} IS NOT NULL AND char_length(trim(${table.overrideReason})) > 0)`,
+      sql`(${table.selectedBatchCount} = ${table.suggestedBatchCount} AND ${table.overrideReason} IS NULL) OR (${table.selectedBatchCount} <> ${table.suggestedBatchCount} AND ${table.overrideReason} IS NOT NULL AND ${table.overrideReason} ~ '[^[:space:]]')`,
     ),
   ],
 );
