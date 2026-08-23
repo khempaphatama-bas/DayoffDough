@@ -98,7 +98,7 @@ export function calculateRequirementCost(
     price.packPriceSatang,
     price.packBaseQuantity,
   );
-  return roundAtomicSatang(new Decimal(quantity).mul(unitCost));
+  return roundAtomicSatang(unitCost.mul(quantity));
 }
 
 export function calculateLaborCost(

@@ -72,6 +72,28 @@ describe("planning cost atoms", () => {
     expect(calculateUtilityCost(2000, "1.5")).toBe(3000);
   });
 
+  it("does not round the per-minute labor rate before multiplying minutes", () => {
+    expect(calculateLaborCost(3, "1", 30)).toBe(2);
+  });
+
+  it("does not turn a numeric-bound cost below half a satang into a tie", () => {
+    expect(
+      calculateRequirementCost("716791484140.228232", {
+        packPriceSatang: 2_147_483_647,
+        packBaseQuantity: "999999999999.999989",
+      }),
+    ).toBe(1_539_297_990);
+  });
+
+  it("rounds an exact repeating half-satang requirement cost up", () => {
+    expect(
+      calculateRequirementCost("19", {
+        packPriceSatang: 1,
+        packBaseQuantity: "38",
+      }),
+    ).toBe(1);
+  });
+
   it("distinguishes a missing price from a recorded zero price", () => {
     expect(calculateRequirementCost("10", null)).toBeNull();
     expect(
@@ -356,7 +378,7 @@ describe("planning cost summaries", () => {
     );
   });
 
-  it("rejects category and production totals above PostgreSQL range", () => {
+  it("rejects a category total above PostgreSQL range", () => {
     expectExactError(
       () =>
         calculateProductCost({
@@ -369,16 +391,18 @@ describe("planning cost summaries", () => {
         }),
       "Cost total exceeds PostgreSQL integer range",
     );
+  });
 
+  it("rejects overflow created only by adding cycle delivery packaging", () => {
     expectExactError(
       () =>
         calculateCycleCost({
           baseIngredientCosts: [2_147_483_647],
-          wasteCosts: [0],
-          productPackagingCosts: [0],
-          deliveryPackagingCosts: [0],
-          laborCosts: [1],
-          utilityCosts: [0],
+          wasteCosts: [],
+          productPackagingCosts: [],
+          deliveryPackagingCosts: [1],
+          laborCosts: [],
+          utilityCosts: [],
           missingInventoryItemIds: [],
         }),
       "Cost total exceeds PostgreSQL integer range",
