@@ -252,6 +252,12 @@ export const cycleOrderSnapshots = pgTable(
       table.planningSnapshotId,
       table.id,
     ),
+    unique("cycle_order_snapshots_owner_snapshot_source_id_unique").on(
+      table.ownerId,
+      table.planningSnapshotId,
+      table.sourceOrderId,
+      table.id,
+    ),
     foreignKey({
       name: "cycle_order_snapshots_owned_snapshot_fk",
       columns: [table.ownerId, table.planningSnapshotId],
@@ -299,6 +305,7 @@ export const cycleOrderItemSnapshots = pgTable(
     ownerId: uuid("owner_id").notNull(),
     planningSnapshotId: uuid("planning_snapshot_id").notNull(),
     orderSnapshotId: uuid("order_snapshot_id").notNull(),
+    sourceOrderId: uuid("source_order_id").notNull(),
     sourceOrderItemId: uuid("source_order_item_id").notNull(),
     sourceProductId: uuid("source_product_id").notNull(),
     productName: varchar("product_name", { length: 160 }).notNull(),
@@ -330,18 +337,30 @@ export const cycleOrderItemSnapshots = pgTable(
       columns: [
         table.ownerId,
         table.planningSnapshotId,
+        table.sourceOrderId,
         table.orderSnapshotId,
       ],
       foreignColumns: [
         cycleOrderSnapshots.ownerId,
         cycleOrderSnapshots.planningSnapshotId,
+        cycleOrderSnapshots.sourceOrderId,
         cycleOrderSnapshots.id,
       ],
     }).onDelete("restrict"),
     foreignKey({
       name: "cycle_order_item_snapshots_owned_source_item_fk",
-      columns: [table.ownerId, table.sourceProductId, table.sourceOrderItemId],
-      foreignColumns: [orderItems.ownerId, orderItems.productId, orderItems.id],
+      columns: [
+        table.ownerId,
+        table.sourceOrderId,
+        table.sourceProductId,
+        table.sourceOrderItemId,
+      ],
+      foreignColumns: [
+        orderItems.ownerId,
+        orderItems.orderId,
+        orderItems.productId,
+        orderItems.id,
+      ],
     }).onDelete("restrict"),
     foreignKey({
       name: "cycle_order_item_snapshots_owned_source_product_fk",
@@ -410,6 +429,12 @@ export const cycleRecipePlans = pgTable(
       table.ownerId,
       table.planningSnapshotId,
       table.sourceProductId,
+      table.id,
+    ),
+    unique("cycle_recipe_plans_owner_snapshot_version_id_unique").on(
+      table.ownerId,
+      table.planningSnapshotId,
+      table.sourceRecipeVersionId,
       table.id,
     ),
     foreignKey({
@@ -644,6 +669,7 @@ export const cycleMaterialRequirements = pgTable(
     planningSnapshotId: uuid("planning_snapshot_id").notNull(),
     productPlanId: uuid("product_plan_id").notNull(),
     recipePlanId: uuid("recipe_plan_id").notNull(),
+    sourceRecipeVersionId: uuid("source_recipe_version_id").notNull(),
     sourceRecipeIngredientId: uuid("source_recipe_ingredient_id").notNull(),
     inventoryItemId: uuid("inventory_item_id").notNull(),
     priceSnapshotId: uuid("price_snapshot_id").notNull(),
@@ -706,10 +732,16 @@ export const cycleMaterialRequirements = pgTable(
     }).onDelete("restrict"),
     foreignKey({
       name: "cycle_material_requirements_owned_recipe_plan_fk",
-      columns: [table.ownerId, table.planningSnapshotId, table.recipePlanId],
+      columns: [
+        table.ownerId,
+        table.planningSnapshotId,
+        table.sourceRecipeVersionId,
+        table.recipePlanId,
+      ],
       foreignColumns: [
         cycleRecipePlans.ownerId,
         cycleRecipePlans.planningSnapshotId,
+        cycleRecipePlans.sourceRecipeVersionId,
         cycleRecipePlans.id,
       ],
     }).onDelete("restrict"),
@@ -717,11 +749,13 @@ export const cycleMaterialRequirements = pgTable(
       name: "cycle_material_requirements_owned_source_ingredient_fk",
       columns: [
         table.ownerId,
+        table.sourceRecipeVersionId,
         table.inventoryItemId,
         table.sourceRecipeIngredientId,
       ],
       foreignColumns: [
         recipeIngredients.ownerId,
+        recipeIngredients.recipeVersionId,
         recipeIngredients.inventoryItemId,
         recipeIngredients.id,
       ],

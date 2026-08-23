@@ -155,6 +155,12 @@ export const recipeIngredients = pgTable(
       table.inventoryItemId,
       table.id,
     ),
+    unique("recipe_ingredients_owner_version_item_id_unique").on(
+      table.ownerId,
+      table.recipeVersionId,
+      table.inventoryItemId,
+      table.id,
+    ),
     foreignKey({
       name: "recipe_ingredients_owned_version_fk",
       columns: [table.ownerId, table.recipeVersionId],

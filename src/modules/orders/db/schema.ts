@@ -176,6 +176,12 @@ export const orderItems = pgTable(
       table.productId,
       table.id,
     ),
+    unique("order_items_owner_order_product_id_unique").on(
+      table.ownerId,
+      table.orderId,
+      table.productId,
+      table.id,
+    ),
     foreignKey({
       name: "order_items_owned_order_fk",
       columns: [table.ownerId, table.orderId],

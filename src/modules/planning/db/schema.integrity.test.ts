@@ -385,6 +385,7 @@ async function insertRecipePlan(
     product: typeof products.$inferSelect;
     recipe: typeof recipes.$inferSelect;
     version: typeof recipeVersions.$inferSelect;
+    overrides?: Partial<typeof cycleRecipePlans.$inferInsert>;
   }>,
 ) {
   const [row] = await db
@@ -406,6 +407,7 @@ async function insertRecipePlan(
       utilityCostSatangPerBatch: input.version.utilityCostSatangPerBatch,
       wasteAllowancePercent: "0",
       wasteAllowanceSource: "SHOP_DEFAULT",
+      ...input.overrides,
     })
     .returning();
   return row!;
@@ -446,6 +448,7 @@ async function insertPriceSnapshot(
     snapshotId: string;
     item: typeof inventoryItems.$inferSelect;
     price: typeof inventoryPrices.$inferSelect;
+    overrides?: Partial<typeof cycleInventoryPriceSnapshots.$inferInsert>;
   }>,
 ) {
   const [row] = await db
@@ -462,6 +465,7 @@ async function insertPriceSnapshot(
       packBaseQuantity: input.price.packBaseQuantity,
       effectiveAt: input.price.effectiveAt,
       unitCostSatang: "5",
+      ...input.overrides,
     })
     .returning();
   return row!;
@@ -490,6 +494,7 @@ function productCostValues(
 
 function cycleCostValues(
   snapshotId: string,
+  overrides: Partial<typeof cycleCostSnapshots.$inferInsert> = {},
 ): typeof cycleCostSnapshots.$inferInsert {
   return {
     ownerId: OWNER_ID,
@@ -504,6 +509,7 @@ function cycleCostValues(
     completeProductionCostSatang: 0,
     missingPriceCount: 0,
     costComplete: true,
+    ...overrides,
   };
 }
 
@@ -530,6 +536,7 @@ describe("Phase 3A planning relationship integrity", () => {
         ownerId: OWNER_ID,
         planningSnapshotId: scenario.snapshotA.id,
         orderSnapshotId: orderSnapshotB.id,
+        sourceOrderId: scenario.orderB.id,
         sourceOrderItemId: scenario.orderItemB.id,
         sourceProductId: scenario.productB.id,
         productName: scenario.productB.name,
@@ -583,6 +590,7 @@ describe("Phase 3A planning relationship integrity", () => {
         planningSnapshotId: scenario.snapshotA.id,
         productPlanId: productPlanB.id,
         recipePlanId: recipePlanB.id,
+        sourceRecipeVersionId: scenario.versionB.id,
         sourceRecipeIngredientId: scenario.ingredientB.id,
         inventoryItemId: scenario.sugar.id,
         priceSnapshotId: priceSnapshotB.id,
@@ -717,6 +725,7 @@ describe("Phase 3A planning relationship integrity", () => {
         planningSnapshotId: scenario.snapshotA.id,
         productPlanId: productPlanA.id,
         recipePlanId: recipePlanA.id,
+        sourceRecipeVersionId: scenario.versionA.id,
         sourceRecipeIngredientId: scenario.ingredientA.id,
         inventoryItemId: scenario.flour.id,
         priceSnapshotId: boxPriceSnapshot.id,
@@ -799,12 +808,48 @@ describe("Phase 3A planning relationship integrity", () => {
         ownerId: OWNER_ID,
         planningSnapshotId: scenario.snapshotA.id,
         orderSnapshotId: orderSnapshotA.id,
+        sourceOrderId: scenario.orderA.id,
         sourceOrderItemId: scenario.orderItemA.id,
         sourceProductId: scenario.productB.id,
         productName: scenario.productB.name,
         sellingUnit: scenario.productB.sellingUnit,
         quantity: 1,
         unitPriceSatang: 8000,
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("rejects a same-product source item from another order", async () => {
+    const scenario = await seedIntegrityScenario(context.db);
+    const [otherOrderItem] = await context.db
+      .insert(orderItems)
+      .values({
+        ownerId: OWNER_ID,
+        orderId: scenario.orderB.id,
+        productId: scenario.productA.id,
+        quantity: 1,
+        unitPriceSatang: 22000,
+      })
+      .returning();
+    const orderSnapshotA = await insertOrderSnapshot(context.db, {
+      snapshotId: scenario.snapshotA.id,
+      order: scenario.orderA,
+      customer: scenario.customerA,
+      deliveryMethod: scenario.deliveryMethod,
+    });
+
+    await expect(
+      context.db.insert(cycleOrderItemSnapshots).values({
+        ownerId: OWNER_ID,
+        planningSnapshotId: scenario.snapshotA.id,
+        orderSnapshotId: orderSnapshotA.id,
+        sourceOrderId: scenario.orderA.id,
+        sourceOrderItemId: otherOrderItem!.id,
+        sourceProductId: scenario.productA.id,
+        productName: scenario.productA.name,
+        sellingUnit: scenario.productA.sellingUnit,
+        quantity: 1,
+        unitPriceSatang: 22000,
       }),
     ).rejects.toThrow();
   });
@@ -818,6 +863,56 @@ describe("Phase 3A planning relationship integrity", () => {
         product: scenario.productA,
         recipe: scenario.recipeB,
         version: scenario.versionB,
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("rejects a same-inventory source ingredient from another recipe version", async () => {
+    const scenario = await seedIntegrityScenario(context.db);
+    const [otherVersionIngredient] = await context.db
+      .insert(recipeIngredients)
+      .values({
+        ownerId: OWNER_ID,
+        recipeVersionId: scenario.versionB.id,
+        inventoryItemId: scenario.flour.id,
+        quantityInBaseUnit: "250",
+      })
+      .returning();
+    const recipePlanA = await insertRecipePlan(context.db, {
+      snapshotId: scenario.snapshotA.id,
+      product: scenario.productA,
+      recipe: scenario.recipeA,
+      version: scenario.versionA,
+    });
+    const productPlanA = await insertProductPlan(context.db, {
+      snapshotId: scenario.snapshotA.id,
+      product: scenario.productA,
+      recipePlanId: recipePlanA.id,
+    });
+    const flourPriceSnapshot = await insertPriceSnapshot(context.db, {
+      snapshotId: scenario.snapshotA.id,
+      item: scenario.flour,
+      price: scenario.flourPrice,
+    });
+
+    await expect(
+      context.db.insert(cycleMaterialRequirements).values({
+        ownerId: OWNER_ID,
+        planningSnapshotId: scenario.snapshotA.id,
+        productPlanId: productPlanA.id,
+        recipePlanId: recipePlanA.id,
+        sourceRecipeVersionId: scenario.versionA.id,
+        sourceRecipeIngredientId: otherVersionIngredient!.id,
+        inventoryItemId: scenario.flour.id,
+        priceSnapshotId: flourPriceSnapshot.id,
+        inventoryItemName: scenario.flour.name,
+        baseUnit: scenario.flour.baseUnit,
+        quantityPerBatch: "250",
+        selectedBatchCount: "1",
+        baseRequirement: "250",
+        wasteAllowancePercent: "0",
+        wasteQuantity: "0",
+        plannedRequirement: "250",
       }),
     ).rejects.toThrow();
   });
@@ -952,6 +1047,7 @@ describe("Phase 3A planning relationship integrity", () => {
       ownerId: OWNER_ID,
       planningSnapshotId: scenario.snapshotA.id,
       orderSnapshotId: orderSnapshotA.id,
+      sourceOrderId: scenario.orderA.id,
       sourceOrderItemId: scenario.orderItemA.id,
       sourceProductId: scenario.productA.id,
       productName: scenario.productA.name,
@@ -1069,6 +1165,7 @@ describe("Phase 3A planning relationship integrity", () => {
       ownerId: OWNER_ID,
       planningSnapshotId: scenario.snapshotA.id,
       orderSnapshotId: orderSnapshotA.id,
+      sourceOrderId: scenario.orderA.id,
       sourceOrderItemId: scenario.orderItemA.id,
       sourceProductId: scenario.productA.id,
       productName: scenario.productA.name,
@@ -1241,5 +1338,372 @@ describe("Phase 3A planning relationship integrity", () => {
         .delete(cyclePlanningSnapshots)
         .where(eq(cyclePlanningSnapshots.id, scenario.snapshotA.id)),
     ).rejects.toThrow();
+  });
+
+  it("rejects every invalid planning-snapshot scalar family", async () => {
+    const scenario = await seedIntegrityScenario(context.db);
+    const invalidValues: ReadonlyArray<
+      readonly [
+        string,
+        Partial<typeof cyclePlanningSnapshots.$inferInsert>,
+      ]
+    > = [
+      ["generation", { generation: 0 }],
+      ["fingerprint length", { inputFingerprint: "short" }],
+      ["cycle number", { cycleNumber: 0 }],
+      ["labor rate", { laborRateSatangPerHour: -1 }],
+      ["waste below range", { defaultWasteAllowancePercent: "-0.0001" }],
+      ["waste above range", { defaultWasteAllowancePercent: "100.0001" }],
+    ];
+
+    for (const [label, values] of invalidValues) {
+      await expect(
+        context.db
+          .update(cyclePlanningSnapshots)
+          .set(values)
+          .where(eq(cyclePlanningSnapshots.id, scenario.snapshotA.id)),
+        label,
+      ).rejects.toThrow();
+    }
+  });
+
+  it("rejects a negative value in every order-snapshot money field", async () => {
+    const scenario = await seedIntegrityScenario(context.db);
+    const invalidValues: ReadonlyArray<
+      readonly [string, Partial<typeof cycleOrderSnapshots.$inferInsert>]
+    > = [
+      ["delivery fee charged", { deliveryFeeChargedSatang: -1 }],
+      ["delivery cost", { deliveryCostSatang: -1 }],
+      ["discount", { discountSatang: -1 }],
+      ["amount paid", { amountPaidSatang: -1 }],
+      ["subtotal", { subtotalSatang: -1 }],
+      ["grand total", { grandTotalSatang: -1 }],
+      ["balance", { balanceSatang: -1 }],
+    ];
+
+    for (const [label, overrides] of invalidValues) {
+      await expect(
+        insertOrderSnapshot(context.db, {
+          snapshotId: scenario.snapshotA.id,
+          order: scenario.orderA,
+          customer: scenario.customerA,
+          deliveryMethod: scenario.deliveryMethod,
+          overrides,
+        }),
+        label,
+      ).rejects.toThrow();
+    }
+  });
+
+  it("rejects every invalid recipe-plan quantity and cost family", async () => {
+    const scenario = await seedIntegrityScenario(context.db);
+    const invalidValues: ReadonlyArray<
+      readonly [string, Partial<typeof cycleRecipePlans.$inferInsert>]
+    > = [
+      ["base yield", { baseYieldQuantity: "0" }],
+      ["selling yield", { yieldInSellingUnit: "0" }],
+      ["labor minutes", { laborMinutesPerBatch: -1 }],
+      ["utility cost", { utilityCostSatangPerBatch: -1 }],
+      ["waste below range", { wasteAllowancePercent: "-0.0001" }],
+      ["waste above range", { wasteAllowancePercent: "100.0001" }],
+    ];
+
+    for (const [label, overrides] of invalidValues) {
+      await expect(
+        insertRecipePlan(context.db, {
+          snapshotId: scenario.snapshotA.id,
+          product: scenario.productA,
+          recipe: scenario.recipeA,
+          version: scenario.versionA,
+          overrides,
+        }),
+        label,
+      ).rejects.toThrow();
+    }
+  });
+
+  it("rejects every invalid product-plan quantity and override family", async () => {
+    const scenario = await seedIntegrityScenario(context.db);
+    const recipePlanA = await insertRecipePlan(context.db, {
+      snapshotId: scenario.snapshotA.id,
+      product: scenario.productA,
+      recipe: scenario.recipeA,
+      version: scenario.versionA,
+    });
+    const invalidValues: ReadonlyArray<
+      readonly [string, Partial<typeof cycleProductPlans.$inferInsert>]
+    > = [
+      ["ordered quantity", { orderedQuantity: 0 }],
+      ["suggested batch count", { suggestedBatchCount: 0 }],
+      ["selected batch count", { selectedBatchCount: "0" }],
+      ["planned output", { plannedOutput: "0" }],
+      [
+        "missing override reason",
+        { selectedBatchCount: "2", plannedOutput: "2" },
+      ],
+      ["unexpected override reason", { overrideReason: "Not overridden" }],
+    ];
+
+    for (const [label, overrides] of invalidValues) {
+      await expect(
+        insertProductPlan(context.db, {
+          snapshotId: scenario.snapshotA.id,
+          product: scenario.productA,
+          recipePlanId: recipePlanA.id,
+          overrides,
+        }),
+        label,
+      ).rejects.toThrow();
+    }
+  });
+
+  it("rejects every invalid present inventory-price value family", async () => {
+    const scenario = await seedIntegrityScenario(context.db);
+    const invalidValues: ReadonlyArray<
+      readonly [
+        string,
+        Partial<typeof cycleInventoryPriceSnapshots.$inferInsert>,
+      ]
+    > = [
+      ["pack price", { packPriceSatang: -1 }],
+      ["pack quantity", { packBaseQuantity: "0" }],
+      ["unit cost", { unitCostSatang: "-0.000000000001" }],
+    ];
+
+    for (const [label, overrides] of invalidValues) {
+      await expect(
+        insertPriceSnapshot(context.db, {
+          snapshotId: scenario.snapshotA.id,
+          item: scenario.flour,
+          price: scenario.flourPrice,
+          overrides,
+        }),
+        label,
+      ).rejects.toThrow();
+    }
+  });
+
+  it("rejects every invalid material quantity, percent, and cost family", async () => {
+    const scenario = await seedIntegrityScenario(context.db);
+    const recipePlanA = await insertRecipePlan(context.db, {
+      snapshotId: scenario.snapshotA.id,
+      product: scenario.productA,
+      recipe: scenario.recipeA,
+      version: scenario.versionA,
+    });
+    const productPlanA = await insertProductPlan(context.db, {
+      snapshotId: scenario.snapshotA.id,
+      product: scenario.productA,
+      recipePlanId: recipePlanA.id,
+    });
+    const priceSnapshotA = await insertPriceSnapshot(context.db, {
+      snapshotId: scenario.snapshotA.id,
+      item: scenario.flour,
+      price: scenario.flourPrice,
+    });
+    const validValues: typeof cycleMaterialRequirements.$inferInsert = {
+      ownerId: OWNER_ID,
+      planningSnapshotId: scenario.snapshotA.id,
+      productPlanId: productPlanA.id,
+      recipePlanId: recipePlanA.id,
+      sourceRecipeVersionId: scenario.versionA.id,
+      sourceRecipeIngredientId: scenario.ingredientA.id,
+      inventoryItemId: scenario.flour.id,
+      priceSnapshotId: priceSnapshotA.id,
+      inventoryItemName: scenario.flour.name,
+      baseUnit: scenario.flour.baseUnit,
+      quantityPerBatch: "1000",
+      selectedBatchCount: "1",
+      baseRequirement: "1000",
+      wasteAllowancePercent: "0",
+      wasteQuantity: "0",
+      plannedRequirement: "1000",
+    };
+    const invalidValues: ReadonlyArray<
+      readonly [string, Partial<typeof cycleMaterialRequirements.$inferInsert>]
+    > = [
+      ["quantity per batch", { quantityPerBatch: "0" }],
+      ["selected batches", { selectedBatchCount: "0" }],
+      ["base requirement", { baseRequirement: "0" }],
+      ["waste quantity", { wasteQuantity: "-0.000001" }],
+      ["planned requirement", { plannedRequirement: "0" }],
+      ["waste below range", { wasteAllowancePercent: "-0.0001" }],
+      ["waste above range", { wasteAllowancePercent: "100.0001" }],
+      ["base cost only", { baseCostSatang: 0 }],
+      ["waste cost only", { wasteCostSatang: 0 }],
+      ["negative base cost", { baseCostSatang: -1, wasteCostSatang: 0 }],
+      ["negative waste cost", { baseCostSatang: 0, wasteCostSatang: -1 }],
+    ];
+
+    for (const [label, overrides] of invalidValues) {
+      await expect(
+        context.db
+          .insert(cycleMaterialRequirements)
+          .values({ ...validValues, ...overrides }),
+        label,
+      ).rejects.toThrow();
+    }
+  });
+
+  it("rejects every invalid packaging quantity, cost, and target family", async () => {
+    const scenario = await seedIntegrityScenario(context.db);
+    const recipePlanA = await insertRecipePlan(context.db, {
+      snapshotId: scenario.snapshotA.id,
+      product: scenario.productA,
+      recipe: scenario.recipeA,
+      version: scenario.versionA,
+    });
+    const productPlanA = await insertProductPlan(context.db, {
+      snapshotId: scenario.snapshotA.id,
+      product: scenario.productA,
+      recipePlanId: recipePlanA.id,
+    });
+    const priceSnapshotA = await insertPriceSnapshot(context.db, {
+      snapshotId: scenario.snapshotA.id,
+      item: scenario.box,
+      price: scenario.boxPrice,
+    });
+    const validValues: typeof cyclePackagingRequirements.$inferInsert = {
+      ownerId: OWNER_ID,
+      planningSnapshotId: scenario.snapshotA.id,
+      productPlanId: productPlanA.id,
+      sourcePackagingRuleId: scenario.ruleA.id,
+      scope: "PRODUCT",
+      consumptionBasis: "PER_PRODUCT_UNIT",
+      sourceProductId: scenario.productA.id,
+      targetName: scenario.productA.name,
+      inventoryItemId: scenario.box.id,
+      inventoryItemName: scenario.box.name,
+      baseUnit: scenario.box.baseUnit,
+      priceSnapshotId: priceSnapshotA.id,
+      ruleQuantity: "1",
+      multiplier: "1",
+      plannedRequirement: "1",
+    };
+    const invalidValues: ReadonlyArray<
+      readonly [
+        string,
+        Partial<typeof cyclePackagingRequirements.$inferInsert>,
+      ]
+    > = [
+      ["scope target", { sourceDeliveryMethodId: scenario.deliveryMethod.id }],
+      [
+        "scope basis",
+        {
+          scope: "DELIVERY_METHOD",
+          consumptionBasis: "PER_PRODUCT_UNIT",
+          productPlanId: null,
+          sourceProductId: null,
+          sourceDeliveryMethodId: scenario.deliveryMethod.id,
+        },
+      ],
+      ["rule quantity", { ruleQuantity: "0" }],
+      ["multiplier", { multiplier: "0" }],
+      ["planned requirement", { plannedRequirement: "0" }],
+      ["cost", { costSatang: -1 }],
+    ];
+
+    for (const [label, overrides] of invalidValues) {
+      await expect(
+        context.db
+          .insert(cyclePackagingRequirements)
+          .values({ ...validValues, ...overrides }),
+        label,
+      ).rejects.toThrow();
+    }
+  });
+
+  it("rejects every invalid product-cost money and completeness family", async () => {
+    const scenario = await seedIntegrityScenario(context.db);
+    const recipePlanA = await insertRecipePlan(context.db, {
+      snapshotId: scenario.snapshotA.id,
+      product: scenario.productA,
+      recipe: scenario.recipeA,
+      version: scenario.versionA,
+    });
+    const productPlanA = await insertProductPlan(context.db, {
+      snapshotId: scenario.snapshotA.id,
+      product: scenario.productA,
+      recipePlanId: recipePlanA.id,
+    });
+    const invalidValues: ReadonlyArray<
+      readonly [string, Partial<typeof cycleProductCostSnapshots.$inferInsert>]
+    > = [
+      ["base ingredient", { knownBaseIngredientCostSatang: -1 }],
+      ["waste", { knownWasteCostSatang: -1 }],
+      ["packaging", { knownProductPackagingCostSatang: -1 }],
+      ["labor", { laborCostSatang: -1 }],
+      ["utility", { utilityCostSatang: -1 }],
+      ["known total", { knownProductionCostSatang: -1 }],
+      ["complete total", { completeProductionCostSatang: -1 }],
+      [
+        "complete without total",
+        { costComplete: true, completeProductionCostSatang: null },
+      ],
+      [
+        "incomplete with total",
+        { costComplete: false, completeProductionCostSatang: 0 },
+      ],
+    ];
+
+    for (const [label, overrides] of invalidValues) {
+      await expect(
+        context.db.insert(cycleProductCostSnapshots).values(
+          productCostValues(
+            scenario.snapshotA.id,
+            productPlanA.id,
+            overrides,
+          ),
+        ),
+        label,
+      ).rejects.toThrow();
+    }
+  });
+
+  it("rejects every invalid cycle-cost money and completeness family", async () => {
+    const scenario = await seedIntegrityScenario(context.db);
+    const invalidValues: ReadonlyArray<
+      readonly [string, Partial<typeof cycleCostSnapshots.$inferInsert>]
+    > = [
+      ["base ingredient", { knownBaseIngredientCostSatang: -1 }],
+      ["waste", { knownWasteCostSatang: -1 }],
+      ["product packaging", { knownProductPackagingCostSatang: -1 }],
+      ["delivery packaging", { knownDeliveryPackagingCostSatang: -1 }],
+      ["labor", { laborCostSatang: -1 }],
+      ["utility", { utilityCostSatang: -1 }],
+      ["known total", { knownProductionCostSatang: -1 }],
+      ["complete total", { completeProductionCostSatang: -1 }],
+      ["missing price count", { missingPriceCount: -1 }],
+      [
+        "complete without total",
+        { costComplete: true, completeProductionCostSatang: null },
+      ],
+      ["complete with missing prices", { costComplete: true, missingPriceCount: 1 }],
+      [
+        "incomplete without missing prices",
+        {
+          costComplete: false,
+          completeProductionCostSatang: null,
+          missingPriceCount: 0,
+        },
+      ],
+      [
+        "incomplete with a complete total",
+        {
+          costComplete: false,
+          completeProductionCostSatang: 0,
+          missingPriceCount: 1,
+        },
+      ],
+    ];
+
+    for (const [label, overrides] of invalidValues) {
+      await expect(
+        context.db
+          .insert(cycleCostSnapshots)
+          .values(cycleCostValues(scenario.snapshotA.id, overrides)),
+        label,
+      ).rejects.toThrow();
+    }
   });
 });
