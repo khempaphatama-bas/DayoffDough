@@ -4,6 +4,18 @@ import {
   resolveWasteAllowance,
 } from "./material-requirement";
 
+function expectExactError(action: () => unknown, expectedMessage: string): void {
+  try {
+    action();
+  } catch (error) {
+    expect(error).toBeInstanceOf(Error);
+    if (!(error instanceof Error)) return;
+    expect(error.message).toBe(expectedMessage);
+    return;
+  }
+  throw new Error(`Expected error: ${expectedMessage}`);
+}
+
 describe("material requirement", () => {
   it("uses recipe waste when present", () => {
     expect(resolveWasteAllowance("10", "3")).toEqual({
@@ -34,13 +46,15 @@ describe("material requirement", () => {
   });
 
   it("rejects non-positive ingredient quantity", () => {
-    expect(() =>
-      calculateMaterialRequirement({
-        quantityPerBatch: "0",
-        selectedBatchCount: "1",
-        wasteAllowancePercent: "3",
-      }),
-    ).toThrow("Ingredient quantity must be greater than zero");
+    expectExactError(
+      () =>
+        calculateMaterialRequirement({
+          quantityPerBatch: "0",
+          selectedBatchCount: "1",
+          wasteAllowancePercent: "3",
+        }),
+      "Ingredient quantity must be greater than zero",
+    );
   });
 
   it("keeps fractional material arithmetic exact and canonical", () => {
@@ -68,16 +82,39 @@ describe("material requirement", () => {
     });
   });
 
+  it.each([
+    [
+      "exactly four decimal places",
+      "12.3456",
+      "3",
+      { percent: "12.3456", source: "RECIPE" },
+    ],
+    [
+      "the inclusive upper bound",
+      null,
+      "100",
+      { percent: "100", source: "SHOP_DEFAULT" },
+    ],
+    [
+      "an explicit zero recipe override",
+      "0",
+      "3",
+      { percent: "0", source: "RECIPE" },
+    ],
+  ] as const)("accepts %s", (_case, recipePercent, shopPercent, expected) => {
+    expect(resolveWasteAllowance(recipePercent, shopPercent)).toEqual(expected);
+  });
+
   it.each(["-0.0001", "100.0001", "1.00001", "Infinity"])(
     "rejects invalid waste percentage %s",
     (wasteAllowancePercent) => {
-      expect(() =>
-        calculateMaterialRequirement({
-          quantityPerBatch: "1",
-          selectedBatchCount: "1",
-          wasteAllowancePercent,
-        }),
-      ).toThrow(
+      expectExactError(
+        () =>
+          calculateMaterialRequirement({
+            quantityPerBatch: "1",
+            selectedBatchCount: "1",
+            wasteAllowancePercent,
+          }),
         "Waste allowance must be between 0 and 100 with up to 4 decimal places",
       );
     },
@@ -100,13 +137,15 @@ describe("material requirement", () => {
       "Selected batch count must have at most 6 decimal places",
     ],
   ] as const)("rejects %s", (_case, override, expectedError) => {
-    expect(() =>
-      calculateMaterialRequirement({
-        quantityPerBatch: "1",
-        selectedBatchCount: "1",
-        wasteAllowancePercent: "3",
-        ...override,
-      }),
-    ).toThrow(expectedError);
+    expectExactError(
+      () =>
+        calculateMaterialRequirement({
+          quantityPerBatch: "1",
+          selectedBatchCount: "1",
+          wasteAllowancePercent: "3",
+          ...override,
+        }),
+      expectedError,
+    );
   });
 });

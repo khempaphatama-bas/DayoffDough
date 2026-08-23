@@ -1,6 +1,18 @@
 import { describe, expect, it } from "vitest";
 import { calculateBatchPlan } from "./batch-plan";
 
+function expectExactError(action: () => unknown, expectedMessage: string): void {
+  try {
+    action();
+  } catch (error) {
+    expect(error).toBeInstanceOf(Error);
+    if (!(error instanceof Error)) return;
+    expect(error.message).toBe(expectedMessage);
+    return;
+  }
+  throw new Error(`Expected error: ${expectedMessage}`);
+}
+
 describe("planning batch calculation", () => {
   it("rounds the suggestion up and preserves an intentional decimal override", () => {
     expect(
@@ -28,19 +40,66 @@ describe("planning batch calculation", () => {
         baseYieldQuantity: "1500",
         yieldUnit: "g",
         sellingUnit: "kg",
-      }).suggestedBatchCount,
-    ).toBe(2);
+      }),
+    ).toEqual({
+      orderedQuantity: "2",
+      yieldInSellingUnit: "1.5",
+      suggestedBatchCount: 2,
+      selectedBatchCount: "2",
+      plannedOutput: "3",
+      outputDifference: "1",
+    });
   });
 
   it("rejects cross-dimension yield", () => {
-    expect(() =>
+    expectExactError(
+      () =>
+        calculateBatchPlan({
+          orderedQuantity: "2",
+          baseYieldQuantity: "1",
+          yieldUnit: "kg",
+          sellingUnit: "piece",
+        }),
+      "Incompatible yield unit",
+    );
+  });
+
+  it("keeps fractional batch arithmetic exact and canonical", () => {
+    expect(
       calculateBatchPlan({
-        orderedQuantity: "2",
-        baseYieldQuantity: "1",
-        yieldUnit: "kg",
+        orderedQuantity: "0.3",
+        baseYieldQuantity: "0.1",
+        yieldUnit: "piece",
         sellingUnit: "piece",
+        selectedBatchCount: "0.2",
       }),
-    ).toThrow("Incompatible yield unit");
+    ).toEqual({
+      orderedQuantity: "0.3",
+      yieldInSellingUnit: "0.1",
+      suggestedBatchCount: 3,
+      selectedBatchCount: "0.2",
+      plannedOutput: "0.02",
+      outputDifference: "-0.28",
+    });
+  });
+
+  it("accepts quantities and selected batches with exactly six decimal places", () => {
+    expect(
+      calculateBatchPlan({
+        orderedQuantity: "0.123456",
+        baseYieldQuantity: "0.000001",
+        yieldUnit: "piece",
+        sellingUnit: "piece",
+        selectedBatchCount: "1.000001",
+      }),
+    ).toEqual({
+      orderedQuantity: "0.123456",
+      yieldInSellingUnit: "0.000001",
+      suggestedBatchCount: 123_456,
+      selectedBatchCount: "1.000001",
+      plannedOutput: "0.000001000001",
+      outputDifference: "-0.123454999999",
+    });
   });
 
   it("defaults selected batches to the suggestion and canonicalizes quantities", () => {
@@ -83,15 +142,17 @@ describe("planning batch calculation", () => {
       "Ordered quantity must have at most 6 decimal places",
     ],
   ] as const)("rejects %s", (_case, override, expectedError) => {
-    expect(() =>
-      calculateBatchPlan({
-        orderedQuantity: "1",
-        baseYieldQuantity: "1",
-        yieldUnit: "piece",
-        sellingUnit: "piece",
-        ...override,
-      }),
-    ).toThrow(expectedError);
+    expectExactError(
+      () =>
+        calculateBatchPlan({
+          orderedQuantity: "1",
+          baseYieldQuantity: "1",
+          yieldUnit: "piece",
+          sellingUnit: "piece",
+          ...override,
+        }),
+      expectedError,
+    );
   });
 
   it("accepts the PostgreSQL integer maximum and rejects a larger suggestion", () => {
@@ -104,13 +165,15 @@ describe("planning batch calculation", () => {
       }).suggestedBatchCount,
     ).toBe(2_147_483_647);
 
-    expect(() =>
-      calculateBatchPlan({
-        orderedQuantity: "2147483648",
-        baseYieldQuantity: "1",
-        yieldUnit: "piece",
-        sellingUnit: "piece",
-      }),
-    ).toThrow("Suggested batch count exceeds PostgreSQL integer range");
+    expectExactError(
+      () =>
+        calculateBatchPlan({
+          orderedQuantity: "2147483648",
+          baseYieldQuantity: "1",
+          yieldUnit: "piece",
+          sellingUnit: "piece",
+        }),
+      "Suggested batch count exceeds PostgreSQL integer range",
+    );
   });
 });
