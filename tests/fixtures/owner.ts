@@ -1,4 +1,4 @@
-import { expect, type Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 
 export const OWNER_ID = "00000000-0000-4000-8000-000000000001";
 export const OTHER_OWNER_ID = "00000000-0000-4000-8000-000000000002";
@@ -9,16 +9,46 @@ function requiredEnv(name: "E2E_OWNER_EMAIL" | "E2E_OWNER_PASSWORD"): string {
   return value;
 }
 
-async function clickVisibleLink(page: Page, name: string): Promise<void> {
+async function tryClickVisibleLink(page: Page, name: string): Promise<boolean> {
   const links = page.getByRole("link", { name, exact: true });
   for (let index = 0; index < (await links.count()); index += 1) {
     const link = links.nth(index);
     if (await link.isVisible()) {
       await link.click();
-      return;
+      return true;
     }
   }
+  return false;
+}
+
+async function clickVisibleLink(page: Page, name: string): Promise<void> {
+  if (await tryClickVisibleLink(page, name)) return;
+
+  if (["ลูกค้า", "สินค้าและสูตร", "การจัดส่ง", "ตั้งค่าร้าน"].includes(name)) {
+    if (!(await tryClickVisibleLink(page, "เพิ่มเติม"))) {
+      throw new Error(`Visible link not found: เพิ่มเติม`);
+    }
+    await expect(page).toHaveURL(/\/more$/);
+    await expect(
+      page.getByRole("heading", { name: "เพิ่มเติม", exact: true }),
+    ).toBeVisible();
+    if (await tryClickVisibleLink(page, name)) return;
+  }
+
   throw new Error(`Visible link not found: ${name}`);
+}
+
+async function selectOptionContaining(
+  select: Locator,
+  visibleName: string,
+): Promise<void> {
+  const option = select
+    .getByRole("option")
+    .filter({ hasText: visibleName })
+    .first();
+  const label = (await option.textContent())?.trim();
+  if (!label) throw new Error(`Visible option not found: ${visibleName}`);
+  await select.selectOption({ label });
 }
 
 export async function loginAsOwner(page: Page): Promise<void> {
@@ -122,8 +152,129 @@ export async function createDeliveryMethod(
   await page.getByLabel("ชื่อวิธีส่ง").first().fill(input.name);
   await page.getByLabel("ค่าส่งที่เรียกเก็บ").first().fill(input.customerFeeBaht);
   await page.getByLabel("ต้นทุนขนส่ง").first().fill(input.internalCostBaht);
+  await page.getByLabel("ต้องระบุสถานที่จัดส่ง").first().check();
   await page.getByRole("button", { name: "บันทึกวิธีส่ง" }).click();
   await expect(
     page.getByRole("button", { name: `บันทึกการแก้ไข ${input.name}` }),
+  ).toBeVisible();
+}
+
+export async function createCustomer(
+  page: Page,
+  input: Readonly<{
+    name: string;
+    deliveryMethodName: string;
+    deliveryLocation: string;
+  }>,
+): Promise<void> {
+  await clickVisibleLink(page, "ลูกค้า");
+  await expect(page).toHaveURL(/\/customers$/);
+  await page.getByLabel("ชื่อลูกค้า").fill(input.name);
+  await page
+    .getByLabel("วิธีส่งประจำ")
+    .selectOption({ label: input.deliveryMethodName });
+  await page
+    .getByLabel("สถานที่จัดส่งประจำ")
+    .fill(input.deliveryLocation);
+  await page.getByRole("button", { name: "บันทึกลูกค้า" }).click();
+  await expect(page.getByRole("main")).toContainText("บันทึกลูกค้าแล้ว");
+  await expect(page.getByRole("main")).toContainText(input.name);
+}
+
+export async function createBakeCycle(
+  page: Page,
+  input: Readonly<{
+    name: string;
+    productionDate: string;
+    deliveryDate: string;
+  }>,
+): Promise<void> {
+  await clickVisibleLink(page, "รอบผลิต");
+  await expect(page).toHaveURL(/\/cycles$/);
+  await expect(
+    page.getByRole("heading", { name: "รอบอบ", exact: true }),
+  ).toBeVisible();
+  await clickVisibleLink(page, "สร้างรอบอบ");
+  await expect(page).toHaveURL(/\/cycles\/new$/);
+  await expect(
+    page.getByRole("heading", { name: "สร้างรอบอบ", exact: true }),
+  ).toBeVisible();
+  await page.getByLabel("ชื่อรอบอบ").fill(input.name);
+  await page.getByLabel("สถานะเริ่มต้น").selectOption("OPEN");
+  await page.getByLabel("วันผลิต").fill(input.productionDate);
+  await page.getByLabel("วันส่งหลัก").fill(input.deliveryDate);
+  await page.getByRole("button", { name: "สร้างรอบอบ" }).click();
+  await expect(page).toHaveURL(
+    (url) => url.pathname.startsWith("/cycles/") && url.pathname !== "/cycles/new",
+  );
+  await expect(page.getByRole("heading", { name: input.name })).toBeVisible();
+}
+
+export async function createOrder(
+  page: Page,
+  input: Readonly<{
+    customerName: string;
+    cycleName: string;
+    productName: string;
+    totalQuantity: number;
+    discountBaht: string;
+    amountPaidBaht: string;
+  }>,
+): Promise<void> {
+  if (!Number.isSafeInteger(input.totalQuantity) || input.totalQuantity < 2) {
+    throw new Error("totalQuantity must allow two positive order lines");
+  }
+
+  await clickVisibleLink(page, "ออเดอร์");
+  await expect(page).toHaveURL(/\/orders$/);
+  await expect(
+    page.getByRole("heading", { name: "ออเดอร์", exact: true }),
+  ).toBeVisible();
+  await clickVisibleLink(page, "เพิ่มออเดอร์");
+  await expect(page).toHaveURL(/\/orders\/new(?:\?.*)?$/);
+  await expect(
+    page.getByRole("heading", { name: "สร้างออเดอร์", exact: true }),
+  ).toBeVisible();
+
+  await page
+    .getByRole("combobox", { name: "ลูกค้า", exact: true })
+    .selectOption({ label: input.customerName });
+  await selectOptionContaining(
+    page.getByRole("combobox", { name: "รอบผลิต", exact: true }),
+    input.cycleName,
+  );
+  await page
+    .getByRole("combobox", { name: "สินค้า รายการที่ 1", exact: true })
+    .selectOption({ label: input.productName });
+  await page
+    .getByRole("spinbutton", { name: "จำนวน รายการที่ 1", exact: true })
+    .fill("1");
+  await page
+    .getByLabel("หมายเหตุสินค้า รายการที่ 1", { exact: true })
+    .fill("บรรทัดแรก");
+
+  await page.getByRole("button", { name: "เพิ่มรายการสินค้า" }).click();
+  await page
+    .getByRole("combobox", { name: "สินค้า รายการที่ 2", exact: true })
+    .selectOption({ label: input.productName });
+  await page
+    .getByRole("spinbutton", { name: "จำนวน รายการที่ 2", exact: true })
+    .fill(String(input.totalQuantity - 1));
+  await page
+    .getByLabel("หมายเหตุสินค้า รายการที่ 2", { exact: true })
+    .fill("บรรทัดที่สอง");
+  await page.getByLabel("ส่วนลด (บาท)").fill(input.discountBaht);
+  await page.getByLabel("ยอดชำระแล้ว (บาท)").fill(input.amountPaidBaht);
+
+  await page
+    .getByRole("button", { name: "บันทึกออเดอร์" })
+    .filter({ visible: true })
+    .click();
+  await expect(page).toHaveURL(
+    (url) => url.pathname.startsWith("/orders/") && url.pathname !== "/orders/new",
+    { timeout: 15_000 },
+  );
+  await expect(
+    page.getByRole("heading", { name: "แก้ไขออเดอร์" }),
   ).toBeVisible();
 }
