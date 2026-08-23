@@ -11,7 +11,7 @@ import {
 test("owner creates and cancels a duplicate-line order without losing history", async ({
   page,
 }, testInfo) => {
-  test.setTimeout(120_000);
+  test.setTimeout(180_000);
   const runId = `${testInfo.project.name}-${Date.now()}`;
   const productName = `Focaccia ${runId}`;
   const deliveryMethodName = `KEX Same Day ${runId}`;

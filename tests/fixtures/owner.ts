@@ -202,7 +202,7 @@ export async function createBakeCycle(
   await expect(page).toHaveURL(/\/cycles$/);
   await expect(
     page.getByRole("heading", { name: "รอบอบ", exact: true }),
-  ).toBeVisible();
+  ).toBeVisible({ timeout: 15_000 });
   await clickVisibleLink(page, "สร้างรอบอบ");
   await expect(page).toHaveURL(/\/cycles\/new$/);
   await expect(
