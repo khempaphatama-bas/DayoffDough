@@ -43,6 +43,8 @@ export const bakeCycles = pgTable(
       mode: "string",
     }).notNull(),
     notes: varchar("notes", { length: 2000 }),
+    lockedAt: timestamp("locked_at", { withTimezone: true, mode: "date" }),
+    activePlanningSnapshotId: uuid("active_planning_snapshot_id"),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
       .notNull()
       .defaultNow(),

@@ -160,6 +160,7 @@ export const orderItems = pgTable(
       .defaultNow(),
   },
   (table) => [
+    unique("order_items_owner_id_id_unique").on(table.ownerId, table.id),
     foreignKey({
       name: "order_items_owned_order_fk",
       columns: [table.ownerId, table.orderId],

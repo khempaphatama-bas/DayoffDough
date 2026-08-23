@@ -99,6 +99,7 @@ export const inventoryPrices = pgTable(
       .defaultNow(),
   },
   (table) => [
+    unique("inventory_prices_owner_id_id_unique").on(table.ownerId, table.id),
     foreignKey({
       name: "inventory_prices_owned_item_fk",
       columns: [table.ownerId, table.inventoryItemId],

@@ -139,6 +139,7 @@ export const recipeIngredients = pgTable(
       .defaultNow(),
   },
   (table) => [
+    unique("recipe_ingredients_owner_id_id_unique").on(table.ownerId, table.id),
     foreignKey({
       name: "recipe_ingredients_owned_version_fk",
       columns: [table.ownerId, table.recipeVersionId],

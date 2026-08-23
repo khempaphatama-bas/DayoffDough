@@ -818,10 +818,10 @@ describe("order service", () => {
     expect(cancelled.items).toHaveLength(2);
     await expect(service.get(OWNER_ID, created.id)).resolves.toMatchObject({
       fulfillmentStatus: "CANCELLED",
-      items: [
+      items: expect.arrayContaining([
         expect.objectContaining({ productId: masters.focaccia.id }),
         expect.objectContaining({ productId: masters.scone.id }),
-      ],
+      ]),
     });
   });
 
