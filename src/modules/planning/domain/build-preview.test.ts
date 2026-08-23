@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildPlanningPreview } from "./build-preview";
 import {
-  PLANNING_ISSUE_MESSAGES,
   type BatchOverride,
   type PlanningSourceData,
 } from "./types";
@@ -26,6 +25,25 @@ const ITEM_C_ID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee4";
 const PRODUCT_UNIT_RULE_ID = "ffffffff-ffff-4fff-8fff-fffffffffff1";
 const PRODUCT_ORDER_RULE_ID = "ffffffff-ffff-4fff-8fff-fffffffffff2";
 const DELIVERY_RULE_ID = "ffffffff-ffff-4fff-8fff-fffffffffff3";
+
+const EXPECTED_ISSUE_MESSAGES = {
+  CYCLE_NOT_OPEN: "รอบผลิตต้องอยู่ในสถานะเปิดก่อนล็อก",
+  MISSING_PRIMARY_DELIVERY_DATE: "รอบผลิตยังไม่มีวันส่งหลัก",
+  NO_ACTIVE_ORDERS: "ยังไม่มีออเดอร์ที่ใช้คำนวณ",
+  ORDER_WITHOUT_ITEMS: "มีออเดอร์ที่ไม่มีรายการสินค้า",
+  MISSING_ACTIVE_RECIPE: "สินค้ายังไม่มีสูตรที่เปิดใช้งาน",
+  INVALID_RECIPE_YIELD: "ผลผลิตของสูตรต้องมากกว่า 0",
+  INCOMPATIBLE_YIELD_UNIT: "หน่วยผลผลิตของสูตรแปลงเป็นหน่วยขายไม่ได้",
+  INVALID_INGREDIENT_QUANTITY: "ปริมาณวัตถุดิบในสูตรต้องมากกว่า 0",
+  INVALID_BATCH_OVERRIDE: "จำนวนแบตช์ที่เลือกต้องมากกว่า 0",
+  MISSING_OVERRIDE_REASON: "กรุณาระบุเหตุผลที่เปลี่ยนจำนวนแบตช์",
+  MISSING_INVENTORY_PRICE: "รายการนี้ยังไม่มีราคาที่ใช้คำนวณต้นทุน",
+  ORDER_UNPAID: "มีออเดอร์ที่ยังไม่ชำระเงิน",
+  ORDER_PARTIAL: "มีออเดอร์ที่ชำระเงินบางส่วน",
+  MISSING_DELIVERY_LOCATION: "ออเดอร์ยังไม่มีสถานที่จัดส่ง",
+  DELIVERY_DATE_MISMATCH: "วันส่งของออเดอร์ไม่ตรงกับวันส่งหลักของรอบ",
+  PLANNED_SHORTFALL: "แผนนี้ผลิตได้น้อยกว่ายอดสั่ง",
+} as const;
 
 function makeSource(): PlanningSourceData {
   return {
@@ -315,7 +333,7 @@ describe("planning preview orchestration", () => {
         code: "PLANNED_SHORTFALL",
         scope: "PRODUCT",
         sourceEntityId: FOCACCIA_ID,
-        message: PLANNING_ISSUE_MESSAGES.PLANNED_SHORTFALL,
+        message: "แผนนี้ผลิตได้น้อยกว่ายอดสั่ง",
       }),
     );
   });
@@ -357,6 +375,174 @@ describe("planning preview orchestration", () => {
     expect(preview.warnings).toEqual([]);
   });
 
+  it("orders same-product same-code ingredient blockers by immutable context", () => {
+    const source = makeSource();
+    const recipe = source.products[0]!.activeRecipe!;
+    const invalidIngredients = [
+      {
+        ...recipe.ingredients[0]!,
+        recipeIngredientId: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee6",
+        quantityInBaseUnit: "-1",
+      },
+      {
+        ...recipe.ingredients[0]!,
+        recipeIngredientId: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee5",
+        quantityInBaseUnit: "0",
+      },
+    ];
+    const withIngredients = (
+      ingredients: typeof invalidIngredients,
+    ): PlanningSourceData => ({
+      ...source,
+      products: [
+        {
+          ...source.products[0]!,
+          activeRecipe: { ...recipe, ingredients },
+        },
+      ],
+    });
+
+    const first = buildPlanningPreview(withIngredients(invalidIngredients));
+    const reordered = buildPlanningPreview(
+      withIngredients([...invalidIngredients].reverse()),
+    );
+
+    expect(
+      first.blockers.map((issue) => issue.context.recipeIngredientId),
+    ).toEqual([
+      "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee5",
+      "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee6",
+    ]);
+    expect(reordered.blockers).toEqual(first.blockers);
+  });
+
+  it("keeps every issue and output collection stable when sources are reordered", () => {
+    const source = makeSource();
+    const focacciaRecipe = source.products[0]!.activeRecipe!;
+    const secondProductId = "07070707-0707-4707-8707-070707070707";
+    const secondIngredientId = "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a";
+    const secondRuleId = "0b0b0b0b-0b0b-4b0b-8b0b-0b0b0b0b0b0b";
+    const secondProduct = {
+      id: secondProductId,
+      name: "Brioche",
+      sellingUnit: "piece" as const,
+      activeRecipe: {
+        ...focacciaRecipe,
+        recipeId: "08080808-0808-4808-8808-080808080808",
+        recipeName: "Brioche dough",
+        recipeVersionId: "09090909-0909-4909-8909-090909090909",
+        baseYieldQuantity: "4",
+        wasteAllowancePercent: null,
+        ingredients: [
+          {
+            recipeIngredientId: secondIngredientId,
+            inventoryItemId: INGREDIENT_ID,
+            quantityInBaseUnit: "250",
+          },
+        ],
+      },
+    };
+    const enriched: PlanningSourceData = {
+      ...source,
+      orders: source.orders.map((order) =>
+        order.id === ORDER_B_ID
+          ? {
+              ...order,
+              paymentStatus: "UNPAID",
+              items: [
+                ...order.items,
+                {
+                  id: "06060606-0606-4606-8606-060606060606",
+                  productId: secondProductId,
+                  productName: secondProduct.name,
+                  sellingUnit: "piece",
+                  quantity: 2,
+                  unitPriceSatang: 15_000,
+                  lineNote: null,
+                },
+              ],
+            }
+          : { ...order, paymentStatus: "PARTIAL" },
+      ),
+      products: [
+        {
+          ...source.products[0]!,
+          activeRecipe: {
+            ...focacciaRecipe,
+            ingredients: [
+              focacciaRecipe.ingredients[0]!,
+              {
+                ...focacciaRecipe.ingredients[0]!,
+                recipeIngredientId:
+                  "05050505-0505-4505-8505-050505050505",
+                quantityInBaseUnit: "100",
+              },
+            ],
+          },
+        },
+        secondProduct,
+      ],
+      packagingRules: [
+        ...source.packagingRules,
+        {
+          id: secondRuleId,
+          scope: "PRODUCT",
+          productId: secondProductId,
+          deliveryMethodId: null,
+          targetName: secondProduct.name,
+          inventoryItemId: UNIT_PACKAGE_ID,
+          consumptionBasis: "PER_PRODUCT_UNIT",
+          quantityInBaseUnit: "1",
+        },
+      ],
+    };
+    const overrides: ReadonlyArray<BatchOverride> = [
+      {
+        productId: FOCACCIA_ID,
+        selectedBatchCount: "1.5",
+        reason: " ",
+      },
+      {
+        productId: secondProductId,
+        selectedBatchCount: "0",
+        reason: "ทดสอบค่าผิด",
+      },
+    ];
+    const reordered: PlanningSourceData = {
+      ...enriched,
+      orders: [...enriched.orders].reverse().map((order) => ({
+        ...order,
+        items: [...order.items].reverse(),
+      })),
+      products: [...enriched.products].reverse().map((product) => ({
+        ...product,
+        activeRecipe: product.activeRecipe
+          ? {
+              ...product.activeRecipe,
+              ingredients: [...product.activeRecipe.ingredients].reverse(),
+            }
+          : null,
+      })),
+      packagingRules: [...enriched.packagingRules].reverse(),
+      inventoryItems: [...enriched.inventoryItems].reverse(),
+    };
+
+    const first = buildPlanningPreview(enriched, overrides);
+    const second = buildPlanningPreview(reordered, [...overrides].reverse());
+
+    expect(first.orderSnapshots).toHaveLength(2);
+    expect(first.orderSnapshots[1]?.items).toHaveLength(2);
+    expect(first.productPlans).toHaveLength(2);
+    expect(first.recipePlans).toHaveLength(2);
+    expect(first.inventoryPrices.length).toBeGreaterThan(1);
+    expect(first.materialRequirements.length).toBeGreaterThan(1);
+    expect(first.packagingRequirements.length).toBeGreaterThan(1);
+    expect(first.productCosts).toHaveLength(2);
+    expect(first.blockers).toHaveLength(2);
+    expect(first.warnings.length).toBeGreaterThan(1);
+    expect(second).toEqual(first);
+  });
+
   it.each([
     ["CYCLE_NOT_OPEN", (source: PlanningSourceData) => ({ ...source, cycle: { ...source.cycle, status: "DRAFT" as const } }), undefined],
     ["MISSING_PRIMARY_DELIVERY_DATE", (source: PlanningSourceData) => ({ ...source, cycle: { ...source.cycle, primaryDeliveryDate: null } }), undefined],
@@ -372,7 +558,7 @@ describe("planning preview orchestration", () => {
     const preview = buildPlanningPreview(change(makeSource()), overrides as ReadonlyArray<BatchOverride> | undefined);
     const issue = preview.blockers.find((candidate) => candidate.code === code);
 
-    expect(issue?.message).toBe(PLANNING_ISSUE_MESSAGES[code]);
+    expect(issue?.message).toBe(EXPECTED_ISSUE_MESSAGES[code]);
     expect(issueCodes(preview).blockers).toContain(code);
   });
 
@@ -386,7 +572,7 @@ describe("planning preview orchestration", () => {
     const preview = buildPlanningPreview(change(makeSource()), overrides as ReadonlyArray<BatchOverride> | undefined);
     const issue = preview.warnings.find((candidate) => candidate.code === code);
 
-    expect(issue?.message).toBe(PLANNING_ISSUE_MESSAGES[code]);
+    expect(issue?.message).toBe(EXPECTED_ISSUE_MESSAGES[code]);
     expect(issueCodes(preview).warnings).toContain(code);
   });
 
@@ -410,7 +596,13 @@ describe("planning preview orchestration", () => {
       ),
     });
 
-    expect(preview.warnings.filter((issue) => issue.code === "MISSING_INVENTORY_PRICE")).toHaveLength(1);
+    const missingPriceWarnings = preview.warnings.filter(
+      (issue) => issue.code === "MISSING_INVENTORY_PRICE",
+    );
+    expect(missingPriceWarnings).toHaveLength(1);
+    expect(missingPriceWarnings[0]?.message).toBe(
+      "รายการนี้ยังไม่มีราคาที่ใช้คำนวณต้นทุน",
+    );
     expect(preview.inventoryPrices.filter((price) => price.inventoryItemId === INGREDIENT_ID)).toEqual([
       expect.objectContaining({ sourcePriceId: null, packPriceSatang: null, packBaseQuantity: null, effectiveAt: null, unitCostSatang: null }),
     ]);

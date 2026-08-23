@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { buildPlanningPreview } from "./build-preview";
 import { createPlanningFingerprint } from "./fingerprint";
 import type { PlanningSourceData } from "./types";
 
@@ -272,6 +273,96 @@ describe("planning source fingerprint", () => {
     );
     expect(createPlanningFingerprint(withCancelled)).toBe(
       createPlanningFingerprint(source),
+    );
+  });
+
+  it("excludes unrelated products, rules, and inventory items", () => {
+    const source = sourceFixture();
+    const unrelatedProductId = "15151515-1515-4515-8515-151515151515";
+    const unrelatedInventoryId = "16161616-1616-4616-8616-161616161616";
+    const withUnrelatedSource: PlanningSourceData = {
+      ...source,
+      products: [
+        ...source.products,
+        {
+          id: unrelatedProductId,
+          name: "ไม่ถูกสั่ง",
+          sellingUnit: "piece",
+          activeRecipe: {
+            recipeId: "17171717-1717-4717-8717-171717171717",
+            recipeName: "สูตรที่ไม่เกี่ยว",
+            recipeVersionId: "18181818-1818-4818-8818-181818181818",
+            versionCode: "v99",
+            baseYieldQuantity: "9",
+            yieldUnit: "piece",
+            laborMinutesPerBatch: 999,
+            utilityCostSatangPerBatch: 999,
+            wasteAllowancePercent: "99",
+            instructions: "ไม่เกี่ยว",
+            ingredients: [
+              {
+                recipeIngredientId:
+                  "19191919-1919-4919-8919-191919191919",
+                inventoryItemId: unrelatedInventoryId,
+                quantityInBaseUnit: "999",
+              },
+            ],
+          },
+        },
+      ],
+      packagingRules: [
+        ...source.packagingRules,
+        {
+          id: "20202020-2020-4020-8020-202020202020",
+          scope: "PRODUCT",
+          productId: unrelatedProductId,
+          deliveryMethodId: null,
+          targetName: "ไม่ถูกสั่ง",
+          inventoryItemId: unrelatedInventoryId,
+          consumptionBasis: "PER_ORDER",
+          quantityInBaseUnit: "999",
+        },
+        {
+          id: "21212121-2121-4121-8121-212121212121",
+          scope: "DELIVERY_METHOD",
+          productId: null,
+          deliveryMethodId: "22222222-2222-4222-8222-222222222223",
+          targetName: "วิธีส่งที่ไม่ใช้",
+          inventoryItemId: unrelatedInventoryId,
+          consumptionBasis: "PER_DELIVERY",
+          quantityInBaseUnit: "999",
+        },
+      ],
+      inventoryItems: [
+        ...source.inventoryItems,
+        {
+          id: unrelatedInventoryId,
+          name: "ของที่ไม่เกี่ยว",
+          category: "CONSUMABLE",
+          baseUnit: "piece",
+          price: null,
+        },
+      ],
+    };
+
+    expect(createPlanningFingerprint(withUnrelatedSource)).toBe(
+      createPlanningFingerprint(source),
+    );
+  });
+
+  it("keeps the source fingerprint independent of batch overrides", () => {
+    const source = sourceFixture();
+    const defaultPreview = buildPlanningPreview(source);
+    const overriddenPreview = buildPlanningPreview(source, [
+      {
+        productId: PRODUCT_A_ID,
+        selectedBatchCount: "0.5",
+        reason: "ตั้งใจลด",
+      },
+    ]);
+
+    expect(overriddenPreview.inputFingerprint).toBe(
+      defaultPreview.inputFingerprint,
     );
   });
 });

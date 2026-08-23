@@ -41,14 +41,43 @@ function compareIds(left: string, right: string): number {
   return left.localeCompare(right);
 }
 
+function issueContextKey(context: PlanningIssue["context"]): string {
+  return JSON.stringify(
+    Object.fromEntries(
+      Object.entries(context).sort(([left], [right]) =>
+        left.localeCompare(right),
+      ),
+    ),
+  );
+}
+
+function issueContextIdKey(context: PlanningIssue["context"]): string {
+  return JSON.stringify(
+    Object.fromEntries(
+      Object.entries(context)
+        .filter(([key]) => key === "id" || key.endsWith("Id"))
+        .sort(([left], [right]) => left.localeCompare(right)),
+    ),
+  );
+}
+
 function sortIssues(issues: ReadonlyArray<PlanningIssue>): PlanningIssue[] {
   return [...issues].sort((left, right) => {
     const sourceComparison = (left.sourceEntityId ?? "").localeCompare(
       right.sourceEntityId ?? "",
     );
-    return sourceComparison === 0
-      ? left.code.localeCompare(right.code)
-      : sourceComparison;
+    if (sourceComparison !== 0) return sourceComparison;
+    const codeComparison = left.code.localeCompare(right.code);
+    if (codeComparison !== 0) return codeComparison;
+    const scopeComparison = left.scope.localeCompare(right.scope);
+    if (scopeComparison !== 0) return scopeComparison;
+    const contextIdComparison = issueContextIdKey(left.context).localeCompare(
+      issueContextIdKey(right.context),
+    );
+    if (contextIdComparison !== 0) return contextIdComparison;
+    return issueContextKey(left.context).localeCompare(
+      issueContextKey(right.context),
+    );
   });
 }
 

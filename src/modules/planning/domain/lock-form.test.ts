@@ -37,6 +37,31 @@ describe("planning lock form schemas", () => {
   );
 
   it.each([
+    ["lock request", (invalidId: string) => ({ ...lockInput(), lockRequestId: invalidId })],
+    [
+      "override product",
+      (invalidId: string) => ({
+        ...lockInput(),
+        overrides: [{ ...lockInput().overrides[0]!, productId: invalidId }],
+      }),
+    ],
+  ] as const)("rejects an invalid %s UUID", (_case, makeInvalidInput) => {
+    expect(
+      lockCycleInputSchema.safeParse(makeInvalidInput("not-a-uuid")).success,
+    ).toBe(false);
+  });
+
+  it("rejects an invalid unlock cycle UUID", () => {
+    expect(
+      unlockCycleInputSchema.safeParse({
+        cycleId: "not-a-uuid",
+        reason: "เพิ่มออเดอร์ด่วน",
+        confirmation: "ปลดล็อก",
+      }).success,
+    ).toBe(false);
+  });
+
+  it.each([
     "a".repeat(63),
     "a".repeat(65),
     "A".repeat(64),
