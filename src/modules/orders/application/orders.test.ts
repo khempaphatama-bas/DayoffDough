@@ -521,6 +521,15 @@ describe("order service", () => {
 
   it("summarizes live cycle money and demand without cancelled orders", async () => {
     const masters = await seedMasters(context.db);
+    await context.db
+      .update(products)
+      .set({ sellingUnit: "kg" })
+      .where(
+        and(
+          eq(products.ownerId, OWNER_ID),
+          eq(products.id, masters.scone.id),
+        ),
+      );
     const [emptyCycle] = await context.db
       .insert(bakeCycles)
       .values({
@@ -579,11 +588,13 @@ describe("order service", () => {
         {
           productId: masters.focaccia.id,
           productName: "Focaccia",
+          sellingUnit: "piece",
           quantity: 3,
         },
         {
           productId: masters.scone.id,
           productName: "Scone",
+          sellingUnit: "kg",
           quantity: 1,
         },
       ],

@@ -30,6 +30,7 @@ import {
   type ProductionDemandLine,
 } from "@/modules/orders/domain/production-demand";
 import { products } from "@/modules/products/db/schema";
+import type { UnitCode } from "@/modules/units/domain/units";
 
 export type OrderItemInput = Readonly<{
   productId: string;
@@ -531,7 +532,11 @@ export function createOrderService(db: DatabaseClient) {
       productIds.length === 0
         ? []
         : await db
-            .select({ id: products.id, name: products.name })
+            .select({
+              id: products.id,
+              name: products.name,
+              sellingUnit: products.sellingUnit,
+            })
             .from(products)
             .where(
               and(
@@ -539,8 +544,11 @@ export function createOrderService(db: DatabaseClient) {
                 inArray(products.id, productIds),
               ),
             );
-    const productNameById = new Map(
-      productRows.map((product) => [product.id, product.name]),
+    if (productRows.length !== productIds.length) {
+      throw new Error("Product not found");
+    }
+    const productById = new Map(
+      productRows.map((product) => [product.id, product]),
     );
     const itemsByOrderId = new Map<
       string,
@@ -560,10 +568,12 @@ export function createOrderService(db: DatabaseClient) {
       const items = itemsByOrderId.get(order.id) ?? [];
       const demandLines = demandLinesByCycleId.get(order.bakeCycleId) ?? [];
       for (const item of items) {
+        const product = productById.get(item.productId);
+        if (!product) throw new Error("Product not found");
         demandLines.push({
           productId: item.productId,
-          productName:
-            productNameById.get(item.productId) ?? "Unknown product",
+          productName: product.name,
+          sellingUnit: product.sellingUnit as UnitCode,
           quantity: item.quantity,
           fulfillmentStatus: status,
         });

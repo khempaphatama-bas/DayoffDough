@@ -2,6 +2,10 @@ import Link from "next/link";
 import type { BakeCycle } from "@/modules/cycles/application/cycles";
 import { formatSatangAsBaht } from "@/modules/money/domain/money";
 import type { CycleOrderSummary } from "@/modules/orders/application/orders";
+import {
+  formatUnitLabel,
+  type UnitCode,
+} from "@/modules/units/domain/units";
 
 export function selectNearestOpenCycle(
   cycles: ReadonlyArray<BakeCycle>,
@@ -24,15 +28,19 @@ function formatDeliveryDate(value: string): string {
   }).format(new Date(`${value}T00:00:00+07:00`));
 }
 
-function totalDemandUnits(summary: CycleOrderSummary): number {
-  let total = 0;
+function formatDemandUnits(summary: CycleOrderSummary): string {
+  const totalsByUnit = new Map<UnitCode, number>();
   for (const item of summary.demand) {
-    total += item.quantity;
+    const total = (totalsByUnit.get(item.sellingUnit) ?? 0) + item.quantity;
     if (!Number.isSafeInteger(total)) {
       throw new Error("Cycle demand exceeds the safe integer range");
     }
+    totalsByUnit.set(item.sellingUnit, total);
   }
-  return total;
+  if (totalsByUnit.size === 0) return "0 ชิ้น";
+  return [...totalsByUnit].map(
+    ([unit, quantity]) => `${quantity} ${formatUnitLabel(unit)}`,
+  ).join(" · ");
 }
 
 type CurrentCycleCardProps =
@@ -90,7 +98,7 @@ export function CurrentCycleCard(props: CurrentCycleCardProps) {
         <div className="rounded-2xl bg-white p-4">
           <dt className="text-xs font-semibold text-stone-500">สินค้าที่ต้องผลิต</dt>
           <dd className="mt-1 text-xl font-bold text-stone-900">
-            {totalDemandUnits(summary)} ชิ้น
+            {formatDemandUnits(summary)}
           </dd>
         </div>
         <div className="col-span-2 rounded-2xl bg-white p-4 lg:col-span-1">

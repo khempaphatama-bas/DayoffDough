@@ -33,8 +33,8 @@ const SUMMARY: CycleOrderSummary = {
   amountPaidSatang: 20000,
   balanceSatang: 42000,
   demand: [
-    { productId: "p1", productName: "Focaccia", quantity: 3 },
-    { productId: "p2", productName: "Scone", quantity: 1 },
+    { productId: "p1", productName: "Focaccia", sellingUnit: "piece", quantity: 3 },
+    { productId: "p2", productName: "Scone", sellingUnit: "kg", quantity: 1 },
   ],
 };
 
@@ -47,7 +47,7 @@ describe("CurrentCycleCard", () => {
     expect(screen.getByRole("heading", { name: EARLIER.name })).toBeInTheDocument();
     expect(screen.getByText(/30 สิงหาคม 2569/)).toBeInTheDocument();
     expect(screen.getByText("2 ออเดอร์")).toBeInTheDocument();
-    expect(screen.getByText("4 ชิ้น")).toBeInTheDocument();
+    expect(screen.getByText("3 ชิ้น · 1 kg")).toBeInTheDocument();
     expect(screen.getByText("฿620.00")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "เพิ่มออเดอร์" })).toHaveAttribute(
       "href",
@@ -57,6 +57,23 @@ describe("CurrentCycleCard", () => {
       "href",
       `/cycles/${EARLIER.id}`,
     );
+  });
+
+  it("keeps piece-only demand summed with the Thai unit", () => {
+    render(
+      <CurrentCycleCard
+        cycle={EARLIER}
+        summary={{
+          ...SUMMARY,
+          demand: [
+            { productId: "p1", productName: "Focaccia", sellingUnit: "piece", quantity: 3 },
+            { productId: "p2", productName: "Scone", sellingUnit: "piece", quantity: 1 },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByText("4 ชิ้น")).toBeInTheDocument();
   });
 
   it("links to cycle creation when there is no open cycle", () => {

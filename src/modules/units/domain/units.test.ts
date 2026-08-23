@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { convertQuantity, UnitConversionError } from "./units";
+import {
+  convertQuantity,
+  formatUnitLabel,
+  UnitConversionError,
+} from "./units";
 
 describe("convertQuantity", () => {
   it("converts kilograms to grams exactly", () => {
@@ -12,5 +16,18 @@ describe("convertQuantity", () => {
 
   it("rejects cross-dimension conversion", () => {
     expect(() => convertQuantity("1", "g", "ml")).toThrow(UnitConversionError);
+  });
+});
+
+describe("formatUnitLabel", () => {
+  it.each([
+    ["mg", "mg"],
+    ["g", "g"],
+    ["kg", "kg"],
+    ["ml", "ml"],
+    ["l", "l"],
+    ["piece", "ชิ้น"],
+  ] as const)("formats %s as %s", (unit, expected) => {
+    expect(formatUnitLabel(unit)).toBe(expected);
   });
 });

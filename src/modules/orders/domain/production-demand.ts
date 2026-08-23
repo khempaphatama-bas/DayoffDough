@@ -1,6 +1,9 @@
+import type { UnitCode } from "@/modules/units/domain/units";
+
 export type ProductionDemandLine = Readonly<{
   productId: string;
   productName: string;
+  sellingUnit: UnitCode;
   quantity: number;
   fulfillmentStatus:
     | "NEW"
@@ -14,12 +17,14 @@ export type ProductionDemandLine = Readonly<{
 export type ProductDemand = Readonly<{
   productId: string;
   productName: string;
+  sellingUnit: UnitCode;
   quantity: number;
 }>;
 
 type MutableProductDemand = {
   productId: string;
   productName: string;
+  sellingUnit: UnitCode;
   quantity: number;
 };
 
@@ -53,6 +58,7 @@ export function aggregateProductionDemand(
     demandByProduct.set(line.productId, {
       productId: line.productId,
       productName: line.productName,
+      sellingUnit: line.sellingUnit,
       quantity: line.quantity,
     });
   }

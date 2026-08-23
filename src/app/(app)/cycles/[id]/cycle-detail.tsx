@@ -9,6 +9,7 @@ import type {
   OrderDetail,
 } from "@/modules/orders/application/orders";
 import { OrderList } from "@/modules/orders/ui/order-list";
+import { formatUnitLabel } from "@/modules/units/domain/units";
 
 function formatCycleDate(value: string): string {
   return new Intl.DateTimeFormat("th-TH", {
@@ -155,7 +156,7 @@ export function CycleDetail({
                   {item.productName}
                 </span>
                 <span className="text-lg font-bold text-amber-900">
-                  {item.quantity} ชิ้น
+                  {item.quantity} {formatUnitLabel(item.sellingUnit)}
                 </span>
               </li>
             ))}

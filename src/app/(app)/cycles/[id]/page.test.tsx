@@ -40,11 +40,13 @@ const SUMMARY: CycleOrderSummary = {
     {
       productId: "22222222-2222-4222-8222-222222222222",
       productName: "Focaccia",
+      sellingUnit: "piece",
       quantity: 3,
     },
     {
       productId: "33333333-3333-4333-8333-333333333333",
       productName: "Scone",
+      sellingUnit: "kg",
       quantity: 1,
     },
   ],
@@ -140,7 +142,7 @@ describe("CycleDetail", () => {
     expect(screen.getByText("Focaccia")).toBeInTheDocument();
     expect(screen.getByText("3 ชิ้น")).toBeInTheDocument();
     expect(screen.getByText("Scone")).toBeInTheDocument();
-    expect(screen.getByText("1 ชิ้น")).toBeInTheDocument();
+    expect(screen.getByText("1 kg")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "ออเดอร์ในรอบนี้" })).toBeInTheDocument();
     expect(screen.getAllByText("คุณเมย์").length).toBeGreaterThan(0);
     expect(screen.getAllByText("คุณอ้อม").length).toBeGreaterThan(0);

@@ -17,7 +17,20 @@ const UNITS: Record<UnitCode, UnitDefinition> = {
   piece: { dimension: "count", toBaseFactor: "1" },
 };
 
+const UNIT_LABELS: Readonly<Record<UnitCode, string>> = {
+  mg: "mg",
+  g: "g",
+  kg: "kg",
+  ml: "ml",
+  l: "l",
+  piece: "ชิ้น",
+};
+
 export class UnitConversionError extends Error {}
+
+export function formatUnitLabel(unit: UnitCode): string {
+  return UNIT_LABELS[unit];
+}
 
 export function convertQuantity(
   value: Decimal.Value,
