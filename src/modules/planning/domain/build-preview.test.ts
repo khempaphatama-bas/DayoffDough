@@ -422,6 +422,10 @@ describe("planning preview orchestration", () => {
     const secondProductId = "07070707-0707-4707-8707-070707070707";
     const secondIngredientId = "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a";
     const secondRuleId = "0b0b0b0b-0b0b-4b0b-8b0b-0b0b0b0b0b0b";
+    const secondOrderItemId = "06060606-0606-4606-8606-060606060606";
+    const extraIngredientId = "05050505-0505-4505-8505-050505050505";
+    const emptyOrderLowId = "12121212-1212-4212-8212-121212121212";
+    const emptyOrderHighId = "13131313-1313-4313-8313-131313131313";
     const secondProduct = {
       id: secondProductId,
       name: "Brioche",
@@ -444,26 +448,58 @@ describe("planning preview orchestration", () => {
     };
     const enriched: PlanningSourceData = {
       ...source,
-      orders: source.orders.map((order) =>
-        order.id === ORDER_B_ID
+      orders: [
+        ...source.orders.map((order) =>
+          order.id === ORDER_A_ID
           ? {
               ...order,
-              paymentStatus: "UNPAID",
+              paymentStatus: "PARTIAL" as const,
               items: [
                 ...order.items,
                 {
-                  id: "06060606-0606-4606-8606-060606060606",
+                  id: secondOrderItemId,
                   productId: secondProductId,
                   productName: secondProduct.name,
-                  sellingUnit: "piece",
+                  sellingUnit: "piece" as const,
                   quantity: 2,
                   unitPriceSatang: 15_000,
                   lineNote: null,
                 },
               ],
             }
-          : { ...order, paymentStatus: "PARTIAL" },
-      ),
+            : { ...order, paymentStatus: "UNPAID" as const },
+        ),
+        {
+          ...source.orders[0]!,
+          id: emptyOrderHighId,
+          customerId: "14141414-1414-4414-8414-141414141414",
+          customerName: "ออเดอร์ว่าง ข",
+          deliveryMethodId: null,
+          deliveryMethodName: null,
+          deliveryRequiresLocation: false,
+          deliveryLocation: null,
+          paymentStatus: "PAID" as const,
+          deliveryFeeChargedSatang: 0,
+          deliveryCostSatang: 0,
+          amountPaidSatang: 0,
+          items: [],
+        },
+        {
+          ...source.orders[0]!,
+          id: emptyOrderLowId,
+          customerId: "15151515-1515-4515-8515-151515151515",
+          customerName: "ออเดอร์ว่าง ก",
+          deliveryMethodId: null,
+          deliveryMethodName: null,
+          deliveryRequiresLocation: false,
+          deliveryLocation: null,
+          paymentStatus: "PAID" as const,
+          deliveryFeeChargedSatang: 0,
+          deliveryCostSatang: 0,
+          amountPaidSatang: 0,
+          items: [],
+        },
+      ],
       products: [
         {
           ...source.products[0]!,
@@ -473,8 +509,7 @@ describe("planning preview orchestration", () => {
               focacciaRecipe.ingredients[0]!,
               {
                 ...focacciaRecipe.ingredients[0]!,
-                recipeIngredientId:
-                  "05050505-0505-4505-8505-050505050505",
+                recipeIngredientId: extraIngredientId,
                 quantityInBaseUnit: "100",
               },
             ],
@@ -530,16 +565,87 @@ describe("planning preview orchestration", () => {
     const first = buildPlanningPreview(enriched, overrides);
     const second = buildPlanningPreview(reordered, [...overrides].reverse());
 
-    expect(first.orderSnapshots).toHaveLength(2);
-    expect(first.orderSnapshots[1]?.items).toHaveLength(2);
-    expect(first.productPlans).toHaveLength(2);
-    expect(first.recipePlans).toHaveLength(2);
-    expect(first.inventoryPrices.length).toBeGreaterThan(1);
-    expect(first.materialRequirements.length).toBeGreaterThan(1);
-    expect(first.packagingRequirements.length).toBeGreaterThan(1);
-    expect(first.productCosts).toHaveLength(2);
-    expect(first.blockers).toHaveLength(2);
-    expect(first.warnings.length).toBeGreaterThan(1);
+    expect(
+      enriched.orders.flatMap((order) => order.items)[0]?.productId,
+    ).toBe(FOCACCIA_ID);
+    expect(
+      reordered.orders.flatMap((order) => order.items)[0]?.productId,
+    ).toBe(secondProductId);
+    expect(first.orderSnapshots.map((order) => order.id)).toEqual([
+      emptyOrderLowId,
+      emptyOrderHighId,
+      ORDER_A_ID,
+      ORDER_B_ID,
+    ]);
+    expect(
+      first.orderSnapshots.map((order) =>
+        order.items.map((item) => item.id),
+      ),
+    ).toEqual([
+      [],
+      [],
+      [secondOrderItemId, ITEM_A_ID, ITEM_B_ID],
+      [ITEM_C_ID],
+    ]);
+    expect.soft(first.productPlans.map((plan) => plan.productId)).toEqual([
+      secondProductId,
+      FOCACCIA_ID,
+    ]);
+    expect.soft(first.recipePlans.map((plan) => plan.productId)).toEqual([
+      secondProductId,
+      FOCACCIA_ID,
+    ]);
+    expect(
+      first.inventoryPrices.map((price) => price.inventoryItemId),
+    ).toEqual([
+      INGREDIENT_ID,
+      UNIT_PACKAGE_ID,
+      ORDER_PACKAGE_ID,
+      DELIVERY_PACKAGE_ID,
+    ]);
+    expect(
+      first.materialRequirements.map(
+        (requirement) =>
+          `${requirement.productId}:${requirement.recipeIngredientId}`,
+      ),
+    ).toEqual([
+      `${secondProductId}:${secondIngredientId}`,
+      `${FOCACCIA_ID}:${extraIngredientId}`,
+      `${FOCACCIA_ID}:${INGREDIENT_LINE_A_ID}`,
+    ]);
+    expect(
+      first.packagingRequirements.map(
+        (requirement) => requirement.packagingRuleId,
+      ),
+    ).toEqual([
+      secondRuleId,
+      PRODUCT_UNIT_RULE_ID,
+      PRODUCT_ORDER_RULE_ID,
+      DELIVERY_RULE_ID,
+    ]);
+    expect.soft(first.productCosts.map((cost) => cost.productId)).toEqual([
+      secondProductId,
+      FOCACCIA_ID,
+    ]);
+    expect(
+      first.blockers.map(
+        (issue) => `${issue.sourceEntityId}:${issue.code}`,
+      ),
+    ).toEqual([
+      `${secondProductId}:INVALID_BATCH_OVERRIDE`,
+      `${emptyOrderLowId}:ORDER_WITHOUT_ITEMS`,
+      `${emptyOrderHighId}:ORDER_WITHOUT_ITEMS`,
+      `${FOCACCIA_ID}:MISSING_OVERRIDE_REASON`,
+    ]);
+    expect(
+      first.warnings.map(
+        (issue) => `${issue.sourceEntityId}:${issue.code}`,
+      ),
+    ).toEqual([
+      `${ORDER_A_ID}:ORDER_PARTIAL`,
+      `${ORDER_B_ID}:ORDER_UNPAID`,
+      `${FOCACCIA_ID}:PLANNED_SHORTFALL`,
+    ]);
     expect(second).toEqual(first);
   });
 
