@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { OTHER_OWNER_ID, OWNER_ID } from "@tests/fixtures/owner";
 import { seedPlanningScenario } from "@tests/fixtures/planning";
 import { createTestDatabase } from "@tests/helpers/test-db";
+import { customers } from "@/modules/customers/db/schema";
 import { bakeCycles } from "@/modules/cycles/db/schema";
 import {
   deliveryMethods,
@@ -13,7 +14,7 @@ import {
   inventoryItems,
   inventoryPrices,
 } from "@/modules/inventory/db/schema";
-import { orderItems } from "@/modules/orders/db/schema";
+import { orderItems, orders } from "@/modules/orders/db/schema";
 import {
   cycleCostSnapshots,
   cycleInventoryPriceSnapshots,
@@ -39,6 +40,51 @@ import { createPlanningQueryService } from "./planning-queries";
 
 const AS_OF = new Date("2026-08-29T00:00:00.000Z");
 const MISSING_CYCLE_ID = "ffffffff-ffff-4fff-bfff-ffffffffffff";
+
+type LoggedQuery = Readonly<{
+  sql: string;
+  params: ReadonlyArray<unknown>;
+}>;
+
+function selectQuery(
+  queries: ReadonlyArray<LoggedQuery>,
+  table: string,
+): LoggedQuery {
+  const matches = queries.filter(({ sql }) =>
+    sql.includes(`from "${table}"`)
+  );
+  expect(matches, table).toHaveLength(1);
+  return matches[0]!;
+}
+
+function whereClause(query: LoggedQuery): string {
+  const where = query.sql.split(" where ")[1];
+  expect(where, query.sql).toBeDefined();
+  return where!.split(" order by ")[0]!.split(" limit ")[0]!;
+}
+
+function expectOwnedSelect(query: LoggedQuery, table: string): void {
+  expect(whereClause(query), table).toContain(
+    `"${table}"."owner_id" = $1`,
+  );
+  expect(query.params[0], table).toBe(OWNER_ID);
+}
+
+function expectBatchedIds(
+  query: LoggedQuery,
+  table: string,
+  column: string,
+  expectedIds: ReadonlyArray<string>,
+): void {
+  const placeholders = expectedIds
+    .map((_, index) => `$${index + 2}`)
+    .join(", ");
+  expect(whereClause(query), `${table}.${column}`).toContain(
+    `"${table}"."${column}" in (${placeholders})`,
+  );
+  expect(query.params.slice(1, expectedIds.length + 1), `${table} params`)
+    .toEqual(expectedIds);
+}
 
 async function expectExactError(
   promise: Promise<unknown>,
@@ -383,16 +429,51 @@ describe("planning query service", () => {
   });
 
   it("uses one batched select per dependent table", async () => {
-    const queries: string[] = [];
+    const queries: LoggedQuery[] = [];
     await context.close();
     context = await createTestDatabase({
       logger: {
-        logQuery(query: string) {
-          queries.push(query.toLowerCase());
+        logQuery(query: string, params: unknown[]) {
+          queries.push({ sql: query.toLowerCase(), params: [...params] });
         },
       } satisfies Logger,
     });
     const scenario = await seedPlanningScenario(context.db);
+    const secondDeliveryMethodId =
+      "70000000-0000-4000-8000-000000000001";
+    const secondCustomerId = "70000000-0000-4000-8000-000000000002";
+    await context.db.insert(deliveryMethods).values({
+      id: secondDeliveryMethodId,
+      ownerId: OWNER_ID,
+      name: "รับหน้าร้าน",
+      defaultCustomerFeeSatang: 0,
+      defaultInternalCostSatang: 0,
+      requiresDeliveryLocation: false,
+    });
+    await context.db.insert(customers).values({
+      id: secondCustomerId,
+      ownerId: OWNER_ID,
+      name: "คุณนิด",
+      defaultDeliveryMethodId: secondDeliveryMethodId,
+    });
+    await context.db
+      .update(orders)
+      .set({
+        customerId: secondCustomerId,
+        deliveryMethodId: secondDeliveryMethodId,
+        deliveryLocation: null,
+      })
+      .where(eq(orders.id, scenario.orderIds[1]!));
+    await context.db.insert(productPackagingRules).values({
+      id: "70000000-0000-4000-8000-000000000003",
+      ownerId: OWNER_ID,
+      scope: "DELIVERY_METHOD",
+      productId: null,
+      deliveryMethodId: secondDeliveryMethodId,
+      inventoryItemId: scenario.packagingItemId,
+      consumptionBasis: "PER_DELIVERY",
+      quantityInBaseUnit: "1.000000",
+    });
     const secondProduct = {
       productId: "60000000-0000-4000-8000-000000000001",
       recipeId: "60000000-0000-4000-8000-000000000002",
@@ -469,20 +550,100 @@ describe("planning query service", () => {
       "inventory_prices",
     ];
     for (const table of sourceTables) {
-      const matchingQueries = queries.filter((query) =>
-        query.includes(`from "${table}"`)
-      );
-      expect(matchingQueries, table).toHaveLength(1);
-      expect(matchingQueries[0]?.split(" where ")[1], table).toContain(
-        "owner_id",
-      );
+      expectOwnedSelect(selectQuery(queries, table), table);
     }
-    expect(
-      queries.find((query) => query.includes('from "order_items"')),
-    ).toContain(" in (");
-    expect(
-      queries.find((query) => query.includes('from "inventory_prices"')),
-    ).toContain(" in (");
+
+    const firstCustomerId = "10000000-0000-4000-8000-000000000008";
+    const firstDeliveryMethodId =
+      "10000000-0000-4000-8000-000000000007";
+    const firstRecipeId = "10000000-0000-4000-8000-000000000004";
+    const firstRecipeVersionId =
+      "10000000-0000-4000-8000-000000000005";
+    const productIds = [scenario.productId, secondProduct.productId];
+    const recipeIds = [firstRecipeId, secondProduct.recipeId];
+    const recipeVersionIds = [
+      firstRecipeVersionId,
+      secondProduct.versionId,
+    ];
+    const customerIds = [firstCustomerId, secondCustomerId];
+    const deliveryMethodIds = [
+      firstDeliveryMethodId,
+      secondDeliveryMethodId,
+    ];
+    const inventoryItemIds = [
+      scenario.ingredientItemId,
+      scenario.packagingItemId,
+    ];
+
+    expectBatchedIds(
+      selectQuery(queries, "order_items"),
+      "order_items",
+      "order_id",
+      scenario.orderIds,
+    );
+    expectBatchedIds(
+      selectQuery(queries, "customers"),
+      "customers",
+      "id",
+      customerIds,
+    );
+    expectBatchedIds(
+      selectQuery(queries, "delivery_methods"),
+      "delivery_methods",
+      "id",
+      deliveryMethodIds,
+    );
+    expectBatchedIds(
+      selectQuery(queries, "products"),
+      "products",
+      "id",
+      productIds,
+    );
+    expectBatchedIds(
+      selectQuery(queries, "recipe_versions"),
+      "recipe_versions",
+      "id",
+      recipeVersionIds,
+    );
+    expectBatchedIds(
+      selectQuery(queries, "recipes"),
+      "recipes",
+      "id",
+      recipeIds,
+    );
+    expectBatchedIds(
+      selectQuery(queries, "recipe_ingredients"),
+      "recipe_ingredients",
+      "recipe_version_id",
+      recipeVersionIds,
+    );
+    expectBatchedIds(
+      selectQuery(queries, "inventory_items"),
+      "inventory_items",
+      "id",
+      inventoryItemIds,
+    );
+    expectBatchedIds(
+      selectQuery(queries, "inventory_prices"),
+      "inventory_prices",
+      "inventory_item_id",
+      inventoryItemIds,
+    );
+
+    const packagingQuery = selectQuery(
+      queries,
+      "product_packaging_rules",
+    );
+    expect(whereClause(packagingQuery)).toBe(
+      '("product_packaging_rules"."owner_id" = $1 and (("product_packaging_rules"."scope" = $2 and "product_packaging_rules"."product_id" in ($3, $4)) or ("product_packaging_rules"."scope" = $5 and "product_packaging_rules"."delivery_method_id" in ($6, $7))))',
+    );
+    expect(packagingQuery.params.slice(0, 7)).toEqual([
+      OWNER_ID,
+      "PRODUCT",
+      ...productIds,
+      "DELIVERY_METHOD",
+      ...deliveryMethodIds,
+    ]);
   });
 
   it("does not reveal settings while rejecting an unowned cycle", async () => {
