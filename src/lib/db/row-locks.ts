@@ -11,7 +11,7 @@ export async function lockOwnedBakeCycle(
   cycleId: string,
 ) {
   const [cycle] = await reader
-    .select({ id: bakeCycles.id, status: bakeCycles.status })
+    .select()
     .from(bakeCycles)
     .where(
       and(eq(bakeCycles.ownerId, ownerId), eq(bakeCycles.id, cycleId)),

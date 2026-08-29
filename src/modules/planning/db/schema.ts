@@ -217,6 +217,7 @@ export const cycleOrderSnapshots = pgTable(
     customerName: varchar("customer_name", { length: 160 }).notNull(),
     sourceDeliveryMethodId: uuid("source_delivery_method_id"),
     deliveryMethodName: varchar("delivery_method_name", { length: 160 }),
+    deliveryRequiresLocation: boolean("delivery_requires_location").notNull(),
     sourceChannel: orderSourceChannelEnum("source_channel"),
     requestedDeliveryDate: date("requested_delivery_date", { mode: "string" }),
     confirmedDeliveryDate: date("confirmed_delivery_date", { mode: "string" }),

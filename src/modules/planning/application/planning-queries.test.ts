@@ -36,6 +36,7 @@ import {
 } from "@/modules/products/db/schema";
 import { shopSettings } from "@/modules/settings/db/schema";
 import { loadPlanningSource } from "./load-source";
+import { createPlanningCommandService } from "./planning-commands";
 import { createPlanningQueryService } from "./planning-queries";
 
 const AS_OF = new Date("2026-08-29T00:00:00.000Z");
@@ -68,6 +69,20 @@ function expectOwnedSelect(query: LoggedQuery, table: string): void {
     `"${table}"."owner_id" = $1`,
   );
   expect(query.params[0], table).toBe(OWNER_ID);
+}
+
+function expectOwnedSnapshotSelect(
+  query: LoggedQuery,
+  table: string,
+  snapshotId: string,
+): void {
+  expect(whereClause(query), table).toContain(
+    `"${table}"."owner_id" = $1`,
+  );
+  expect(whereClause(query), table).toContain(
+    `"${table}"."planning_snapshot_id" = $2`,
+  );
+  expect(query.params.slice(0, 2), table).toEqual([OWNER_ID, snapshotId]);
 }
 
 function expectBatchedIds(
@@ -123,6 +138,25 @@ describe("planning query service", () => {
     await expectExactError(
       service.preview(ownerId, cycleId),
       "Cycle not found",
+    );
+  });
+
+  it.each([
+    ["cross-owner", OTHER_OWNER_ID, "10000000-0000-4000-8000-000000000009"],
+    ["missing", OWNER_ID, MISSING_CYCLE_ID],
+  ])("does not reveal generation history for a %s cycle", async (_case, ownerId, cycleId) => {
+    await seedPlanningScenario(context.db);
+    const service = createPlanningQueryService(context.db, {
+      now: () => AS_OF,
+    });
+
+    await expectExactError(
+      service.listGenerations(ownerId, cycleId),
+      "Planning generation not found",
+    );
+    await expectExactError(
+      service.getGeneration(ownerId, cycleId),
+      "Planning generation not found",
     );
   });
 
@@ -683,5 +717,188 @@ describe("planning query service", () => {
 
     expect(source.cycle.id).toBe(scenario.cycleId);
     expect(source.cycle.name).toBe("รอบส่ง 30 ส.ค.");
+  });
+
+  it("reads the active or explicit immutable generation without consulting changed master data", async () => {
+    const scenario = await seedPlanningScenario(context.db);
+    const clock = { now: () => new Date(AS_OF) };
+    const queries = createPlanningQueryService(context.db, clock);
+    const preview = await queries.preview(OWNER_ID, scenario.cycleId);
+    const locked = await createPlanningCommandService(context.db, clock).lock(
+      OWNER_ID,
+      {
+        cycleId: scenario.cycleId,
+        inputFingerprint: preview.inputFingerprint,
+        lockRequestId: "22222222-2222-4222-8222-222222222222",
+        overrides: [],
+      },
+    );
+
+    await context.db
+      .update(products)
+      .set({ name: "ชื่อสินค้าใหม่" })
+      .where(eq(products.id, scenario.productId));
+    await context.db
+      .update(recipeIngredients)
+      .set({ quantityInBaseUnit: "999.000000" })
+      .where(
+        eq(
+          recipeIngredients.id,
+          "10000000-0000-4000-8000-000000000006",
+        ),
+      );
+    await context.db
+      .update(inventoryPrices)
+      .set({ packPriceSatang: 99_999 })
+      .where(
+        eq(
+          inventoryPrices.id,
+          "20000000-0000-4000-8000-000000000002",
+        ),
+      );
+    await context.db
+      .update(shopSettings)
+      .set({
+        laborRateSatangPerHour: 99_999,
+        defaultWasteAllowancePercent: "99.0000",
+      })
+      .where(eq(shopSettings.ownerId, OWNER_ID));
+    await context.db
+      .update(productPackagingRules)
+      .set({ quantityInBaseUnit: "99.000000" })
+      .where(
+        eq(
+          productPackagingRules.id,
+          "10000000-0000-4000-8000-00000000000a",
+        ),
+      );
+    await context.db.insert(recipeVersions).values({
+      id: "80000000-0000-4000-8000-000000000002",
+      ownerId: OWNER_ID,
+      recipeId: "10000000-0000-4000-8000-000000000004",
+      versionCode: "v2",
+      baseYieldQuantity: "1.000000",
+      yieldUnit: "piece",
+      laborMinutesPerBatch: 999,
+      utilityCostSatangPerBatch: 99_999,
+      wasteAllowancePercent: null,
+      instructions: "สูตรที่สร้างหลังล็อก",
+    });
+    await context.db
+      .update(products)
+      .set({
+        activeRecipeVersionId:
+          "80000000-0000-4000-8000-000000000002",
+      })
+      .where(eq(products.id, scenario.productId));
+
+    const explicit = await queries.getGeneration(
+      OWNER_ID,
+      scenario.cycleId,
+      1,
+    );
+    const active = await queries.getGeneration(OWNER_ID, scenario.cycleId);
+
+    expect(explicit).toEqual(active);
+    expect(explicit).toMatchObject({
+      id: locked.id,
+      cycleId: scenario.cycleId,
+      generation: 1,
+      status: "ACTIVE",
+      cycleName: "รอบส่ง 30 ส.ค.",
+      warnings: [],
+      orders: [
+        expect.objectContaining({
+          customerName: "คุณเมย์",
+          deliveryMethodName: "ไรเดอร์",
+          deliveryRequiresLocation: true,
+          items: [expect.objectContaining({ productName: "ฟอคคาเซีย" })],
+        }),
+        expect.objectContaining({
+          customerName: "คุณเมย์",
+          deliveryRequiresLocation: true,
+          items: [expect.objectContaining({ productName: "ฟอคคาเซีย" })],
+        }),
+      ],
+      recipePlans: [
+        expect.objectContaining({
+          recipeName: "สูตรฟอคคาเซียหลัก",
+          versionCode: "v1",
+          baseYieldQuantity: "6.000000",
+          laborMinutesPerBatch: 30,
+        }),
+      ],
+      productPlans: [
+        expect.objectContaining({
+          productName: "ฟอคคาเซีย",
+          selectedBatchCount: "2.000000",
+          plannedOutput: "12.000000",
+        }),
+      ],
+      materialRequirements: [
+        expect.objectContaining({
+          quantityPerBatch: "1000.000000",
+          plannedRequirement: "2200.000000",
+          baseCostSatang: 11_000,
+          wasteCostSatang: 1_100,
+        }),
+      ],
+      productCosts: [
+        expect.objectContaining({
+          laborCostSatang: 12_000,
+          knownProductionCostSatang: 28_220,
+        }),
+      ],
+      cycleCost: expect.objectContaining({
+        knownProductionCostSatang: 28_240,
+        completeProductionCostSatang: 28_240,
+      }),
+    });
+    await expect(queries.listGenerations(OWNER_ID, scenario.cycleId)).resolves
+      .toEqual([
+        expect.objectContaining({ id: locked.id, generation: 1 }),
+      ]);
+  });
+
+  it("owner-scopes every immutable child query to the selected snapshot", async () => {
+    const loggedQueries: LoggedQuery[] = [];
+    await context.close();
+    context = await createTestDatabase({
+      logger: {
+        logQuery(query: string, params: unknown[]) {
+          loggedQueries.push({ sql: query.toLowerCase(), params: [...params] });
+        },
+      } satisfies Logger,
+    });
+    const scenario = await seedPlanningScenario(context.db);
+    const clock = { now: () => new Date(AS_OF) };
+    const service = createPlanningQueryService(context.db, clock);
+    const preview = await service.preview(OWNER_ID, scenario.cycleId);
+    const locked = await createPlanningCommandService(context.db, clock).lock(
+      OWNER_ID,
+      {
+        cycleId: scenario.cycleId,
+        inputFingerprint: preview.inputFingerprint,
+        lockRequestId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        overrides: [],
+      },
+    );
+    loggedQueries.length = 0;
+
+    await service.getGeneration(OWNER_ID, scenario.cycleId);
+
+    for (const table of [
+      "cycle_planning_warnings",
+      "cycle_order_snapshots",
+      "cycle_order_item_snapshots",
+      "cycle_recipe_plans",
+      "cycle_product_plans",
+      "cycle_material_requirements",
+      "cycle_packaging_requirements",
+      "cycle_product_cost_snapshots",
+      "cycle_cost_snapshots",
+    ]) {
+      expectOwnedSnapshotSelect(selectQuery(loggedQueries, table), table, locked.id);
+    }
   });
 });

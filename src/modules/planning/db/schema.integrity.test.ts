@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { OWNER_ID } from "@tests/fixtures/owner";
 import { createTestDatabase } from "@tests/helpers/test-db";
@@ -362,6 +362,8 @@ async function insertOrderSnapshot(
       customerName: input.customer.name,
       sourceDeliveryMethodId: input.deliveryMethod.id,
       deliveryMethodName: input.deliveryMethod.name,
+      deliveryRequiresLocation:
+        input.deliveryMethod.requiresDeliveryLocation,
       paymentStatus: input.order.paymentStatus,
       fulfillmentStatus: input.order.fulfillmentStatus,
       deliveryFeePayer: input.order.deliveryFeePayer,
@@ -847,6 +849,27 @@ describe("Phase 3A planning relationship integrity", () => {
         customer: scenario.customerB,
         deliveryMethod: scenario.deliveryMethod,
       }),
+    ).rejects.toThrow();
+  });
+
+  it("stores a non-null copied delivery-location requirement on order snapshots", async () => {
+    const scenario = await seedIntegrityScenario(context.db);
+    const orderSnapshot = await insertOrderSnapshot(context.db, {
+      snapshotId: scenario.snapshotA.id,
+      order: scenario.orderA,
+      customer: scenario.customerA,
+      deliveryMethod: scenario.deliveryMethod,
+    });
+
+    expect(orderSnapshot.deliveryRequiresLocation).toBe(
+      scenario.deliveryMethod.requiresDeliveryLocation,
+    );
+    await expect(
+      context.db.execute(sql`
+        UPDATE cycle_order_snapshots
+        SET delivery_requires_location = NULL
+        WHERE id = ${orderSnapshot.id}
+      `),
     ).rejects.toThrow();
   });
 
