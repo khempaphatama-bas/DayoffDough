@@ -2,10 +2,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Logger } from "drizzle-orm/logger";
 import { OTHER_OWNER_ID, OWNER_ID } from "@tests/fixtures/owner";
 import { createTestDatabase } from "@tests/helpers/test-db";
+import { bakeCycles, bakeCycleStatus } from "@/modules/cycles/db/schema";
 import {
+  type BakeCycleStatus,
   type BakeCycleInput,
   createCycleService,
-  type Phase2CycleStatus,
 } from "./cycles";
 
 const BASE_INPUT: BakeCycleInput = {
@@ -111,49 +112,117 @@ describe("cycle service", () => {
     ]);
   });
 
-  it("updates metadata without changing status", async () => {
-    const created = await service.create(OWNER_ID, {
-      ...BASE_INPUT,
-      status: "OPEN",
-    });
-    await service.changeStatus(OWNER_ID, created.id, "IN_PRODUCTION");
+  it.each(["DRAFT", "OPEN"] as const)(
+    "updates metadata while a cycle is %s without changing status",
+    async (status) => {
+      const created = await service.create(OWNER_ID, {
+        ...BASE_INPUT,
+        status,
+      });
 
-    const updated = await service.update(OWNER_ID, created.id, {
-      name: "รอบส่ง 30 ส.ค. (แก้ไข)",
-      orderCutoffAt: null,
-      targetProductionDate: "2026-08-28",
-      primaryDeliveryDate: "2026-08-31",
-      notes: "อบเช้ากว่าปกติ",
-    });
+      const updated = await service.update(OWNER_ID, created.id, {
+        name: "รอบส่ง 30 ส.ค. (แก้ไข)",
+        orderCutoffAt: null,
+        targetProductionDate: "2026-08-28",
+        primaryDeliveryDate: "2026-08-31",
+        notes: "อบเช้ากว่าปกติ",
+      });
 
-    expect(updated).toMatchObject({
-      id: created.id,
-      ownerId: OWNER_ID,
-      name: "รอบส่ง 30 ส.ค. (แก้ไข)",
-      status: "IN_PRODUCTION",
-      orderCutoffAt: null,
-      targetProductionDate: "2026-08-28",
-      primaryDeliveryDate: "2026-08-31",
-      notes: "อบเช้ากว่าปกติ",
-    });
+      expect(updated).toMatchObject({
+        id: created.id,
+        ownerId: OWNER_ID,
+        name: "รอบส่ง 30 ส.ค. (แก้ไข)",
+        status,
+        orderCutoffAt: null,
+        targetProductionDate: "2026-08-28",
+        primaryDeliveryDate: "2026-08-31",
+        notes: "อบเช้ากว่าปกติ",
+      });
+    },
+  );
+
+  it.each([
+    "LOCKED",
+    "IN_PRODUCTION",
+    "COMPLETED",
+    "CANCELLED",
+  ] as const)("rejects metadata edits while a cycle is %s", async (status) => {
+    const [cycle] = await context.db
+      .insert(bakeCycles)
+      .values({
+        ownerId: OWNER_ID,
+        name: `Frozen ${status}`,
+        status,
+        targetProductionDate: "2026-08-29",
+        primaryDeliveryDate: "2026-08-30",
+        lockedAt:
+          status === "LOCKED" || status === "IN_PRODUCTION"
+            ? new Date("2026-08-28T00:00:00.000Z")
+            : null,
+      })
+      .returning();
+    const before = await service.get(OWNER_ID, cycle!.id);
+
+    await expect(
+      service.update(OWNER_ID, cycle!.id, {
+        ...BASE_INPUT,
+        name: "Must not change",
+      }),
+    ).rejects.toThrow("Cycle must be open for editing");
+    expect(await service.get(OWNER_ID, cycle!.id)).toEqual(before);
   });
 
-  it("allows every Phase 2 status", async () => {
-    const cycle = await service.create(OWNER_ID, {
-      ...BASE_INPUT,
-      status: "OPEN",
-    });
-    const statuses: ReadonlyArray<Phase2CycleStatus> = [
-      "DRAFT",
-      "OPEN",
-      "IN_PRODUCTION",
-      "COMPLETED",
-      "CANCELLED",
-    ];
+  it("enforces the complete explicit lifecycle transition map", async () => {
+    const allowed: Readonly<
+      Record<BakeCycleStatus, ReadonlyArray<BakeCycleStatus>>
+    > = {
+      DRAFT: ["OPEN", "CANCELLED"],
+      OPEN: ["DRAFT", "CANCELLED"],
+      LOCKED: ["IN_PRODUCTION", "CANCELLED"],
+      IN_PRODUCTION: ["COMPLETED", "CANCELLED"],
+      COMPLETED: [],
+      CANCELLED: [],
+    };
+    const manuallyReachableTargets = bakeCycleStatus.filter(
+      (status) => status !== "LOCKED",
+    );
 
-    for (const status of statuses) {
-      await expect(service.changeStatus(OWNER_ID, cycle.id, status)).resolves
-        .toMatchObject({ id: cycle.id, status });
+    for (const current of bakeCycleStatus) {
+      for (const target of manuallyReachableTargets) {
+        const lockedAt =
+          current === "LOCKED" || current === "IN_PRODUCTION"
+            ? new Date("2026-08-28T00:00:00.000Z")
+            : null;
+        const [cycle] = await context.db
+          .insert(bakeCycles)
+          .values({
+            ownerId: OWNER_ID,
+            name: `${current} to ${target}`,
+            status: current,
+            targetProductionDate: "2026-08-29",
+            primaryDeliveryDate: "2026-08-30",
+            lockedAt,
+          })
+          .returning();
+
+        if (allowed[current].includes(target)) {
+          await expect(
+            service.changeStatus(OWNER_ID, cycle!.id, target),
+          ).resolves.toMatchObject({
+            id: cycle!.id,
+            status: target,
+            lockedAt,
+          });
+        } else {
+          await expect(
+            service.changeStatus(OWNER_ID, cycle!.id, target),
+          ).rejects.toThrow("Invalid cycle status transition");
+          await expect(service.get(OWNER_ID, cycle!.id)).resolves.toMatchObject({
+            status: current,
+            lockedAt,
+          });
+        }
+      }
     }
   });
 

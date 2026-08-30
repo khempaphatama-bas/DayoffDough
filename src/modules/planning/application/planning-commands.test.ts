@@ -5,8 +5,14 @@ import { OTHER_OWNER_ID, OWNER_ID } from "@tests/fixtures/owner";
 import { seedPlanningScenario } from "@tests/fixtures/planning";
 import { createTestDatabase } from "@tests/helpers/test-db";
 import type { DatabaseClient } from "@/lib/db/types";
+import { createCycleService } from "@/modules/cycles/application/cycles";
 import { bakeCycles } from "@/modules/cycles/db/schema";
-import { orders } from "@/modules/orders/db/schema";
+import {
+  createOrderService,
+  type OrderDetail,
+  type OrderInput,
+} from "@/modules/orders/application/orders";
+import { orderItems, orders } from "@/modules/orders/db/schema";
 import { products } from "@/modules/products/db/schema";
 import {
   cycleCostSnapshots,
@@ -30,7 +36,70 @@ import {
 import { createPlanningQueryService } from "./planning-queries";
 
 const LOCKED_AT = new Date("2026-08-29T00:00:00.000Z");
+const UNLOCKED_AT = new Date("2026-08-29T01:00:00.000Z");
+const RELOCKED_AT = new Date("2026-08-29T02:00:00.000Z");
 const LOCK_REQUEST_ID = "11111111-1111-4111-8111-111111111111";
+
+async function loadPlanningChildren(
+  db: DatabaseClient,
+  planningSnapshotId: string,
+) {
+  return Promise.all([
+    db.select().from(cyclePlanningWarnings).where(
+      eq(cyclePlanningWarnings.planningSnapshotId, planningSnapshotId),
+    ),
+    db.select().from(cycleOrderSnapshots).where(
+      eq(cycleOrderSnapshots.planningSnapshotId, planningSnapshotId),
+    ),
+    db.select().from(cycleOrderItemSnapshots).where(
+      eq(cycleOrderItemSnapshots.planningSnapshotId, planningSnapshotId),
+    ),
+    db.select().from(cycleRecipePlans).where(
+      eq(cycleRecipePlans.planningSnapshotId, planningSnapshotId),
+    ),
+    db.select().from(cycleProductPlans).where(
+      eq(cycleProductPlans.planningSnapshotId, planningSnapshotId),
+    ),
+    db.select().from(cycleInventoryPriceSnapshots).where(
+      eq(cycleInventoryPriceSnapshots.planningSnapshotId, planningSnapshotId),
+    ),
+    db.select().from(cycleMaterialRequirements).where(
+      eq(cycleMaterialRequirements.planningSnapshotId, planningSnapshotId),
+    ),
+    db.select().from(cyclePackagingRequirements).where(
+      eq(cyclePackagingRequirements.planningSnapshotId, planningSnapshotId),
+    ),
+    db.select().from(cycleProductCostSnapshots).where(
+      eq(cycleProductCostSnapshots.planningSnapshotId, planningSnapshotId),
+    ),
+    db.select().from(cycleCostSnapshots).where(
+      eq(cycleCostSnapshots.planningSnapshotId, planningSnapshotId),
+    ),
+  ]);
+}
+
+function editableOrderInput(
+  detail: OrderDetail,
+  items: OrderInput["items"],
+): OrderInput {
+  return {
+    customerId: detail.customerId,
+    bakeCycleId: detail.bakeCycleId,
+    sourceChannel: detail.sourceChannel,
+    requestedDeliveryDate: detail.requestedDeliveryDate,
+    confirmedDeliveryDate: detail.confirmedDeliveryDate,
+    deliveryMethodId: detail.deliveryMethodId,
+    deliveryFeeChargedSatang: detail.deliveryFeeChargedSatang,
+    deliveryCostSatang: detail.deliveryCostSatang,
+    deliveryFeePayer: detail.deliveryFeePayer,
+    discountSatang: detail.discountSatang,
+    amountPaidSatang: detail.amountPaidSatang,
+    deliveryLocation: detail.deliveryLocation ?? "",
+    deliveryNote: detail.deliveryNote ?? "",
+    specialInstructions: detail.specialInstructions ?? "",
+    items,
+  };
+}
 
 describe("planning command service", () => {
   let context: Awaited<ReturnType<typeof createTestDatabase>>;
@@ -40,6 +109,406 @@ describe("planning command service", () => {
   });
 
   afterEach(async () => context.close());
+
+  it("atomically unlocks a locked generation without mutating its children and re-locks as generation 2", async () => {
+    const scenario = await seedPlanningScenario(context.db);
+    const previewClock = { now: () => new Date(LOCKED_AT) };
+    const instants = [LOCKED_AT, UNLOCKED_AT, RELOCKED_AT];
+    const commands = createPlanningCommandService(context.db, {
+      now() {
+        const instant = instants.shift();
+        if (!instant) throw new Error("Planning command clock called too often");
+        return new Date(instant);
+      },
+    });
+    const firstPreview = await createPlanningQueryService(
+      context.db,
+      previewClock,
+    ).preview(OWNER_ID, scenario.cycleId);
+    const first = await commands.lock(OWNER_ID, {
+      cycleId: scenario.cycleId,
+      inputFingerprint: firstPreview.inputFingerprint,
+      lockRequestId: "10101010-1010-4010-8010-101010101010",
+      overrides: [],
+    });
+    const childrenBefore = await loadPlanningChildren(context.db, first.id);
+
+    await expect(
+      commands.unlock(OWNER_ID, {
+        cycleId: scenario.cycleId,
+        reason: "  เพิ่มออเดอร์ด่วน  ",
+        confirmation: "ปลดล็อก",
+      }),
+    ).resolves.toMatchObject({
+      id: first.id,
+      generation: 1,
+      status: "SUPERSEDED",
+      unlockedAt: UNLOCKED_AT,
+      unlockReason: "เพิ่มออเดอร์ด่วน",
+      unlockedFromStatus: "LOCKED",
+    });
+    await expect(
+      createCycleService(context.db).get(OWNER_ID, scenario.cycleId),
+    ).resolves.toMatchObject({
+      status: "OPEN",
+      activePlanningSnapshotId: null,
+      lockedAt: null,
+    });
+    expect(await loadPlanningChildren(context.db, first.id)).toEqual(
+      childrenBefore,
+    );
+
+    const secondPreview = await createPlanningQueryService(context.db, {
+      now: () => new Date(RELOCKED_AT),
+    }).preview(OWNER_ID, scenario.cycleId);
+    const second = await commands.lock(OWNER_ID, {
+      cycleId: scenario.cycleId,
+      inputFingerprint: secondPreview.inputFingerprint,
+      lockRequestId: "20202020-2020-4020-8020-202020202020",
+      overrides: [],
+    });
+
+    expect(second).toMatchObject({ generation: 2, status: "ACTIVE" });
+    await expect(
+      createPlanningQueryService(context.db).listGenerations(
+        OWNER_ID,
+        scenario.cycleId,
+      ),
+    ).resolves.toEqual([
+      expect.objectContaining({ id: second.id, generation: 2, status: "ACTIVE" }),
+      expect.objectContaining({
+        id: first.id,
+        generation: 1,
+        status: "SUPERSEDED",
+        unlockedAt: UNLOCKED_AT,
+        unlockReason: "เพิ่มออเดอร์ด่วน",
+        unlockedFromStatus: "LOCKED",
+      }),
+    ]);
+    expect(await loadPlanningChildren(context.db, first.id)).toEqual(
+      childrenBefore,
+    );
+  });
+
+  it("preserves source item lineage across unlock edits and excludes archived lines from generation 2", async () => {
+    const scenario = await seedPlanningScenario(context.db);
+    const instants = [LOCKED_AT, UNLOCKED_AT, RELOCKED_AT];
+    const commands = createPlanningCommandService(context.db, {
+      now() {
+        const instant = instants.shift();
+        if (!instant) throw new Error("Planning command clock called too often");
+        return new Date(instant);
+      },
+    });
+    const queries = createPlanningQueryService(context.db, {
+      now: () => new Date(LOCKED_AT),
+    });
+    const firstPreview = await queries.preview(OWNER_ID, scenario.cycleId);
+    const first = await commands.lock(OWNER_ID, {
+      cycleId: scenario.cycleId,
+      inputFingerprint: firstPreview.inputFingerprint,
+      lockRequestId: "21212121-2121-4121-8121-212121212121",
+      overrides: [],
+    });
+    const firstViewBeforeEdit = await queries.getGeneration(
+      OWNER_ID,
+      scenario.cycleId,
+      1,
+    );
+    await commands.unlock(OWNER_ID, {
+      cycleId: scenario.cycleId,
+      reason: "แก้จำนวนหลังปลดล็อก",
+      confirmation: "ปลดล็อก",
+    });
+
+    const orderService = createOrderService(context.db);
+    const original = await orderService.get(OWNER_ID, scenario.orderIds[0]!);
+    const originalItem = original.items[0]!;
+    const newQuantity = originalItem.quantity + 2;
+    const withTemporaryLine = await orderService.update(
+      OWNER_ID,
+      original.id,
+      editableOrderInput(original, [
+        {
+          productId: originalItem.productId,
+          quantity: newQuantity,
+          unitPriceSatang: originalItem.unitPriceSatang,
+          lineNote: originalItem.lineNote ?? "",
+        },
+        {
+          productId: originalItem.productId,
+          quantity: 99,
+          unitPriceSatang: originalItem.unitPriceSatang,
+          lineNote: "temporary archived line",
+        },
+      ]),
+    );
+    const edited = await orderService.update(
+      OWNER_ID,
+      original.id,
+      editableOrderInput(withTemporaryLine, [
+        {
+          productId: originalItem.productId,
+          quantity: newQuantity,
+          unitPriceSatang: originalItem.unitPriceSatang,
+          lineNote: originalItem.lineNote ?? "",
+        },
+      ]),
+    );
+    expect(edited.items).toEqual([
+      expect.objectContaining({
+        id: originalItem.id,
+        quantity: newQuantity,
+      }),
+    ]);
+    const persistedItems = await context.db
+      .select({
+        id: orderItems.id,
+        quantity: orderItems.quantity,
+        position: orderItems.position,
+        active: orderItems.active,
+      })
+      .from(orderItems)
+      .where(
+        and(
+          eq(orderItems.ownerId, OWNER_ID),
+          eq(orderItems.orderId, original.id),
+        ),
+      )
+      .orderBy(orderItems.position, orderItems.id);
+    expect(persistedItems).toEqual(
+      expect.arrayContaining([
+        {
+          id: originalItem.id,
+          quantity: newQuantity,
+          position: 0,
+          active: true,
+        },
+        expect.objectContaining({
+          quantity: 99,
+          position: 1,
+          active: false,
+        }),
+      ]),
+    );
+    const archived = persistedItems.find((item) => !item.active)!;
+
+    const previewBeforeArchivedMutation = await createPlanningQueryService(
+      context.db,
+      { now: () => new Date(RELOCKED_AT) },
+    ).preview(OWNER_ID, scenario.cycleId);
+    expect(previewBeforeArchivedMutation.productPlans[0]).toMatchObject({
+      orderedQuantity: "12",
+    });
+    await context.db
+      .update(orderItems)
+      .set({ quantity: 123 })
+      .where(eq(orderItems.id, archived.id));
+    const previewAfterArchivedMutation = await createPlanningQueryService(
+      context.db,
+      { now: () => new Date(RELOCKED_AT) },
+    ).preview(OWNER_ID, scenario.cycleId);
+    expect(previewAfterArchivedMutation.inputFingerprint).toBe(
+      previewBeforeArchivedMutation.inputFingerprint,
+    );
+    expect(previewAfterArchivedMutation.productPlans[0]).toMatchObject({
+      orderedQuantity: "12",
+    });
+
+    const second = await commands.lock(OWNER_ID, {
+      cycleId: scenario.cycleId,
+      inputFingerprint: previewAfterArchivedMutation.inputFingerprint,
+      lockRequestId: "22222222-2222-4222-8222-222222222222",
+      overrides: [],
+    });
+    expect(second).toMatchObject({ generation: 2, status: "ACTIVE" });
+    const [firstViewAfterEdit, secondView] = await Promise.all([
+      queries.getGeneration(OWNER_ID, scenario.cycleId, 1),
+      queries.getGeneration(OWNER_ID, scenario.cycleId, 2),
+    ]);
+    expect(firstViewAfterEdit).toEqual({
+      ...firstViewBeforeEdit,
+      status: "SUPERSEDED",
+      unlockedAt: UNLOCKED_AT,
+      unlockReason: "แก้จำนวนหลังปลดล็อก",
+      unlockedFromStatus: "LOCKED",
+    });
+    expect(
+      firstViewAfterEdit.orders.find((order) => order.id === original.id)
+        ?.items,
+    ).toEqual([
+      expect.objectContaining({
+        id: originalItem.id,
+        quantity: originalItem.quantity,
+      }),
+    ]);
+    expect(
+      secondView.orders.find((order) => order.id === original.id)?.items,
+    ).toEqual([
+      expect.objectContaining({
+        id: originalItem.id,
+        quantity: newQuantity,
+      }),
+    ]);
+    expect(first.id).not.toBe(second.id);
+  });
+
+  it("unlocks an in-production cycle and records its source status", async () => {
+    const scenario = await seedPlanningScenario(context.db);
+    const preview = await createPlanningQueryService(context.db, {
+      now: () => new Date(LOCKED_AT),
+    }).preview(OWNER_ID, scenario.cycleId);
+    const instants = [LOCKED_AT, UNLOCKED_AT];
+    const commands = createPlanningCommandService(context.db, {
+      now: () => new Date(instants.shift()!),
+    });
+    const locked = await commands.lock(OWNER_ID, {
+      cycleId: scenario.cycleId,
+      inputFingerprint: preview.inputFingerprint,
+      lockRequestId: "30303030-3030-4030-8030-303030303030",
+      overrides: [],
+    });
+    await createCycleService(context.db).changeStatus(
+      OWNER_ID,
+      scenario.cycleId,
+      "IN_PRODUCTION",
+    );
+
+    await expect(
+      commands.unlock(OWNER_ID, {
+        cycleId: scenario.cycleId,
+        reason: "ปรับยอดผลิต",
+        confirmation: "ปลดล็อก",
+      }),
+    ).resolves.toMatchObject({
+      id: locked.id,
+      status: "SUPERSEDED",
+      unlockedFromStatus: "IN_PRODUCTION",
+    });
+    await expect(
+      createCycleService(context.db).get(OWNER_ID, scenario.cycleId),
+    ).resolves.toMatchObject({
+      status: "OPEN",
+      activePlanningSnapshotId: null,
+      lockedAt: null,
+    });
+  });
+
+  it.each(["OPEN", "COMPLETED", "CANCELLED"] as const)(
+    "rejects unlock from %s without changing snapshot metadata",
+    async (status) => {
+      const scenario = await seedPlanningScenario(context.db);
+      const commands = createPlanningCommandService(context.db, {
+        now: () => new Date(LOCKED_AT),
+      });
+      let lockedId: string | null = null;
+      if (status !== "OPEN") {
+        const preview = await createPlanningQueryService(context.db, {
+          now: () => new Date(LOCKED_AT),
+        }).preview(OWNER_ID, scenario.cycleId);
+        const locked = await commands.lock(OWNER_ID, {
+          cycleId: scenario.cycleId,
+          inputFingerprint: preview.inputFingerprint,
+          lockRequestId:
+            status === "COMPLETED"
+              ? "40404040-4040-4040-8040-404040404040"
+              : "50505050-5050-4050-8050-505050505050",
+          overrides: [],
+        });
+        lockedId = locked.id;
+        await context.db
+          .update(bakeCycles)
+          .set({ status })
+          .where(
+            and(
+              eq(bakeCycles.ownerId, OWNER_ID),
+              eq(bakeCycles.id, scenario.cycleId),
+            ),
+          );
+      }
+      const snapshotBefore = lockedId
+        ? await context.db
+            .select()
+            .from(cyclePlanningSnapshots)
+            .where(eq(cyclePlanningSnapshots.id, lockedId))
+        : [];
+
+      await expect(
+        commands.unlock(OWNER_ID, {
+          cycleId: scenario.cycleId,
+          reason: "ไม่ควรถูกบันทึก",
+          confirmation: "ปลดล็อก",
+        }),
+      ).rejects.toThrow("Cycle cannot be unlocked");
+
+      expect(
+        lockedId
+          ? await context.db
+              .select()
+              .from(cyclePlanningSnapshots)
+              .where(eq(cyclePlanningSnapshots.id, lockedId))
+          : [],
+      ).toEqual(snapshotBefore);
+      await expect(
+        createCycleService(context.db).get(OWNER_ID, scenario.cycleId),
+      ).resolves.toMatchObject({ status });
+    },
+  );
+
+  it("validates unlock input before opening a transaction", async () => {
+    let transactionCalls = 0;
+    const observedDb = new Proxy(context.db, {
+      get(target, property, receiver) {
+        if (property !== "transaction") {
+          return Reflect.get(target, property, receiver);
+        }
+        return (...args: unknown[]) => {
+          transactionCalls += 1;
+          return Reflect.apply(target.transaction, target, args);
+        };
+      },
+    }) as DatabaseClient;
+    const commands = createPlanningCommandService(observedDb);
+
+    await expect(
+      commands.unlock(OWNER_ID, {
+        cycleId: "10000000-0000-4000-8000-000000000009",
+        reason: "   ",
+        confirmation: "wrong" as "ปลดล็อก",
+      }),
+    ).rejects.toThrow("Invalid planning unlock input");
+    expect(transactionCalls).toBe(0);
+  });
+
+  it("owner-scopes unlock and leaves another owner's active generation unchanged", async () => {
+    const scenario = await seedPlanningScenario(context.db);
+    const preview = await createPlanningQueryService(context.db, {
+      now: () => new Date(LOCKED_AT),
+    }).preview(OWNER_ID, scenario.cycleId);
+    const commands = createPlanningCommandService(context.db, {
+      now: () => new Date(LOCKED_AT),
+    });
+    const locked = await commands.lock(OWNER_ID, {
+      cycleId: scenario.cycleId,
+      inputFingerprint: preview.inputFingerprint,
+      lockRequestId: "60606060-6060-4060-8060-606060606060",
+      overrides: [],
+    });
+
+    await expect(
+      commands.unlock(OTHER_OWNER_ID, {
+        cycleId: scenario.cycleId,
+        reason: "cross-owner",
+        confirmation: "ปลดล็อก",
+      }),
+    ).rejects.toThrow("Cycle not found");
+    await expect(
+      createPlanningQueryService(context.db).getGeneration(
+        OWNER_ID,
+        scenario.cycleId,
+      ),
+    ).resolves.toMatchObject({ id: locked.id, status: "ACTIVE" });
+  });
 
   it("locks one complete normalized generation with copied settings and source lineage", async () => {
     const scenario = await seedPlanningScenario(context.db);

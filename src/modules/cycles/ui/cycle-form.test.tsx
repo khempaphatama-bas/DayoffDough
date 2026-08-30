@@ -22,6 +22,8 @@ const CYCLE: BakeCycle = {
   targetProductionDate: "2026-08-29",
   primaryDeliveryDate: "2026-08-30",
   notes: "อบช่วงเช้า",
+  lockedAt: null,
+  activePlanningSnapshotId: null,
   createdAt: new Date("2026-08-20T00:00:00.000Z"),
   updatedAt: new Date("2026-08-21T00:00:00.000Z"),
 };

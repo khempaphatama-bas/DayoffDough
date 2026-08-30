@@ -11,9 +11,11 @@ import { z } from "zod";
 import type { DatabaseClient } from "@/lib/db/types";
 import {
   lockOwnedBakeCycle,
+  lockOwnedBakeCycles,
   lockOwnedOrder,
 } from "@/lib/db/row-locks";
 import { customers } from "@/modules/customers/db/schema";
+import type { BakeCycleStatus } from "@/modules/cycles/application/cycles";
 import { bakeCycles } from "@/modules/cycles/db/schema";
 import { deliveryMethods } from "@/modules/delivery/db/schema";
 import {
@@ -110,6 +112,7 @@ export type OrderDetail = Readonly<{
   customerName: string;
   bakeCycleId: string;
   cycleName: string;
+  cycleStatus: BakeCycleStatus;
   sourceChannel: (typeof orderSourceChannel)[number] | null;
   requestedDeliveryDate: string | null;
   confirmedDeliveryDate: string | null;
@@ -234,6 +237,10 @@ const fulfillmentFlow: ReadonlyArray<OrderFulfillmentStatus> = [
 type OrderRow = typeof orders.$inferSelect;
 type OrderWriteInput = z.infer<typeof orderInputSchema>;
 type QueryReader = Pick<DatabaseClient, "select">;
+type OrderItemWriter = Pick<
+  DatabaseClient,
+  "select" | "update" | "insert"
+>;
 
 function parseOrderWrite(
   ownerId: string,
@@ -253,6 +260,51 @@ function parseOrderWrite(
     input: parsedInput.data,
     totals: calculateOrderTotals(parsedInput.data),
   };
+}
+
+function isProductionEditable(status: BakeCycleStatus): boolean {
+  return status === "DRAFT" || status === "OPEN";
+}
+
+function sameOrderItems(
+  current: OrderDetail["items"],
+  next: OrderWriteInput["items"],
+): boolean {
+  return (
+    current.length === next.length &&
+    current.every((item, index) => {
+      const nextItem = next[index];
+      return (
+        nextItem !== undefined &&
+        item.productId === nextItem.productId &&
+        item.quantity === nextItem.quantity &&
+        item.unitPriceSatang === nextItem.unitPriceSatang &&
+        (item.lineNote ?? "") === (nextItem.lineNote ?? "")
+      );
+    })
+  );
+}
+
+function productionInputChanged(
+  current: OrderDetail,
+  next: OrderWriteInput,
+): boolean {
+  return (
+    current.customerId !== next.customerId ||
+    current.bakeCycleId !== next.bakeCycleId ||
+    current.sourceChannel !== next.sourceChannel ||
+    current.requestedDeliveryDate !== next.requestedDeliveryDate ||
+    current.confirmedDeliveryDate !== next.confirmedDeliveryDate ||
+    current.deliveryMethodId !== next.deliveryMethodId ||
+    (current.deliveryLocation ?? "") !== next.deliveryLocation ||
+    (current.deliveryNote ?? "") !== next.deliveryNote ||
+    (current.specialInstructions ?? "") !== next.specialInstructions ||
+    current.deliveryFeeChargedSatang !== next.deliveryFeeChargedSatang ||
+    current.deliveryCostSatang !== next.deliveryCostSatang ||
+    current.deliveryFeePayer !== next.deliveryFeePayer ||
+    current.discountSatang !== next.discountSatang ||
+    !sameOrderItems(current.items, next.items)
+  );
 }
 
 function checkedSummaryAdd(left: number, right: number): number {
@@ -287,12 +339,6 @@ async function validateOwnedReferences(
     )
     .limit(1);
   if (!customer) throw new Error("Customer not found");
-
-  const cycle = await lockOwnedBakeCycle(reader, ownerId, input.bakeCycleId);
-  if (!cycle) throw new Error("Cycle not found");
-  if (cycle.status === "CANCELLED") {
-    throw new Error("Cancelled cycle cannot accept orders");
-  }
 
   const productIds = [...new Set(input.items.map((item) => item.productId))];
   const productRows = await reader
@@ -351,7 +397,11 @@ async function buildOrderDetails(
       ),
     );
   const cycleRows = await reader
-    .select({ id: bakeCycles.id, name: bakeCycles.name })
+    .select({
+      id: bakeCycles.id,
+      name: bakeCycles.name,
+      status: bakeCycles.status,
+    })
     .from(bakeCycles)
     .where(
       and(
@@ -378,9 +428,14 @@ async function buildOrderDetails(
       and(
         eq(orderItems.ownerId, ownerId),
         inArray(orderItems.orderId, orderIds),
+        eq(orderItems.active, true),
       ),
     )
-    .orderBy(asc(orderItems.createdAt));
+    .orderBy(
+      asc(orderItems.orderId),
+      asc(orderItems.position),
+      asc(orderItems.id),
+    );
   const productIds = [...new Set(itemRows.map((item) => item.productId))];
   const productRows =
     productIds.length === 0
@@ -400,6 +455,9 @@ async function buildOrderDetails(
   );
   const cycleNameById = new Map(
     cycleRows.map((cycle) => [cycle.id, cycle.name]),
+  );
+  const cycleStatusById = new Map(
+    cycleRows.map((cycle) => [cycle.id, cycle.status]),
   );
   const methodNameById = new Map(
     methodRows.map((method) => [method.id, method.name]),
@@ -428,6 +486,7 @@ async function buildOrderDetails(
       customerName:
         customerNameById.get(order.customerId) ?? "Unknown customer",
       cycleName: cycleNameById.get(order.bakeCycleId) ?? "Unknown cycle",
+      cycleStatus: cycleStatusById.get(order.bakeCycleId) ?? "CANCELLED",
       deliveryMethodName:
         order.deliveryMethodId === null
           ? null
@@ -459,6 +518,113 @@ async function requireOrderDetail(
   const [detail] = await buildOrderDetails(reader, ownerId, [order]);
   if (!detail) throw new Error("Order not found");
   return detail;
+}
+
+type LockedBakeCycle = NonNullable<
+  Awaited<ReturnType<typeof lockOwnedBakeCycle>>
+>;
+
+async function lockExistingOrderAndCycles(
+  reader: QueryReader,
+  ownerId: string,
+  orderId: string,
+  requestedCycleId?: string,
+): Promise<Readonly<{
+  order: OrderRow;
+  cyclesById: ReadonlyMap<string, LockedBakeCycle>;
+}>> {
+  const [observed] = await reader
+    .select({ id: orders.id, bakeCycleId: orders.bakeCycleId })
+    .from(orders)
+    .where(and(eq(orders.ownerId, ownerId), eq(orders.id, orderId)))
+    .limit(1);
+  if (!observed) throw new Error("Order not found");
+
+  const cycleIds = [
+    observed.bakeCycleId,
+    ...(requestedCycleId === undefined ? [] : [requestedCycleId]),
+  ];
+  const expectedCycleIds = [...new Set(cycleIds)];
+  const lockedCycles = await lockOwnedBakeCycles(
+    reader,
+    ownerId,
+    expectedCycleIds,
+  );
+  if (lockedCycles.length !== expectedCycleIds.length) {
+    throw new Error("Cycle not found");
+  }
+
+  const order = await lockOwnedOrder(reader, ownerId, orderId);
+  if (!order) throw new Error("Order not found");
+  if (order.bakeCycleId !== observed.bakeCycleId) {
+    throw new Error("Order changed while locking");
+  }
+  return {
+    order,
+    cyclesById: new Map(lockedCycles.map((cycle) => [cycle.id, cycle])),
+  };
+}
+
+async function reconcileOrderItems(
+  writer: OrderItemWriter,
+  ownerId: string,
+  orderId: string,
+  currentItems: OrderDetail["items"],
+  nextItems: OrderWriteInput["items"],
+): Promise<void> {
+  const archivedIds = currentItems.flatMap((current, position) => {
+    const next = nextItems[position];
+    return next?.productId === current.productId ? [] : [current.id];
+  });
+  if (archivedIds.length > 0) {
+    await writer
+      .update(orderItems)
+      .set({ active: false, updatedAt: new Date() })
+      .where(
+        and(
+          eq(orderItems.ownerId, ownerId),
+          eq(orderItems.orderId, orderId),
+          inArray(orderItems.id, archivedIds),
+          eq(orderItems.active, true),
+        ),
+      );
+  }
+
+  for (const [position, next] of nextItems.entries()) {
+    const current = currentItems[position];
+    if (current?.productId === next.productId) {
+      const [updated] = await writer
+        .update(orderItems)
+        .set({
+          quantity: next.quantity,
+          unitPriceSatang: next.unitPriceSatang,
+          lineNote: next.lineNote ?? null,
+          position,
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(orderItems.ownerId, ownerId),
+            eq(orderItems.orderId, orderId),
+            eq(orderItems.id, current.id),
+            eq(orderItems.active, true),
+          ),
+        )
+        .returning({ id: orderItems.id });
+      if (!updated) throw new Error("Order items changed");
+      continue;
+    }
+    await writer.insert(orderItems).values({
+      ownerId,
+      orderId,
+      productId: next.productId,
+      quantity: next.quantity,
+      unitPriceSatang: next.unitPriceSatang,
+      lineNote: next.lineNote ?? null,
+      position,
+      active: true,
+    });
+  }
 }
 
 export function createOrderService(db: DatabaseClient) {
@@ -521,6 +687,7 @@ export function createOrderService(db: DatabaseClient) {
         and(
           eq(orderItems.ownerId, parsedOwnerId.data),
           inArray(orderItems.orderId, orderIds),
+          eq(orderItems.active, true),
         ),
       );
     const productIds = [...new Set(itemRows.map((item) => item.productId))];
@@ -642,17 +809,17 @@ export function createOrderService(db: DatabaseClient) {
     }
 
     return db.transaction(async (tx) => {
-      const [existing] = await tx
-        .select({ fulfillmentStatus: orders.fulfillmentStatus })
-        .from(orders)
-        .where(
-          and(
-            eq(orders.ownerId, parsedOwnerId.data),
-            eq(orders.id, parsedOrderId.data),
-          ),
-        )
-        .limit(1);
-      if (!existing) throw new Error("Order not found");
+      const locked = await lockExistingOrderAndCycles(
+        tx,
+        parsedOwnerId.data,
+        parsedOrderId.data,
+      );
+      const existing = locked.order;
+      const cycle = locked.cyclesById.get(existing.bakeCycleId);
+      if (!cycle) throw new Error("Cycle not found");
+      if (explicitCancellation && !isProductionEditable(cycle.status)) {
+        throw new Error("Cycle production inputs are locked");
+      }
 
       const currentStatus =
         existing.fulfillmentStatus as OrderFulfillmentStatus;
@@ -711,7 +878,7 @@ export function createOrderService(db: DatabaseClient) {
     }
 
     return db.transaction(async (tx) => {
-      const existing = await lockOwnedOrder(
+      const { order: existing } = await lockExistingOrderAndCycles(
         tx,
         parsedOwnerId.data,
         parsedOrderId.data,
@@ -874,6 +1041,15 @@ export function createOrderService(db: DatabaseClient) {
     async create(ownerId: string, input: OrderInput): Promise<OrderDetail> {
       const parsed = parseOrderWrite(ownerId, input);
       return db.transaction(async (tx) => {
+        const [cycle] = await lockOwnedBakeCycles(
+          tx,
+          parsed.ownerId,
+          [parsed.input.bakeCycleId],
+        );
+        if (!cycle) throw new Error("Cycle not found");
+        if (!isProductionEditable(cycle.status)) {
+          throw new Error("Cycle production inputs are locked");
+        }
         await validateOwnedReferences(tx, parsed.ownerId, parsed.input);
         const { items, ...header } = parsed.input;
         const [order] = await tx
@@ -886,13 +1062,14 @@ export function createOrderService(db: DatabaseClient) {
           .returning({ id: orders.id });
         if (!order) throw new Error("Failed to create order");
         await tx.insert(orderItems).values(
-          items.map((item) => ({
+          items.map((item, position) => ({
             ownerId: parsed.ownerId,
             orderId: order.id,
             productId: item.productId,
             quantity: item.quantity,
             unitPriceSatang: item.unitPriceSatang,
             lineNote: item.lineNote ?? null,
+            position,
           })),
         );
         return requireOrderDetail(tx, parsed.ownerId, order.id);
@@ -909,12 +1086,38 @@ export function createOrderService(db: DatabaseClient) {
       if (!parsedOrderId.success) throw new Error("Order not found");
 
       return db.transaction(async (tx) => {
-        const existing = await lockOwnedOrder(
+        const locked = await lockExistingOrderAndCycles(
+          tx,
+          parsed.ownerId,
+          parsedOrderId.data,
+          parsed.input.bakeCycleId,
+        );
+        const existing = locked.order;
+        const current = await requireOrderDetail(
           tx,
           parsed.ownerId,
           parsedOrderId.data,
         );
-        if (!existing) throw new Error("Order not found");
+        const productionChanged = productionInputChanged(
+          current,
+          parsed.input,
+        );
+        const itemsChanged = !sameOrderItems(current.items, parsed.input.items);
+        if (productionChanged) {
+          const sourceCycle = locked.cyclesById.get(existing.bakeCycleId);
+          const destinationCycle = locked.cyclesById.get(
+            parsed.input.bakeCycleId,
+          );
+          if (!sourceCycle || !destinationCycle) {
+            throw new Error("Cycle not found");
+          }
+          if (
+            !isProductionEditable(sourceCycle.status) ||
+            !isProductionEditable(destinationCycle.status)
+          ) {
+            throw new Error("Cycle production inputs are locked");
+          }
+        }
 
         await validateOwnedReferences(tx, parsed.ownerId, parsed.input);
         const { items, ...header } = parsed.input;
@@ -932,29 +1135,21 @@ export function createOrderService(db: DatabaseClient) {
             and(
               eq(orders.ownerId, parsed.ownerId),
               eq(orders.id, parsedOrderId.data),
+              eq(orders.bakeCycleId, existing.bakeCycleId),
               eq(orders.paymentStatus, existing.paymentStatus),
             ),
           )
           .returning({ id: orders.id });
         if (!updated) throw new Error("Payment status changed");
-        await tx
-          .delete(orderItems)
-          .where(
-            and(
-              eq(orderItems.ownerId, parsed.ownerId),
-              eq(orderItems.orderId, parsedOrderId.data),
-            ),
+        if (itemsChanged) {
+          await reconcileOrderItems(
+            tx,
+            parsed.ownerId,
+            parsedOrderId.data,
+            current.items,
+            items,
           );
-        await tx.insert(orderItems).values(
-          items.map((item) => ({
-            ownerId: parsed.ownerId,
-            orderId: parsedOrderId.data,
-            productId: item.productId,
-            quantity: item.quantity,
-            unitPriceSatang: item.unitPriceSatang,
-            lineNote: item.lineNote ?? null,
-          })),
-        );
+        }
         return requireOrderDetail(tx, parsed.ownerId, parsedOrderId.data);
       });
     },
@@ -1047,7 +1242,7 @@ export function createOrderService(db: DatabaseClient) {
       }
 
       return db.transaction(async (tx) => {
-        const existing = await lockOwnedOrder(
+        const { order: existing } = await lockExistingOrderAndCycles(
           tx,
           parsedOwnerId.data,
           parsedOrderId.data,

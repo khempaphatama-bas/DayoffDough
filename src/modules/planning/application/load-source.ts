@@ -99,9 +99,14 @@ export async function loadPlanningSource(
             and(
               eq(orderItems.ownerId, verifiedOwnerId),
               inArray(orderItems.orderId, orderIds),
+              eq(orderItems.active, true),
             ),
           )
-          .orderBy(asc(orderItems.id));
+          .orderBy(
+            asc(orderItems.orderId),
+            asc(orderItems.position),
+            asc(orderItems.id),
+          );
 
   const customerIds = uniqueIds(orderRows.map((order) => order.customerId));
   const customerRows =

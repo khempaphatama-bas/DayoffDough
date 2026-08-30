@@ -9,6 +9,8 @@ import { createPlanningFingerprint } from "@/modules/planning/domain/fingerprint
 import {
   lockCycleInputSchema,
   type LockCycleInput,
+  unlockCycleInputSchema,
+  type UnlockCycleInput,
 } from "@/modules/planning/domain/lock-form";
 import type { PlanningIssue } from "@/modules/planning/domain/types";
 import { loadPlanningSource } from "./load-source";
@@ -46,6 +48,101 @@ export function createPlanningCommandService(
   clock: PlanningClock = { now: () => new Date() },
 ) {
   return {
+    async unlock(
+      ownerId: string,
+      input: UnlockCycleInput,
+    ): Promise<PlanningGenerationSummary> {
+      const parsedOwnerId = z.string().uuid().safeParse(ownerId);
+      const parsedInput = unlockCycleInputSchema.safeParse(input);
+      if (!parsedOwnerId.success || !parsedInput.success) {
+        throw new PlanningStateError("Invalid planning unlock input");
+      }
+      const verifiedOwnerId = parsedOwnerId.data;
+      const verifiedInput = parsedInput.data;
+
+      return db.transaction(async (tx) => {
+        const cycle = await lockOwnedBakeCycle(
+          tx,
+          verifiedOwnerId,
+          verifiedInput.cycleId,
+        );
+        if (!cycle) throw new Error("Cycle not found");
+        if (
+          (cycle.status !== "LOCKED" &&
+            cycle.status !== "IN_PRODUCTION") ||
+          cycle.activePlanningSnapshotId === null
+        ) {
+          throw new PlanningStateError("Cycle cannot be unlocked");
+        }
+
+        const [activeSnapshot] = await tx
+          .select()
+          .from(cyclePlanningSnapshots)
+          .where(
+            and(
+              eq(cyclePlanningSnapshots.ownerId, verifiedOwnerId),
+              eq(cyclePlanningSnapshots.bakeCycleId, cycle.id),
+              eq(
+                cyclePlanningSnapshots.id,
+                cycle.activePlanningSnapshotId,
+              ),
+            ),
+          )
+          .limit(1)
+          .for("update");
+        if (!activeSnapshot || activeSnapshot.status !== "ACTIVE") {
+          throw new PlanningStateError("Cycle cannot be unlocked");
+        }
+
+        const unlockedAt = clock.now();
+        const [superseded] = await tx
+          .update(cyclePlanningSnapshots)
+          .set({
+            status: "SUPERSEDED",
+            unlockedAt,
+            unlockReason: verifiedInput.reason,
+            unlockedFromStatus: cycle.status,
+          })
+          .where(
+            and(
+              eq(cyclePlanningSnapshots.ownerId, verifiedOwnerId),
+              eq(cyclePlanningSnapshots.bakeCycleId, cycle.id),
+              eq(cyclePlanningSnapshots.id, activeSnapshot.id),
+              eq(cyclePlanningSnapshots.status, "ACTIVE"),
+            ),
+          )
+          .returning();
+        if (!superseded) {
+          throw new PlanningStateError("Cycle changed while unlocking");
+        }
+
+        const [opened] = await tx
+          .update(bakeCycles)
+          .set({
+            status: "OPEN",
+            activePlanningSnapshotId: null,
+            lockedAt: null,
+            updatedAt: unlockedAt,
+          })
+          .where(
+            and(
+              eq(bakeCycles.ownerId, verifiedOwnerId),
+              eq(bakeCycles.id, cycle.id),
+              eq(bakeCycles.status, cycle.status),
+              eq(
+                bakeCycles.activePlanningSnapshotId,
+                activeSnapshot.id,
+              ),
+            ),
+          )
+          .returning({ id: bakeCycles.id });
+        if (!opened) {
+          throw new PlanningStateError("Cycle changed while unlocking");
+        }
+        return toGenerationSummary(superseded);
+      });
+    },
+
     async lock(
       ownerId: string,
       input: LockCycleInput,

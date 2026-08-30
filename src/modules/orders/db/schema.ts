@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+  boolean,
   check,
   date,
   foreignKey,
@@ -9,6 +10,7 @@ import {
   pgTable,
   timestamp,
   unique,
+  uniqueIndex,
   uuid,
   varchar,
 } from "drizzle-orm/pg-core";
@@ -162,6 +164,8 @@ export const orderItems = pgTable(
     quantity: integer("quantity").notNull(),
     unitPriceSatang: integer("unit_price_satang").notNull(),
     lineNote: varchar("line_note", { length: 2000 }),
+    position: integer("position").notNull(),
+    active: boolean("active").notNull().default(true),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
       .notNull()
       .defaultNow(),
@@ -193,7 +197,11 @@ export const orderItems = pgTable(
       foreignColumns: [products.ownerId, products.id],
     }).onDelete("restrict"),
     index("order_items_owner_order_idx").on(table.ownerId, table.orderId),
+    uniqueIndex("order_items_owner_order_active_position_unique")
+      .on(table.ownerId, table.orderId, table.position)
+      .where(sql`${table.active} = true`),
     check("order_items_quantity_positive", sql`${table.quantity} > 0`),
+    check("order_items_position_non_negative", sql`${table.position} >= 0`),
     check(
       "order_items_unit_price_non_negative",
       sql`${table.unitPriceSatang} >= 0`,

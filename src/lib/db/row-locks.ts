@@ -21,6 +21,22 @@ export async function lockOwnedBakeCycle(
   return cycle;
 }
 
+export async function lockOwnedBakeCycles(
+  reader: LockingReader,
+  ownerId: string,
+  cycleIds: ReadonlyArray<string>,
+) {
+  const cycles: Array<NonNullable<Awaited<ReturnType<typeof lockOwnedBakeCycle>>>> = [];
+  const sortedCycleIds = [...new Set(cycleIds)].sort((left, right) =>
+    left.localeCompare(right),
+  );
+  for (const cycleId of sortedCycleIds) {
+    const cycle = await lockOwnedBakeCycle(reader, ownerId, cycleId);
+    if (cycle) cycles.push(cycle);
+  }
+  return cycles;
+}
+
 export async function lockOwnedOrder(
   reader: LockingReader,
   ownerId: string,

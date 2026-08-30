@@ -581,6 +581,7 @@ describe("planning query service", () => {
       productId: secondProduct.productId,
       quantity: 1,
       unitPriceSatang: 10_000,
+      position: 1,
     });
     queries.length = 0;
 

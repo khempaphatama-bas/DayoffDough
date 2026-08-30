@@ -2,14 +2,20 @@ import { and, desc, eq, ilike } from "drizzle-orm";
 import { z } from "zod";
 import type { DatabaseClient } from "@/lib/db/types";
 import { lockOwnedBakeCycle } from "@/lib/db/row-locks";
-import { bakeCycles } from "@/modules/cycles/db/schema";
+import { bakeCycles, bakeCycleStatus } from "@/modules/cycles/db/schema";
 
-export type Phase2CycleStatus =
-  | "DRAFT"
-  | "OPEN"
-  | "IN_PRODUCTION"
-  | "COMPLETED"
-  | "CANCELLED";
+export type BakeCycleStatus = (typeof bakeCycleStatus)[number];
+
+export const BAKE_CYCLE_STATUS_TRANSITIONS = {
+  DRAFT: ["OPEN", "CANCELLED"],
+  OPEN: ["DRAFT", "CANCELLED"],
+  LOCKED: ["IN_PRODUCTION", "CANCELLED"],
+  IN_PRODUCTION: ["COMPLETED", "CANCELLED"],
+  COMPLETED: [],
+  CANCELLED: [],
+} as const satisfies Readonly<
+  Record<BakeCycleStatus, ReadonlyArray<BakeCycleStatus>>
+>;
 
 export type BakeCycleInput = Readonly<{
   name: string;
@@ -24,27 +30,21 @@ export type BakeCycle = Readonly<{
   ownerId: string;
   cycleNumber: number;
   name: string;
-  status: Phase2CycleStatus;
+  status: BakeCycleStatus;
   orderCutoffAt: Date | null;
   targetProductionDate: string;
   primaryDeliveryDate: string;
   notes: string | null;
+  lockedAt: Date | null;
+  activePlanningSnapshotId: string | null;
   createdAt: Date;
   updatedAt: Date;
 }>;
 
 export type BakeCycleFilters = Readonly<{
   query?: string;
-  status?: Phase2CycleStatus;
+  status?: BakeCycleStatus;
 }>;
-
-const PHASE_2_STATUSES = [
-  "DRAFT",
-  "OPEN",
-  "IN_PRODUCTION",
-  "COMPLETED",
-  "CANCELLED",
-] as const satisfies ReadonlyArray<Phase2CycleStatus>;
 
 const uuidSchema = z.string().uuid();
 const cycleInputSchema = z.object({
@@ -57,10 +57,10 @@ const cycleInputSchema = z.object({
 const cycleCreateSchema = cycleInputSchema.extend({
   status: z.enum(["DRAFT", "OPEN"]),
 });
-const phase2StatusSchema = z.enum(PHASE_2_STATUSES);
+const bakeCycleStatusSchema = z.enum(bakeCycleStatus);
 const cycleFiltersSchema = z.object({
   query: z.string().trim().max(200).optional(),
-  status: phase2StatusSchema.optional(),
+  status: bakeCycleStatusSchema.optional(),
 });
 
 function toBakeCycle(row: typeof bakeCycles.$inferSelect): BakeCycle {
@@ -69,11 +69,13 @@ function toBakeCycle(row: typeof bakeCycles.$inferSelect): BakeCycle {
     ownerId: row.ownerId,
     cycleNumber: row.cycleNumber,
     name: row.name,
-    status: row.status as Phase2CycleStatus,
+    status: row.status,
     orderCutoffAt: row.orderCutoffAt,
     targetProductionDate: row.targetProductionDate,
     primaryDeliveryDate: row.primaryDeliveryDate,
     notes: row.notes,
+    lockedAt: row.lockedAt,
+    activePlanningSnapshotId: row.activePlanningSnapshotId,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -113,35 +115,47 @@ export function createCycleService(db: DatabaseClient) {
       if (!parsedOwnerId.success || !parsedCycleId.success || !parsed.success) {
         throw new Error("Invalid cycle");
       }
-      const [row] = await db
-        .update(bakeCycles)
-        .set({
-          ...parsed.data,
-          notes: parsed.data.notes ?? null,
-          updatedAt: new Date(),
-        })
-        .where(
-          and(
-            eq(bakeCycles.ownerId, parsedOwnerId.data),
-            eq(bakeCycles.id, parsedCycleId.data),
-          ),
-        )
-        .returning();
-      if (!row) throw new Error("Cycle not found");
-      return toBakeCycle(row);
+      return db.transaction(async (tx) => {
+        const existing = await lockOwnedBakeCycle(
+          tx,
+          parsedOwnerId.data,
+          parsedCycleId.data,
+        );
+        if (!existing) throw new Error("Cycle not found");
+        if (existing.status !== "DRAFT" && existing.status !== "OPEN") {
+          throw new Error("Cycle must be open for editing");
+        }
+        const [row] = await tx
+          .update(bakeCycles)
+          .set({
+            ...parsed.data,
+            notes: parsed.data.notes ?? null,
+            updatedAt: new Date(),
+          })
+          .where(
+            and(
+              eq(bakeCycles.ownerId, parsedOwnerId.data),
+              eq(bakeCycles.id, parsedCycleId.data),
+              eq(bakeCycles.status, existing.status),
+            ),
+          )
+          .returning();
+        if (!row) throw new Error("Cycle must be open for editing");
+        return toBakeCycle(row);
+      });
     },
 
     async changeStatus(
       ownerId: string,
       cycleId: string,
-      status: Phase2CycleStatus | "LOCKED",
+      status: BakeCycleStatus,
     ): Promise<BakeCycle> {
       if (status === "LOCKED") {
         throw new Error("Cycle locking belongs to Phase 3");
       }
       const parsedOwnerId = uuidSchema.safeParse(ownerId);
       const parsedCycleId = uuidSchema.safeParse(cycleId);
-      const parsedStatus = phase2StatusSchema.safeParse(status);
+      const parsedStatus = bakeCycleStatusSchema.safeParse(status);
       if (
         !parsedOwnerId.success ||
         !parsedCycleId.success ||
@@ -156,6 +170,11 @@ export function createCycleService(db: DatabaseClient) {
           parsedCycleId.data,
         );
         if (!existing) throw new Error("Cycle not found");
+        const allowed = BAKE_CYCLE_STATUS_TRANSITIONS[existing.status] as
+          readonly BakeCycleStatus[];
+        if (!allowed.includes(parsedStatus.data)) {
+          throw new Error("Invalid cycle status transition");
+        }
 
         const [row] = await tx
           .update(bakeCycles)
@@ -164,6 +183,7 @@ export function createCycleService(db: DatabaseClient) {
             and(
               eq(bakeCycles.ownerId, parsedOwnerId.data),
               eq(bakeCycles.id, parsedCycleId.data),
+              eq(bakeCycles.status, existing.status),
             ),
           )
           .returning();

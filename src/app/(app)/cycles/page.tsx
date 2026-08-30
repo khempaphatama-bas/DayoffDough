@@ -3,8 +3,8 @@ import { requireOwner } from "@/lib/auth/require-owner";
 import { db } from "@/lib/db/client";
 import {
   type BakeCycleFilters,
+  type BakeCycleStatus,
   createCycleService,
-  type Phase2CycleStatus,
 } from "@/modules/cycles/application/cycles";
 import { CycleList } from "@/modules/cycles/ui/cycle-list";
 import { createOrderService } from "@/modules/orders/application/orders";
@@ -14,9 +14,10 @@ type CycleSearchParams = Readonly<{
   status?: string | ReadonlyArray<string>;
 }>;
 
-const PHASE_2_STATUSES: ReadonlyArray<Phase2CycleStatus> = [
+const BAKE_CYCLE_STATUSES: ReadonlyArray<BakeCycleStatus> = [
   "DRAFT",
   "OPEN",
+  "LOCKED",
   "IN_PRODUCTION",
   "COMPLETED",
   "CANCELLED",
@@ -26,8 +27,8 @@ function firstValue(value: string | ReadonlyArray<string> | undefined): string {
   return typeof value === "string" ? value : value?.[0] ?? "";
 }
 
-function isPhase2Status(value: string): value is Phase2CycleStatus {
-  return PHASE_2_STATUSES.some((status) => status === value);
+function isBakeCycleStatus(value: string): value is BakeCycleStatus {
+  return BAKE_CYCLE_STATUSES.some((status) => status === value);
 }
 
 export default async function CyclePage({
@@ -37,7 +38,7 @@ export default async function CyclePage({
   const search = await searchParams;
   const query = firstValue(search.query);
   const statusValue = firstValue(search.status);
-  const status = isPhase2Status(statusValue) ? statusValue : undefined;
+  const status = isBakeCycleStatus(statusValue) ? statusValue : undefined;
   const filters: BakeCycleFilters = {
     query,
     ...(status ? { status } : {}),

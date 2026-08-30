@@ -1,15 +1,25 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Logger } from "drizzle-orm/logger";
 import { OTHER_OWNER_ID, OWNER_ID } from "@tests/fixtures/owner";
+import { seedPlanningScenario } from "@tests/fixtures/planning";
 import { createTestDatabase } from "@tests/helpers/test-db";
 import type { DatabaseClient } from "@/lib/db/types";
 import { customers } from "@/modules/customers/db/schema";
 import { bakeCycles } from "@/modules/cycles/db/schema";
 import { deliveryMethods } from "@/modules/delivery/db/schema";
 import { orderItems, orders } from "@/modules/orders/db/schema";
+import {
+  createPlanningCommandService,
+  PlanningStaleError,
+} from "@/modules/planning/application/planning-commands";
+import { createPlanningQueryService } from "@/modules/planning/application/planning-queries";
 import { products } from "@/modules/products/db/schema";
-import { createOrderService, type OrderInput } from "./orders";
+import {
+  createOrderService,
+  type OrderDetail,
+  type OrderInput,
+} from "./orders";
 
 async function seedMasters(
   db: DatabaseClient,
@@ -113,6 +123,35 @@ function orderInput(
   };
 }
 
+function orderDetailInput(
+  detail: OrderDetail,
+  overrides: Partial<OrderInput> = {},
+): OrderInput {
+  return {
+    customerId: detail.customerId,
+    bakeCycleId: detail.bakeCycleId,
+    sourceChannel: detail.sourceChannel,
+    requestedDeliveryDate: detail.requestedDeliveryDate,
+    confirmedDeliveryDate: detail.confirmedDeliveryDate,
+    deliveryMethodId: detail.deliveryMethodId,
+    deliveryFeeChargedSatang: detail.deliveryFeeChargedSatang,
+    deliveryCostSatang: detail.deliveryCostSatang,
+    deliveryFeePayer: detail.deliveryFeePayer,
+    discountSatang: detail.discountSatang,
+    amountPaidSatang: detail.amountPaidSatang,
+    deliveryLocation: detail.deliveryLocation ?? "",
+    deliveryNote: detail.deliveryNote ?? "",
+    specialInstructions: detail.specialInstructions ?? "",
+    items: detail.items.map((item) => ({
+      productId: item.productId,
+      quantity: item.quantity,
+      unitPriceSatang: item.unitPriceSatang,
+      lineNote: item.lineNote ?? "",
+    })),
+    ...overrides,
+  };
+}
+
 describe("order service", () => {
   let context: Awaited<ReturnType<typeof createTestDatabase>>;
   let service: ReturnType<typeof createOrderService>;
@@ -158,7 +197,7 @@ describe("order service", () => {
       );
     await expect(
       service.create(OWNER_ID, orderInput(masters)),
-    ).rejects.toThrow("Cancelled cycle cannot accept orders");
+    ).rejects.toThrow("Cycle production inputs are locked");
   });
 
   it("serializes payment-state mutations with an order lock and compare-and-swap", async () => {
@@ -216,6 +255,269 @@ describe("order service", () => {
       paymentStatus: "PAID",
       amountPaidSatang: 62000,
     });
+  });
+
+  it("returns cycle status through the existing owner-scoped batched cycle lookup", async () => {
+    const queries: string[] = [];
+    await context.close();
+    context = await createTestDatabase({
+      logger: {
+        logQuery(query: string) {
+          queries.push(query.toLowerCase());
+        },
+      } satisfies Logger,
+    });
+    service = createOrderService(context.db);
+    const masters = await seedMasters(context.db);
+    const first = await service.create(OWNER_ID, orderInput(masters));
+    await service.create(OWNER_ID, orderInput(masters));
+    await context.db
+      .update(bakeCycles)
+      .set({ status: "LOCKED" })
+      .where(eq(bakeCycles.id, masters.cycle.id));
+
+    queries.length = 0;
+    const listed = await service.list(OWNER_ID);
+
+    expect(listed).toHaveLength(2);
+    expect(listed).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: first.id,
+          cycleName: masters.cycle.name,
+          cycleStatus: "LOCKED",
+        }),
+      ]),
+    );
+    const cycleQueries = queries.filter(
+      (query) =>
+        query.includes('from "bake_cycles"') &&
+        !query.includes("for update"),
+    );
+    expect(cycleQueries).toHaveLength(1);
+    expect(cycleQueries[0]).toContain('"status"');
+  });
+
+  it.each([
+    "LOCKED",
+    "IN_PRODUCTION",
+    "COMPLETED",
+    "CANCELLED",
+  ] as const)(
+    "freezes production inputs and cancellation while allowing money and forward progress in %s",
+    async (cycleStatus) => {
+      const masters = await seedMasters(context.db);
+      const created = await service.create(OWNER_ID, orderInput(masters));
+      const [destination] = await context.db
+        .insert(bakeCycles)
+        .values({
+          ownerId: OWNER_ID,
+          name: "Editable destination",
+          status: "OPEN",
+          targetProductionDate: "2026-09-05",
+          primaryDeliveryDate: "2026-09-06",
+        })
+        .returning();
+      await context.db
+        .update(bakeCycles)
+        .set({ status: cycleStatus })
+        .where(eq(bakeCycles.id, masters.cycle.id));
+      const beforeRejectedWrites = await service.get(OWNER_ID, created.id);
+      const [orderCountBefore] = await context.db
+        .select({ value: sql<number>`count(*)` })
+        .from(orders);
+
+      await expect(
+        service.create(OWNER_ID, orderInput(masters)),
+      ).rejects.toThrow("Cycle production inputs are locked");
+      await expect(
+        service.update(
+          OWNER_ID,
+          created.id,
+          orderInput(masters, { discountSatang: 3000 }),
+        ),
+      ).rejects.toThrow("Cycle production inputs are locked");
+      await expect(
+        service.update(
+          OWNER_ID,
+          created.id,
+          orderInput(masters, { bakeCycleId: destination!.id }),
+        ),
+      ).rejects.toThrow("Cycle production inputs are locked");
+      await expect(service.cancel(OWNER_ID, created.id)).rejects.toThrow(
+        "Cycle production inputs are locked",
+      );
+
+      expect(await service.get(OWNER_ID, created.id)).toEqual(
+        beforeRejectedWrites,
+      );
+      const [orderCountAfter] = await context.db
+        .select({ value: sql<number>`count(*)` })
+        .from(orders);
+      expect(orderCountAfter!.value).toBe(orderCountBefore!.value);
+      await expect(
+        context.db
+          .select({ status: bakeCycles.status })
+          .from(bakeCycles)
+          .where(eq(bakeCycles.id, masters.cycle.id)),
+      ).resolves.toEqual([{ status: cycleStatus }]);
+
+      const paid = await service.update(
+        OWNER_ID,
+        created.id,
+        orderInput(masters, {
+          amountPaidSatang: 62000,
+          items: [
+            {
+              productId: masters.focaccia.id,
+              quantity: 2,
+              unitPriceSatang: 22000,
+            },
+            {
+              productId: masters.scone.id,
+              quantity: 1,
+              unitPriceSatang: 8000,
+              lineNote: "ไม่อุ่น",
+            },
+          ],
+        }),
+      );
+      expect(paid).toMatchObject({
+        amountPaidSatang: 62000,
+        cycleStatus,
+      });
+      await expect(service.markRefunded(OWNER_ID, created.id)).resolves
+        .toMatchObject({ paymentStatus: "REFUNDED", cycleStatus });
+      await expect(
+        service.restorePaymentTracking(OWNER_ID, created.id),
+      ).resolves.toMatchObject({ paymentStatus: "PAID", cycleStatus });
+      await expect(
+        service.updateFulfillmentStatus(OWNER_ID, created.id, "PACKED"),
+      ).resolves.toMatchObject({
+        fulfillmentStatus: "PACKED",
+        cycleStatus,
+      });
+    },
+  );
+
+  it("rejects each individual frozen production-input mutation while normalizing line notes", async () => {
+    const masters = await seedMasters(context.db);
+    const created = await service.create(OWNER_ID, orderInput(masters));
+    const [alternateCustomer] = await context.db
+      .insert(customers)
+      .values({ ownerId: OWNER_ID, name: "Alternate customer" })
+      .returning();
+    const [alternateMethod] = await context.db
+      .insert(deliveryMethods)
+      .values({
+        ownerId: OWNER_ID,
+        name: "Alternate method",
+        defaultCustomerFeeSatang: 0,
+        defaultInternalCostSatang: 0,
+        requiresDeliveryLocation: false,
+      })
+      .returning();
+    const [alternateCycle] = await context.db
+      .insert(bakeCycles)
+      .values({
+        ownerId: OWNER_ID,
+        name: "Alternate cycle",
+        status: "OPEN",
+        targetProductionDate: "2026-09-05",
+        primaryDeliveryDate: "2026-09-06",
+      })
+      .returning();
+    await context.db
+      .update(bakeCycles)
+      .set({ status: "LOCKED" })
+      .where(eq(bakeCycles.id, masters.cycle.id));
+    const baseline = orderInput(masters);
+    const reversedItems = [...baseline.items].reverse();
+    const cases: ReadonlyArray<
+      readonly [string, Partial<OrderInput>]
+    > = [
+      ["customer", { customerId: alternateCustomer!.id }],
+      ["cycle", { bakeCycleId: alternateCycle!.id }],
+      ["source channel", { sourceChannel: "PHONE" }],
+      ["requested date", { requestedDeliveryDate: "2026-08-31" }],
+      ["confirmed date", { confirmedDeliveryDate: "2026-08-31" }],
+      ["delivery method", { deliveryMethodId: alternateMethod!.id }],
+      ["delivery location", { deliveryLocation: "เชียงใหม่" }],
+      ["delivery note", { deliveryNote: "วางหน้าบ้าน" }],
+      ["production note", { specialInstructions: "รวมถุง" }],
+      ["charged delivery fee", { deliveryFeeChargedSatang: 13000 }],
+      ["delivery cost", { deliveryCostSatang: 13000 }],
+      ["delivery fee payer", { deliveryFeePayer: "BAKERY" }],
+      ["discount", { discountSatang: 3000 }],
+      [
+        "item product",
+        {
+          items: [
+            { ...baseline.items[0]!, productId: masters.scone.id },
+            baseline.items[1]!,
+          ],
+        },
+      ],
+      [
+        "item quantity",
+        {
+          items: [
+            { ...baseline.items[0]!, quantity: 3 },
+            baseline.items[1]!,
+          ],
+        },
+      ],
+      [
+        "item unit price",
+        {
+          items: [
+            { ...baseline.items[0]!, unitPriceSatang: 23000 },
+            baseline.items[1]!,
+          ],
+        },
+      ],
+      [
+        "item line note",
+        {
+          items: [
+            { ...baseline.items[0]!, lineNote: "แพ็กเดี่ยว" },
+            baseline.items[1]!,
+          ],
+        },
+      ],
+      ["item order", { items: reversedItems }],
+    ];
+
+    const before = await service.get(OWNER_ID, created.id);
+    for (const [field, override] of cases) {
+      await expect(
+        service.update(
+          OWNER_ID,
+          created.id,
+          orderInput(masters, override),
+        ),
+        field,
+      ).rejects.toThrow("Cycle production inputs are locked");
+      expect(await service.get(OWNER_ID, created.id), field).toEqual(before);
+    }
+
+    await expect(
+      service.update(
+        OWNER_ID,
+        created.id,
+        orderInput(masters, {
+          amountPaidSatang: 21000,
+          items: [
+            {
+              productId: masters.focaccia.id,
+              quantity: 2,
+              unitPriceSatang: 22000,
+            },
+            baseline.items[1]!,
+          ],
+        }),
+      ),
+    ).resolves.toMatchObject({ amountPaidSatang: 21000 });
   });
 
   it("creates a multi-item order and keeps copied commercial values historical", async () => {
@@ -321,9 +623,109 @@ describe("order service", () => {
           and(
             eq(orderItems.ownerId, OWNER_ID),
             eq(orderItems.orderId, created.id),
+            eq(orderItems.active, true),
           ),
         ),
     ).toHaveLength(1);
+  });
+
+  it("reconciles ordered active items while preserving and archiving source rows", async () => {
+    const masters = await seedMasters(context.db);
+    const created = await service.create(OWNER_ID, orderInput(masters));
+    expect(created.items.map((item) => item.productId)).toEqual([
+      masters.focaccia.id,
+      masters.scone.id,
+    ]);
+    const originalItemIds = created.items.map((item) => item.id);
+
+    const quantityEdited = await service.update(
+      OWNER_ID,
+      created.id,
+      orderDetailInput(created, {
+        items: created.items.map((item, index) => ({
+          productId: item.productId,
+          quantity: index === 0 ? 3 : item.quantity,
+          unitPriceSatang: item.unitPriceSatang,
+          lineNote: item.lineNote ?? "",
+        })),
+      }),
+    );
+    expect(quantityEdited.items.map((item) => item.id)).toEqual(
+      originalItemIds,
+    );
+
+    const swapped = await service.update(
+      OWNER_ID,
+      created.id,
+      orderDetailInput(quantityEdited, {
+        items: [
+          {
+            productId: masters.scone.id,
+            quantity: 4,
+            unitPriceSatang: 9000,
+            lineNote: "แพ็กเดี่ยว",
+          },
+        ],
+      }),
+    );
+    expect(swapped.items).toEqual([
+      expect.objectContaining({
+        productId: masters.scone.id,
+        quantity: 4,
+        unitPriceSatang: 9000,
+        lineNote: "แพ็กเดี่ยว",
+      }),
+    ]);
+    expect(originalItemIds).not.toContain(swapped.items[0]!.id);
+
+    const persistedRows = await context.db
+      .select({
+        id: orderItems.id,
+        productId: orderItems.productId,
+        quantity: orderItems.quantity,
+        position: orderItems.position,
+        active: orderItems.active,
+      })
+      .from(orderItems)
+      .where(
+        and(
+          eq(orderItems.ownerId, OWNER_ID),
+          eq(orderItems.orderId, created.id),
+        ),
+      )
+      .orderBy(orderItems.position, orderItems.id);
+    expect(persistedRows).toHaveLength(3);
+    expect(
+      persistedRows.filter((item) => item.active),
+    ).toEqual([
+      {
+        id: swapped.items[0]!.id,
+        productId: masters.scone.id,
+        quantity: 4,
+        position: 0,
+        active: true,
+      },
+    ]);
+    expect(
+      persistedRows
+        .filter((item) => !item.active)
+        .map(({ id, position, active }) => ({ id, position, active })),
+    ).toEqual(
+      expect.arrayContaining([
+        { id: originalItemIds[0], position: 0, active: false },
+        { id: originalItemIds[1], position: 1, active: false },
+      ]),
+    );
+    await expect(
+      service.getCycleSummary(OWNER_ID, masters.cycle.id),
+    ).resolves.toMatchObject({
+      demand: [
+        expect.objectContaining({
+          productId: masters.scone.id,
+          quantity: 4,
+        }),
+      ],
+    });
   });
 
   it("rolls back both header and items when replacement validation fails", async () => {
@@ -405,7 +807,7 @@ describe("order service", () => {
         OWNER_ID,
         orderInput(masters, { bakeCycleId: cancelledCycle!.id }),
       ),
-    ).rejects.toThrow(/cancelled/i);
+    ).rejects.toThrow("Cycle production inputs are locked");
     await expect(
       service.create(
         OWNER_ID,
@@ -956,5 +1358,173 @@ describe("order service", () => {
         fulfillmentStatus: "PACKED",
       }),
     ]);
+  });
+
+  it("locks unique cycles in sorted order before order rows for every write", async () => {
+    const queries: Array<Readonly<{
+      sql: string;
+      params: ReadonlyArray<unknown>;
+    }>> = [];
+    await context.close();
+    context = await createTestDatabase({
+      logger: {
+        logQuery(query: string, params: unknown[]) {
+          queries.push({ sql: query.toLowerCase(), params: [...params] });
+        },
+      } satisfies Logger,
+    });
+    service = createOrderService(context.db);
+    const masters = await seedMasters(context.db);
+
+    queries.length = 0;
+    const created = await service.create(OWNER_ID, orderInput(masters));
+    const createCycleLock = queries.findIndex(
+      ({ sql: query }) =>
+        query.includes('from "bake_cycles"') && query.includes("for update"),
+    );
+    const orderInsert = queries.findIndex(({ sql: query }) =>
+      query.startsWith('insert into "orders"'),
+    );
+    expect(createCycleLock).toBeGreaterThanOrEqual(0);
+    expect(orderInsert).toBeGreaterThan(createCycleLock);
+
+    const [destination] = await context.db
+      .insert(bakeCycles)
+      .values({
+        ownerId: OWNER_ID,
+        name: "Move destination",
+        status: "OPEN",
+        targetProductionDate: "2026-09-05",
+        primaryDeliveryDate: "2026-09-06",
+      })
+      .returning();
+    queries.length = 0;
+    await service.update(
+      OWNER_ID,
+      created.id,
+      orderInput(masters, { bakeCycleId: destination!.id }),
+    );
+    const moveOrderLock = queries.findIndex(
+      ({ sql: query }) =>
+        query.includes('from "orders"') && query.includes("for update"),
+    );
+    const moveCycleLocks = queries
+      .map((query, index) => ({ ...query, index }))
+      .filter(
+        ({ sql: query }) =>
+          query.includes('from "bake_cycles"') && query.includes("for update"),
+      );
+    expect(moveCycleLocks.map(({ params }) => params[1])).toEqual(
+      [masters.cycle.id, destination!.id].sort(),
+    );
+    expect(moveCycleLocks.every(({ index }) => index < moveOrderLock)).toBe(
+      true,
+    );
+
+    async function expectCycleBeforeOrderLock(
+      mutate: () => Promise<unknown>,
+    ) {
+      queries.length = 0;
+      await mutate();
+      const cycleLocks = queries
+        .map((query, index) => ({ ...query, index }))
+        .filter(
+          ({ sql: query }) =>
+            query.includes('from "bake_cycles"') &&
+            query.includes("for update"),
+        );
+      const orderLock = queries.findIndex(
+        ({ sql: query }) =>
+          query.includes('from "orders"') && query.includes("for update"),
+      );
+      expect(cycleLocks).toHaveLength(1);
+      expect(cycleLocks[0]!.params[1]).toBe(destination!.id);
+      expect(cycleLocks[0]!.index).toBeLessThan(orderLock);
+    }
+
+    const movedInput = orderInput(masters, { bakeCycleId: destination!.id });
+    await expectCycleBeforeOrderLock(() =>
+      service.update(OWNER_ID, created.id, {
+        ...movedInput,
+        amountPaidSatang: 21000,
+      }),
+    );
+    await expectCycleBeforeOrderLock(() =>
+      service.updateFulfillmentStatus(OWNER_ID, created.id, "CONFIRMED"),
+    );
+    await expectCycleBeforeOrderLock(() =>
+      service.markRefunded(OWNER_ID, created.id),
+    );
+    await expectCycleBeforeOrderLock(() =>
+      service.restorePaymentTracking(OWNER_ID, created.id),
+    );
+    await expectCycleBeforeOrderLock(() => service.cancel(OWNER_ID, created.id));
+  });
+
+  it("racing planning lock and quantity update observes only a coherent committed order", async () => {
+    const scenario = await seedPlanningScenario(context.db);
+    const planningClock = {
+      now: () => new Date("2026-08-29T00:00:00.000Z"),
+    };
+    const planningQueries = createPlanningQueryService(
+      context.db,
+      planningClock,
+    );
+    const planningCommands = createPlanningCommandService(
+      context.db,
+      planningClock,
+    );
+    const ordersService = createOrderService(context.db);
+    const before = await ordersService.get(OWNER_ID, scenario.orderIds[0]!);
+    const oldQuantity = before.items[0]!.quantity;
+    const newQuantity = oldQuantity + 2;
+    const preview = await planningQueries.preview(OWNER_ID, scenario.cycleId);
+
+    const [lockResult, updateResult] = await Promise.allSettled([
+      planningCommands.lock(OWNER_ID, {
+        cycleId: scenario.cycleId,
+        inputFingerprint: preview.inputFingerprint,
+        lockRequestId: "70707070-7070-4070-8070-707070707070",
+        overrides: [],
+      }),
+      ordersService.update(
+        OWNER_ID,
+        before.id,
+        orderDetailInput(before, {
+          items: before.items.map((item, index) => ({
+            productId: item.productId,
+            quantity: index === 0 ? newQuantity : item.quantity,
+            unitPriceSatang: item.unitPriceSatang,
+            lineNote: item.lineNote ?? "",
+          })),
+        }),
+      ),
+    ]);
+
+    if (lockResult.status === "fulfilled") {
+      expect(updateResult.status).toBe("rejected");
+      expect((updateResult as PromiseRejectedResult).reason).toMatchObject({
+        message: "Cycle production inputs are locked",
+      });
+      const generation = await planningQueries.getGeneration(
+        OWNER_ID,
+        scenario.cycleId,
+      );
+      const snapshotted = generation.orders.find(
+        (order) => order.id === before.id,
+      );
+      expect(snapshotted?.items[0]?.quantity).toBe(oldQuantity);
+      expect(snapshotted?.subtotalSatang).toBe(
+        oldQuantity * before.items[0]!.unitPriceSatang,
+      );
+    } else {
+      expect(lockResult.reason).toBeInstanceOf(PlanningStaleError);
+      expect(updateResult.status).toBe("fulfilled");
+      const committed = await ordersService.get(OWNER_ID, before.id);
+      expect(committed.items[0]?.quantity).toBe(newQuantity);
+      expect(committed.totals.subtotalSatang).toBe(
+        newQuantity * committed.items[0]!.unitPriceSatang,
+      );
+    }
   });
 });

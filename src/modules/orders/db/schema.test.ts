@@ -53,6 +53,7 @@ describe("Phase 2 order schema", () => {
       productId: product!.id,
       quantity: 2,
       unitPriceSatang: 22000,
+      position: 0,
     });
 
     expect(cycle!.cycleNumber).toBeGreaterThan(0);
@@ -104,6 +105,7 @@ describe("Phase 2 order schema", () => {
       productId: product!.id,
       quantity: 0,
       unitPriceSatang: 8000,
+      position: 0,
     })).rejects.toThrow();
     expect(method!.requiresDeliveryLocation).toBe(true);
   });

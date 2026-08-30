@@ -14,6 +14,8 @@ const EARLIER: BakeCycle = {
   targetProductionDate: "2026-08-29",
   primaryDeliveryDate: "2026-08-30",
   notes: null,
+  lockedAt: null,
+  activePlanningSnapshotId: null,
   createdAt: new Date("2026-08-20T00:00:00.000Z"),
   updatedAt: new Date("2026-08-20T00:00:00.000Z"),
 };

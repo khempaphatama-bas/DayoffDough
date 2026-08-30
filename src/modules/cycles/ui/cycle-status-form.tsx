@@ -5,7 +5,7 @@ import {
   changeCycleStatusAction,
   type CycleStatusActionState,
 } from "@/app/(app)/cycles/actions";
-import type { Phase2CycleStatus } from "@/modules/cycles/application/cycles";
+import type { BakeCycleStatus } from "@/modules/cycles/application/cycles";
 import { CYCLE_STATUS_LABELS } from "@/modules/cycles/ui/cycle-list";
 
 const INITIAL_STATE: CycleStatusActionState = {
@@ -16,7 +16,7 @@ const INITIAL_STATE: CycleStatusActionState = {
 export function CycleStatusForm({
   cycleId,
   status,
-}: Readonly<{ cycleId: string; status: Phase2CycleStatus }>) {
+}: Readonly<{ cycleId: string; status: BakeCycleStatus }>) {
   const [state, formAction, pending] = useActionState(
     changeCycleStatusAction,
     INITIAL_STATE,
@@ -46,11 +46,13 @@ export function CycleStatusForm({
           defaultValue={status}
           name="status"
         >
-          {Object.entries(CYCLE_STATUS_LABELS).map(([value, label]) => (
-            <option key={value} value={value}>
-              {label}
-            </option>
-          ))}
+          {Object.entries(CYCLE_STATUS_LABELS)
+            .filter(([value]) => value !== "LOCKED")
+            .map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
         </select>
       </label>
       <button

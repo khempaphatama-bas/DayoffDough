@@ -56,6 +56,7 @@ const DETAIL: OrderDetail = {
   customerName: "คุณเมย์ (เก่า)",
   bakeCycleId: CYCLE_ID,
   cycleName: "รอบที่เสร็จแล้ว",
+  cycleStatus: "COMPLETED",
   sourceChannel: "INSTAGRAM",
   requestedDeliveryDate: "2026-08-30",
   confirmedDeliveryDate: "2026-08-30",

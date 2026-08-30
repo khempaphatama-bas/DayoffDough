@@ -1,16 +1,17 @@
 import Link from "next/link";
 import type {
   BakeCycle,
-  Phase2CycleStatus,
+  BakeCycleStatus,
 } from "@/modules/cycles/application/cycles";
 import { formatSatangAsBaht } from "@/modules/money/domain/money";
 import type { CycleOrderSummary } from "@/modules/orders/application/orders";
 
 export const CYCLE_STATUS_LABELS: Readonly<
-  Record<Phase2CycleStatus, string>
+  Record<BakeCycleStatus, string>
 > = {
   DRAFT: "แบบร่าง",
   OPEN: "เปิดรับออเดอร์",
+  LOCKED: "ล็อกรอบแล้ว",
   IN_PRODUCTION: "กำลังผลิต",
   COMPLETED: "เสร็จสิ้น",
   CANCELLED: "ยกเลิก",
@@ -25,7 +26,7 @@ function formatCycleDate(value: string): string {
   }).format(new Date(`${value}T00:00:00+07:00`));
 }
 
-function StatusBadge({ status }: Readonly<{ status: Phase2CycleStatus }>) {
+function StatusBadge({ status }: Readonly<{ status: BakeCycleStatus }>) {
   const color =
     status === "OPEN"
       ? "bg-emerald-50 text-emerald-800"
@@ -49,7 +50,7 @@ export function CycleList({
 }: Readonly<{
   cycles: ReadonlyArray<BakeCycle>;
   query: string;
-  status: "all" | Phase2CycleStatus;
+  status: "all" | BakeCycleStatus;
   summaries: ReadonlyMap<string, CycleOrderSummary>;
 }>) {
   return (

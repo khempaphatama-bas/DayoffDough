@@ -286,6 +286,7 @@ async function seedIntegrityScenario(db: TestDatabase) {
       productId: productA!.id,
       quantity: 1,
       unitPriceSatang: 22000,
+      position: 0,
     })
     .returning();
   const [orderItemB] = await db
@@ -296,6 +297,7 @@ async function seedIntegrityScenario(db: TestDatabase) {
       productId: productB!.id,
       quantity: 1,
       unitPriceSatang: 8000,
+      position: 0,
     })
     .returning();
   const snapshotA = await insertSnapshot(
@@ -908,6 +910,7 @@ describe("Phase 3A planning relationship integrity", () => {
         productId: scenario.productA.id,
         quantity: 1,
         unitPriceSatang: 22000,
+        position: 1,
       })
       .returning();
     const orderSnapshotA = await insertOrderSnapshot(context.db, {
