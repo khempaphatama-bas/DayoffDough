@@ -47,6 +47,29 @@ type LoggedQuery = Readonly<{
   params: ReadonlyArray<unknown>;
 }>;
 
+const ALLOWED_GENERATION_READ_TABLES = [
+  "bake_cycles",
+  "cycle_planning_snapshots",
+  "cycle_planning_warnings",
+  "cycle_order_snapshots",
+  "cycle_order_item_snapshots",
+  "cycle_recipe_plans",
+  "cycle_product_plans",
+  "cycle_material_requirements",
+  "cycle_packaging_requirements",
+  "cycle_product_cost_snapshots",
+  "cycle_cost_snapshots",
+] as const;
+
+function referencedTables(sql: string): ReadonlyArray<string> {
+  return Array.from(
+    sql.matchAll(
+      /\b(?:from|join)\s+(?:"[^"]+"\.)?"([^"]+)"/g,
+    ),
+    (match) => match[1]!,
+  );
+}
+
 function selectQuery(
   queries: ReadonlyArray<LoggedQuery>,
   table: string,
@@ -867,7 +890,7 @@ describe("planning query service", () => {
       ]);
   });
 
-  it("owner-scopes every immutable child query to the selected snapshot", async () => {
+  it("owner-scopes every immutable child query and reads only immutable tables", async () => {
     const loggedQueries: LoggedQuery[] = [];
     await context.close();
     context = await createTestDatabase({
@@ -908,26 +931,15 @@ describe("planning query service", () => {
       expectOwnedSnapshotSelect(selectQuery(loggedQueries, table), table, locked.id);
     }
 
-    for (const mutableTable of [
-      "customers",
-      "delivery_methods",
-      "inventory_items",
-      "inventory_prices",
-      "orders",
-      "order_items",
-      "products",
-      "product_packaging_rules",
-      "recipes",
-      "recipe_versions",
-      "recipe_ingredients",
-      "shop_settings",
-    ]) {
-      expect(
-        loggedQueries.some(({ sql }) =>
-          sql.includes(`from "${mutableTable}"`)
-        ),
-        mutableTable,
-      ).toBe(false);
+    for (const query of loggedQueries) {
+      const tables = referencedTables(query.sql);
+      expect(tables, query.sql).not.toHaveLength(0);
+      for (const table of tables) {
+        expect(
+          ALLOWED_GENERATION_READ_TABLES,
+          `${table} referenced by ${query.sql}`,
+        ).toContain(table);
+      }
     }
   });
 });
