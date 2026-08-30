@@ -772,6 +772,13 @@ describe("planning query service", () => {
           "10000000-0000-4000-8000-00000000000a",
         ),
       );
+    await context.db
+      .update(deliveryMethods)
+      .set({
+        name: "ชื่อวิธีจัดส่งใหม่",
+        requiresDeliveryLocation: false,
+      })
+      .where(eq(deliveryMethods.ownerId, OWNER_ID));
     await context.db.insert(recipeVersions).values({
       id: "80000000-0000-4000-8000-000000000002",
       ownerId: OWNER_ID,
@@ -899,6 +906,28 @@ describe("planning query service", () => {
       "cycle_cost_snapshots",
     ]) {
       expectOwnedSnapshotSelect(selectQuery(loggedQueries, table), table, locked.id);
+    }
+
+    for (const mutableTable of [
+      "customers",
+      "delivery_methods",
+      "inventory_items",
+      "inventory_prices",
+      "orders",
+      "order_items",
+      "products",
+      "product_packaging_rules",
+      "recipes",
+      "recipe_versions",
+      "recipe_ingredients",
+      "shop_settings",
+    ]) {
+      expect(
+        loggedQueries.some(({ sql }) =>
+          sql.includes(`from "${mutableTable}"`)
+        ),
+        mutableTable,
+      ).toBe(false);
     }
   });
 });

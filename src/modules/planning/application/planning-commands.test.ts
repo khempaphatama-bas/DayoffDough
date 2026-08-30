@@ -1,8 +1,10 @@
 import { and, count, eq, sql } from "drizzle-orm";
+import type { Logger } from "drizzle-orm/logger";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { OWNER_ID } from "@tests/fixtures/owner";
+import { OTHER_OWNER_ID, OWNER_ID } from "@tests/fixtures/owner";
 import { seedPlanningScenario } from "@tests/fixtures/planning";
 import { createTestDatabase } from "@tests/helpers/test-db";
+import type { DatabaseClient } from "@/lib/db/types";
 import { bakeCycles } from "@/modules/cycles/db/schema";
 import { orders } from "@/modules/orders/db/schema";
 import { products } from "@/modules/products/db/schema";
@@ -41,12 +43,22 @@ describe("planning command service", () => {
 
   it("locks one complete normalized generation with copied settings and source lineage", async () => {
     const scenario = await seedPlanningScenario(context.db);
-    const clock = { now: () => new Date(LOCKED_AT) };
-    const preview = await createPlanningQueryService(context.db, clock).preview(
-      OWNER_ID,
-      scenario.cycleId,
-    );
-    const commands = createPlanningCommandService(context.db, clock);
+    const preview = await createPlanningQueryService(context.db, {
+      now: () => new Date(LOCKED_AT),
+    }).preview(OWNER_ID, scenario.cycleId);
+    let clockCalls = 0;
+    const lockInstants = [
+      LOCKED_AT,
+      new Date("2026-08-29T00:00:01.000Z"),
+    ];
+    const commands = createPlanningCommandService(context.db, {
+      now() {
+        const instant = lockInstants[clockCalls];
+        clockCalls += 1;
+        if (!instant) throw new Error("Planning lock clock called too often");
+        return new Date(instant);
+      },
+    });
 
     const lockPromise = commands.lock(OWNER_ID, {
       cycleId: scenario.cycleId,
@@ -69,6 +81,7 @@ describe("planning command service", () => {
       lockedAt: LOCKED_AT,
     });
     const locked = await lockPromise;
+    expect(clockCalls).toBe(1);
 
     const [cycle] = await context.db
       .select()
@@ -183,6 +196,79 @@ describe("planning command service", () => {
     });
   });
 
+  it("opens the real lock transaction with repeatable-read isolation", async () => {
+    const scenario = await seedPlanningScenario(context.db);
+    const clock = { now: () => new Date(LOCKED_AT) };
+    const preview = await createPlanningQueryService(context.db, clock).preview(
+      OWNER_ID,
+      scenario.cycleId,
+    );
+    const transactionConfigs: unknown[] = [];
+    const observedDb = new Proxy(context.db, {
+      get(target, property, receiver) {
+        if (property !== "transaction") {
+          return Reflect.get(target, property, receiver);
+        }
+        return (...args: unknown[]) => {
+          transactionConfigs.push(args[1]);
+          return Reflect.apply(target.transaction, target, args);
+        };
+      },
+    }) as DatabaseClient;
+
+    await createPlanningCommandService(observedDb, clock).lock(OWNER_ID, {
+      cycleId: scenario.cycleId,
+      inputFingerprint: preview.inputFingerprint,
+      lockRequestId: "12121212-1212-4212-8212-121212121212",
+      overrides: [],
+    });
+
+    expect(transactionConfigs).toEqual([{ isolationLevel: "repeatable read" }]);
+  });
+
+  it("locks exactly the owned Bake Cycle row with FOR UPDATE", async () => {
+    const loggedQueries: Array<Readonly<{
+      sql: string;
+      params: ReadonlyArray<unknown>;
+    }>> = [];
+    await context.close();
+    context = await createTestDatabase({
+      logger: {
+        logQuery(query: string, params: unknown[]) {
+          loggedQueries.push({ sql: query.toLowerCase(), params: [...params] });
+        },
+      } satisfies Logger,
+    });
+    const scenario = await seedPlanningScenario(context.db);
+    const clock = { now: () => new Date(LOCKED_AT) };
+    const preview = await createPlanningQueryService(context.db, clock).preview(
+      OWNER_ID,
+      scenario.cycleId,
+    );
+    loggedQueries.length = 0;
+
+    await createPlanningCommandService(context.db, clock).lock(OWNER_ID, {
+      cycleId: scenario.cycleId,
+      inputFingerprint: preview.inputFingerprint,
+      lockRequestId: "13131313-1313-4313-8313-131313131313",
+      overrides: [],
+    });
+
+    const cycleLocks = loggedQueries.filter(
+      (query) =>
+        query.sql.includes('from "bake_cycles"') &&
+        query.sql.includes("for update"),
+    );
+    expect(cycleLocks).toHaveLength(1);
+    expect(cycleLocks[0]!.sql).toContain(
+      '("bake_cycles"."owner_id" = $1 and "bake_cycles"."id" = $2)',
+    );
+    expect(cycleLocks[0]!.params.slice(0, 2)).toEqual([
+      OWNER_ID,
+      scenario.cycleId,
+    ]);
+  });
+
   it("rejects a stale fingerprint and leaves the cycle open without snapshot rows", async () => {
     const scenario = await seedPlanningScenario(context.db);
     const clock = { now: () => new Date(LOCKED_AT) };
@@ -247,6 +333,83 @@ describe("planning command service", () => {
       context.db.select({ value: count() }).from(cycleCostSnapshots),
     ]);
     expect(counts.map(([row]) => row!.value)).toEqual([1, 2, 1, 1]);
+  });
+
+  it("scopes the same lock request id independently per owner without cross-owner disclosure", async () => {
+    const firstScenario = await seedPlanningScenario(context.db);
+    const secondScenario = await seedPlanningScenario(context.db, {
+      ownerId: OTHER_OWNER_ID,
+      idSet: "SECONDARY",
+    });
+    const clock = { now: () => new Date(LOCKED_AT) };
+    const queries = createPlanningQueryService(context.db, clock);
+    const commands = createPlanningCommandService(context.db, clock);
+    const [firstPreview, secondPreview] = await Promise.all([
+      queries.preview(OWNER_ID, firstScenario.cycleId),
+      queries.preview(OTHER_OWNER_ID, secondScenario.cycleId),
+    ]);
+    const sharedRequestId = "14141414-1414-4414-8414-141414141414";
+
+    const first = await commands.lock(OWNER_ID, {
+      cycleId: firstScenario.cycleId,
+      inputFingerprint: firstPreview.inputFingerprint,
+      lockRequestId: sharedRequestId,
+      overrides: [],
+    });
+    const second = await commands.lock(OTHER_OWNER_ID, {
+      cycleId: secondScenario.cycleId,
+      inputFingerprint: secondPreview.inputFingerprint,
+      lockRequestId: sharedRequestId,
+      overrides: [],
+    });
+
+    expect(first).toMatchObject({
+      cycleId: firstScenario.cycleId,
+      generation: 1,
+    });
+    expect(second).toMatchObject({
+      cycleId: secondScenario.cycleId,
+      generation: 1,
+    });
+    expect(second.id).not.toBe(first.id);
+    const sharedRows = await context.db
+      .select({
+        ownerId: cyclePlanningSnapshots.ownerId,
+        cycleId: cyclePlanningSnapshots.bakeCycleId,
+        id: cyclePlanningSnapshots.id,
+      })
+      .from(cyclePlanningSnapshots)
+      .where(eq(cyclePlanningSnapshots.lockRequestId, sharedRequestId));
+    expect(sharedRows).toEqual(
+      expect.arrayContaining([
+        { ownerId: OWNER_ID, cycleId: firstScenario.cycleId, id: first.id },
+        {
+          ownerId: OTHER_OWNER_ID,
+          cycleId: secondScenario.cycleId,
+          id: second.id,
+        },
+      ]),
+    );
+    expect(sharedRows).toHaveLength(2);
+    await expect(
+      queries.getGeneration(OWNER_ID, firstScenario.cycleId),
+    ).resolves.toMatchObject({ id: first.id });
+    await expect(
+      queries.getGeneration(OTHER_OWNER_ID, secondScenario.cycleId),
+    ).resolves.toMatchObject({ id: second.id });
+
+    await expect(
+      commands.lock(OWNER_ID, {
+        cycleId: secondScenario.cycleId,
+        inputFingerprint: secondPreview.inputFingerprint,
+        lockRequestId: sharedRequestId,
+        overrides: [],
+      }),
+    ).rejects.toThrow("Cycle not found");
+    const [afterCrossOwnerCount] = await context.db
+      .select({ value: count() })
+      .from(cyclePlanningSnapshots);
+    expect(afterCrossOwnerCount!.value).toBe(2);
   });
 
   it("rejects a lock request id that already belongs to another cycle", async () => {

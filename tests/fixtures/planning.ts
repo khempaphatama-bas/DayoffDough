@@ -44,6 +44,30 @@ const IDS = {
   packagingPrice: "20000000-0000-4000-8000-000000000004",
 } as const;
 
+const SECONDARY_IDS = {
+  ingredientItem: "30000000-0000-4000-8000-000000000001",
+  packagingItem: "30000000-0000-4000-8000-000000000002",
+  product: "30000000-0000-4000-8000-000000000003",
+  recipe: "30000000-0000-4000-8000-000000000004",
+  recipeVersion: "30000000-0000-4000-8000-000000000005",
+  recipeIngredient: "30000000-0000-4000-8000-000000000006",
+  deliveryMethod: "30000000-0000-4000-8000-000000000007",
+  customer: "30000000-0000-4000-8000-000000000008",
+  cycle: "30000000-0000-4000-8000-000000000009",
+  productPackagingRule: "30000000-0000-4000-8000-00000000000a",
+  deliveryPackagingRule: "30000000-0000-4000-8000-00000000000b",
+  firstOrder: "30000000-0000-4000-8000-00000000000c",
+  secondOrder: "30000000-0000-4000-8000-00000000000d",
+  cancelledOrder: "30000000-0000-4000-8000-00000000000e",
+  firstOrderItem: "30000000-0000-4000-8000-00000000000f",
+  secondOrderItem: "30000000-0000-4000-8000-000000000010",
+  cancelledOrderItem: "30000000-0000-4000-8000-000000000011",
+  olderIngredientPrice: "40000000-0000-4000-8000-000000000001",
+  latestIngredientPrice: "40000000-0000-4000-8000-000000000002",
+  futureIngredientPrice: "40000000-0000-4000-8000-000000000003",
+  packagingPrice: "40000000-0000-4000-8000-000000000004",
+} satisfies Record<keyof typeof IDS, string>;
+
 type CycleStatus = (typeof bakeCycleStatus)[number];
 
 export async function seedPlanningScenario(
@@ -54,6 +78,7 @@ export async function seedPlanningScenario(
     includeIngredientPrice?: boolean;
     includePackagingPrice?: boolean;
     orderQuantity?: number;
+    idSet?: "PRIMARY" | "SECONDARY";
   }> = {},
 ): Promise<Readonly<{
   cycleId: string;
@@ -67,6 +92,7 @@ export async function seedPlanningScenario(
   const includeIngredientPrice = input.includeIngredientPrice ?? true;
   const includePackagingPrice = input.includePackagingPrice ?? true;
   const orderQuantity = input.orderQuantity ?? 10;
+  const ids = input.idSet === "SECONDARY" ? SECONDARY_IDS : IDS;
   if (!Number.isSafeInteger(orderQuantity) || orderQuantity < 2) {
     throw new Error("Planning fixture orderQuantity must be an integer >= 2");
   }
@@ -84,7 +110,7 @@ export async function seedPlanningScenario(
 
   await db.insert(inventoryItems).values([
     {
-      id: IDS.ingredientItem,
+      id: ids.ingredientItem,
       ownerId,
       name: "แป้งขนมปัง",
       category: "INGREDIENT",
@@ -96,7 +122,7 @@ export async function seedPlanningScenario(
       updatedAt: new Date("2026-08-01T00:00:00.000Z"),
     },
     {
-      id: IDS.packagingItem,
+      id: ids.packagingItem,
       ownerId,
       name: "ถุงขนม",
       category: "PACKAGING",
@@ -112,27 +138,27 @@ export async function seedPlanningScenario(
   if (includeIngredientPrice) {
     await db.insert(inventoryPrices).values([
       {
-        id: IDS.olderIngredientPrice,
+        id: ids.olderIngredientPrice,
         ownerId,
-        inventoryItemId: IDS.ingredientItem,
+        inventoryItemId: ids.ingredientItem,
         packPriceSatang: 5_000,
         packBaseQuantity: "1000.000000",
         effectiveAt: new Date("2026-08-01T00:00:00.000Z"),
         createdAt: new Date("2026-08-02T00:00:00.000Z"),
       },
       {
-        id: IDS.latestIngredientPrice,
+        id: ids.latestIngredientPrice,
         ownerId,
-        inventoryItemId: IDS.ingredientItem,
+        inventoryItemId: ids.ingredientItem,
         packPriceSatang: 5_500,
         packBaseQuantity: "1000.000000",
         effectiveAt: new Date("2026-08-20T00:00:00.000Z"),
         createdAt: new Date("2026-08-21T00:00:00.000Z"),
       },
       {
-        id: IDS.futureIngredientPrice,
+        id: ids.futureIngredientPrice,
         ownerId,
-        inventoryItemId: IDS.ingredientItem,
+        inventoryItemId: ids.ingredientItem,
         packPriceSatang: 99_999,
         packBaseQuantity: "1000.000000",
         effectiveAt: new Date("2026-09-01T00:00:00.000Z"),
@@ -143,9 +169,9 @@ export async function seedPlanningScenario(
 
   if (includePackagingPrice) {
     await db.insert(inventoryPrices).values({
-      id: IDS.packagingPrice,
+      id: ids.packagingPrice,
       ownerId,
-      inventoryItemId: IDS.packagingItem,
+      inventoryItemId: ids.packagingItem,
       packPriceSatang: 1_000,
       packBaseQuantity: "100.000000",
       effectiveAt: new Date("2026-08-10T00:00:00.000Z"),
@@ -154,7 +180,7 @@ export async function seedPlanningScenario(
   }
 
   await db.insert(products).values({
-    id: IDS.product,
+    id: ids.product,
     ownerId,
     name: "ฟอคคาเซีย",
     sellingUnit: "piece",
@@ -164,16 +190,16 @@ export async function seedPlanningScenario(
     updatedAt: new Date("2026-08-01T00:00:00.000Z"),
   });
   await db.insert(recipes).values({
-    id: IDS.recipe,
+    id: ids.recipe,
     ownerId,
-    productId: IDS.product,
+    productId: ids.product,
     name: "สูตรฟอคคาเซียหลัก",
     createdAt: new Date("2026-08-01T00:00:00.000Z"),
   });
   await db.insert(recipeVersions).values({
-    id: IDS.recipeVersion,
+    id: ids.recipeVersion,
     ownerId,
-    recipeId: IDS.recipe,
+    recipeId: ids.recipe,
     versionCode: "v1",
     baseYieldQuantity: "6.000000",
     yieldUnit: "piece",
@@ -185,20 +211,20 @@ export async function seedPlanningScenario(
     createdAt: new Date("2026-08-01T00:00:00.000Z"),
   });
   await db.insert(recipeIngredients).values({
-    id: IDS.recipeIngredient,
+    id: ids.recipeIngredient,
     ownerId,
-    recipeVersionId: IDS.recipeVersion,
-    inventoryItemId: IDS.ingredientItem,
+    recipeVersionId: ids.recipeVersion,
+    inventoryItemId: ids.ingredientItem,
     quantityInBaseUnit: "1000.000000",
     createdAt: new Date("2026-08-01T00:00:00.000Z"),
   });
   await db
     .update(products)
-    .set({ activeRecipeVersionId: IDS.recipeVersion })
-    .where(eq(products.id, IDS.product));
+    .set({ activeRecipeVersionId: ids.recipeVersion })
+    .where(eq(products.id, ids.product));
 
   await db.insert(deliveryMethods).values({
-    id: IDS.deliveryMethod,
+    id: ids.deliveryMethod,
     ownerId,
     name: "ไรเดอร์",
     defaultCustomerFeeSatang: 5_000,
@@ -209,23 +235,23 @@ export async function seedPlanningScenario(
   });
   await db.insert(productPackagingRules).values([
     {
-      id: IDS.productPackagingRule,
+      id: ids.productPackagingRule,
       ownerId,
       scope: "PRODUCT",
-      productId: IDS.product,
+      productId: ids.product,
       deliveryMethodId: null,
-      inventoryItemId: IDS.packagingItem,
+      inventoryItemId: ids.packagingItem,
       consumptionBasis: "PER_PRODUCT_UNIT",
       quantityInBaseUnit: "1.000000",
       createdAt: new Date("2026-08-01T00:00:00.000Z"),
     },
     {
-      id: IDS.deliveryPackagingRule,
+      id: ids.deliveryPackagingRule,
       ownerId,
       scope: "DELIVERY_METHOD",
       productId: null,
-      deliveryMethodId: IDS.deliveryMethod,
-      inventoryItemId: IDS.packagingItem,
+      deliveryMethodId: ids.deliveryMethod,
+      inventoryItemId: ids.packagingItem,
       consumptionBasis: "PER_DELIVERY",
       quantityInBaseUnit: "1.000000",
       createdAt: new Date("2026-08-01T00:00:00.000Z"),
@@ -233,16 +259,16 @@ export async function seedPlanningScenario(
   ]);
 
   await db.insert(customers).values({
-    id: IDS.customer,
+    id: ids.customer,
     ownerId,
     name: "คุณเมย์",
-    defaultDeliveryMethodId: IDS.deliveryMethod,
+    defaultDeliveryMethodId: ids.deliveryMethod,
     defaultDeliveryLocation: "เชียงใหม่",
     createdAt: new Date("2026-08-01T00:00:00.000Z"),
     updatedAt: new Date("2026-08-01T00:00:00.000Z"),
   });
   await db.insert(bakeCycles).values({
-    id: IDS.cycle,
+    id: ids.cycle,
     ownerId,
     name: "รอบส่ง 30 ส.ค.",
     status: cycleStatus,
@@ -255,14 +281,14 @@ export async function seedPlanningScenario(
 
   const orderRows = [
     {
-      id: IDS.firstOrder,
+      id: ids.firstOrder,
       ownerId,
-      customerId: IDS.customer,
-      bakeCycleId: IDS.cycle,
+      customerId: ids.customer,
+      bakeCycleId: ids.cycle,
       sourceChannel: "INSTAGRAM" as const,
       requestedDeliveryDate: "2026-08-30",
       confirmedDeliveryDate: "2026-08-30",
-      deliveryMethodId: IDS.deliveryMethod,
+      deliveryMethodId: ids.deliveryMethod,
       deliveryFeeChargedSatang: 5_000,
       deliveryCostSatang: 4_000,
       deliveryFeePayer: "CUSTOMER" as const,
@@ -274,14 +300,14 @@ export async function seedPlanningScenario(
       updatedAt: new Date("2026-08-02T00:00:00.000Z"),
     },
     {
-      id: IDS.secondOrder,
+      id: ids.secondOrder,
       ownerId,
-      customerId: IDS.customer,
-      bakeCycleId: IDS.cycle,
+      customerId: ids.customer,
+      bakeCycleId: ids.cycle,
       sourceChannel: "PHONE" as const,
       requestedDeliveryDate: "2026-08-30",
       confirmedDeliveryDate: "2026-08-30",
-      deliveryMethodId: IDS.deliveryMethod,
+      deliveryMethodId: ids.deliveryMethod,
       deliveryFeeChargedSatang: 5_000,
       deliveryCostSatang: 4_000,
       deliveryFeePayer: "CUSTOMER" as const,
@@ -293,14 +319,14 @@ export async function seedPlanningScenario(
       updatedAt: new Date("2026-08-03T00:00:00.000Z"),
     },
     {
-      id: IDS.cancelledOrder,
+      id: ids.cancelledOrder,
       ownerId,
-      customerId: IDS.customer,
-      bakeCycleId: IDS.cycle,
+      customerId: ids.customer,
+      bakeCycleId: ids.cycle,
       sourceChannel: "OTHER" as const,
       requestedDeliveryDate: "2026-08-30",
       confirmedDeliveryDate: "2026-08-30",
-      deliveryMethodId: IDS.deliveryMethod,
+      deliveryMethodId: ids.deliveryMethod,
       deliveryFeeChargedSatang: 5_000,
       deliveryCostSatang: 4_000,
       deliveryFeePayer: "CUSTOMER" as const,
@@ -315,30 +341,30 @@ export async function seedPlanningScenario(
   await db.insert(orders).values(orderRows);
   await db.insert(orderItems).values([
     {
-      id: IDS.firstOrderItem,
+      id: ids.firstOrderItem,
       ownerId,
-      orderId: IDS.firstOrder,
-      productId: IDS.product,
+      orderId: ids.firstOrder,
+      productId: ids.product,
       quantity: firstQuantity,
       unitPriceSatang: 12_000,
       createdAt: new Date("2026-08-02T00:00:00.000Z"),
       updatedAt: new Date("2026-08-02T00:00:00.000Z"),
     },
     {
-      id: IDS.secondOrderItem,
+      id: ids.secondOrderItem,
       ownerId,
-      orderId: IDS.secondOrder,
-      productId: IDS.product,
+      orderId: ids.secondOrder,
+      productId: ids.product,
       quantity: secondQuantity,
       unitPriceSatang: 12_000,
       createdAt: new Date("2026-08-03T00:00:00.000Z"),
       updatedAt: new Date("2026-08-03T00:00:00.000Z"),
     },
     {
-      id: IDS.cancelledOrderItem,
+      id: ids.cancelledOrderItem,
       ownerId,
-      orderId: IDS.cancelledOrder,
-      productId: IDS.product,
+      orderId: ids.cancelledOrder,
+      productId: ids.product,
       quantity: 50,
       unitPriceSatang: 12_000,
       createdAt: new Date("2026-08-04T00:00:00.000Z"),
@@ -347,10 +373,10 @@ export async function seedPlanningScenario(
   ]);
 
   return {
-    cycleId: IDS.cycle,
-    productId: IDS.product,
-    ingredientItemId: IDS.ingredientItem,
-    packagingItemId: IDS.packagingItem,
-    orderIds: [IDS.firstOrder, IDS.secondOrder, IDS.cancelledOrder],
+    cycleId: ids.cycle,
+    productId: ids.product,
+    ingredientItemId: ids.ingredientItem,
+    packagingItemId: ids.packagingItem,
+    orderIds: [ids.firstOrder, ids.secondOrder, ids.cancelledOrder],
   };
 }
