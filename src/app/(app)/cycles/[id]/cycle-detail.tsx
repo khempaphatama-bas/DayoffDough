@@ -27,18 +27,16 @@ function formatCycleDateTime(value: Date | null): string {
   }).format(value);
 }
 
-function AdvancedCycleWarning({
+function ProductionFrozenWarning({
   status,
 }: Readonly<{ status: BakeCycle["status"] }>) {
-  if (status !== "IN_PRODUCTION" && status !== "COMPLETED") return null;
+  if (status !== "LOCKED" && status !== "IN_PRODUCTION") return null;
   return (
     <div
       className="rounded-2xl border border-amber-300 bg-amber-50 p-4 text-sm font-semibold leading-6 text-amber-950"
       role="alert"
     >
-      {status === "IN_PRODUCTION" ? "รอบนี้เริ่มผลิตแล้ว" : "รอบนี้เสร็จสิ้นแล้ว"}
-      {" กรุณาตรวจสอบก่อนแก้ไขออเดอร์ "}
-      การแก้ไขยังทำได้ใน Phase 2 แต่ยอดและจำนวนผลิตจะเปลี่ยนทันที
+      ข้อมูลที่กระทบการผลิตถูกล็อก กรุณาปลดล็อกรอบก่อนแก้ไข
     </div>
   );
 }
@@ -89,17 +87,35 @@ export function CycleDetail({
             {formatCycleDate(cycle.primaryDeliveryDate)}
           </p>
         </div>
-        {acceptsNewOrders ? (
-          <Link
-            className="inline-flex min-h-12 items-center justify-center rounded-xl bg-amber-800 px-6 text-lg font-bold text-white shadow-sm"
-            href={`/orders/new?cycleId=${cycle.id}`}
-          >
-            เพิ่มออเดอร์
-          </Link>
-        ) : null}
+        <div className="grid gap-3">
+          {acceptsNewOrders ? (
+            <Link
+              className="inline-flex min-h-12 items-center justify-center rounded-xl border border-amber-800 px-6 text-lg font-bold text-amber-900"
+              href={`/orders/new?cycleId=${cycle.id}`}
+            >
+              เพิ่มออเดอร์
+            </Link>
+          ) : null}
+          {cycle.status === "OPEN" ? (
+            <Link
+              className="inline-flex min-h-12 items-center justify-center rounded-xl bg-amber-800 px-6 text-lg font-bold text-white shadow-sm"
+              href={`/cycles/${cycle.id}/planning`}
+            >
+              ตรวจแผนและล็อกรอบ
+            </Link>
+          ) : null}
+          {cycle.activePlanningSnapshotId !== null ? (
+            <Link
+              className="inline-flex min-h-12 items-center justify-center rounded-xl bg-stone-900 px-6 text-lg font-bold text-white shadow-sm"
+              href={`/cycles/${cycle.id}/planning`}
+            >
+              ดูแผนการผลิต
+            </Link>
+          ) : null}
+        </div>
       </header>
 
-      <AdvancedCycleWarning status={cycle.status} />
+      <ProductionFrozenWarning status={cycle.status} />
 
       <section className="grid gap-4 rounded-3xl border border-stone-200 bg-white p-5 shadow-sm">
         <div>

@@ -132,6 +132,13 @@ describe("CycleDetail", () => {
       "href",
       `/orders/new?cycleId=${CYCLE.id}`,
     );
+    expect(
+      screen.getByRole("link", { name: "ตรวจแผนและล็อกรอบ" }),
+    ).toHaveAttribute("href", `/cycles/${CYCLE.id}/planning`);
+    expect(
+      screen.getByRole("link", { name: "ตรวจแผนและล็อกรอบ" }),
+    ).toHaveClass("min-h-12");
+    expect(screen.queryByRole("link", { name: "ดูแผนการผลิต" })).toBeNull();
     const status = screen.getByLabelText("เปลี่ยนสถานะ");
     expect(status).toHaveValue("OPEN");
     expect(status.querySelector('option[value="LOCKED"]')).toBeNull();
@@ -153,7 +160,7 @@ describe("CycleDetail", () => {
     expect(screen.getByLabelText("ชื่อรอบอบ")).toHaveValue(CYCLE.name);
   });
 
-  it("warns on advanced cycles and hides new orders for cancelled cycles", () => {
+  it("explains that production inputs are frozen until the cycle is unlocked", () => {
     const { rerender } = render(
       <CycleDetail
         cycle={{ ...CYCLE, status: "IN_PRODUCTION" }}
@@ -163,9 +170,12 @@ describe("CycleDetail", () => {
     );
 
     expect(screen.getByRole("alert")).toHaveTextContent(
-      "รอบนี้เริ่มผลิตแล้ว กรุณาตรวจสอบก่อนแก้ไขออเดอร์",
+      "ข้อมูลที่กระทบการผลิตถูกล็อก กรุณาปลดล็อกรอบก่อนแก้ไข",
     );
     expect(screen.queryByRole("link", { name: "เพิ่มออเดอร์" })).toBeNull();
+    expect(
+      screen.queryByRole("link", { name: "ตรวจแผนและล็อกรอบ" }),
+    ).toBeNull();
     expect(
       screen.getAllByRole("link", { name: "แก้ไขออเดอร์" }).length,
     ).toBeGreaterThan(0);
@@ -179,5 +189,46 @@ describe("CycleDetail", () => {
     );
     expect(screen.queryByRole("link", { name: "เพิ่มออเดอร์" })).toBeNull();
     expect(screen.getByText("ยังไม่มีสินค้าที่ต้องผลิต")).toBeInTheDocument();
+  });
+
+  it("links an active immutable plan back to the planning route", () => {
+    render(
+      <CycleDetail
+        cycle={{
+          ...CYCLE,
+          status: "LOCKED",
+          activePlanningSnapshotId: "77777777-7777-4777-8777-777777777777",
+          lockedAt: new Date("2026-08-29T06:00:00.000Z"),
+        }}
+        orders={ORDERS}
+        summary={SUMMARY}
+      />,
+    );
+
+    expect(screen.getByRole("link", { name: "ดูแผนการผลิต" })).toHaveAttribute(
+      "href",
+      `/cycles/${CYCLE.id}/planning`,
+    );
+    expect(screen.getByRole("link", { name: "ดูแผนการผลิต" })).toHaveClass(
+      "min-h-12",
+    );
+    expect(
+      screen.queryByRole("link", { name: "ตรวจแผนและล็อกรอบ" }),
+    ).toBeNull();
+  });
+
+  it("does not offer planning entry points before a DRAFT cycle is open", () => {
+    render(
+      <CycleDetail
+        cycle={{ ...CYCLE, status: "DRAFT" }}
+        orders={ORDERS}
+        summary={SUMMARY}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("link", { name: "ตรวจแผนและล็อกรอบ" }),
+    ).toBeNull();
+    expect(screen.queryByRole("link", { name: "ดูแผนการผลิต" })).toBeNull();
   });
 });
