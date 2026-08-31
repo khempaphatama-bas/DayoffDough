@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Logger } from "drizzle-orm/logger";
 import { OTHER_OWNER_ID, OWNER_ID } from "@tests/fixtures/owner";
+import { seedPlanningScenario } from "@tests/fixtures/planning";
 import { createTestDatabase } from "@tests/helpers/test-db";
 import { bakeCycles, bakeCycleStatus } from "@/modules/cycles/db/schema";
+import { createPlanningCommandService } from "@/modules/planning/application/planning-commands";
+import { createPlanningQueryService } from "@/modules/planning/application/planning-queries";
 import {
   type BakeCycleStatus,
   type BakeCycleInput,
@@ -225,6 +228,68 @@ describe("cycle service", () => {
       }
     }
   });
+
+  it.each([
+    {
+      source: "LOCKED",
+      target: "CANCELLED",
+      lockRequestId: "71717171-7171-4171-8171-717171717171",
+    },
+    {
+      source: "IN_PRODUCTION",
+      target: "COMPLETED",
+      lockRequestId: "72727272-7272-4272-8272-727272727272",
+    },
+    {
+      source: "IN_PRODUCTION",
+      target: "CANCELLED",
+      lockRequestId: "73737373-7373-4373-8373-737373737373",
+    },
+  ] as const)(
+    "preserves the active planning generation across $source -> $target",
+    async ({ source, target, lockRequestId }) => {
+      const scenario = await seedPlanningScenario(context.db);
+      const lockedAt = new Date("2026-08-29T00:00:00.000Z");
+      const planningQueries = createPlanningQueryService(context.db, {
+        now: () => new Date(lockedAt),
+      });
+      const preview = await planningQueries.preview(
+        OWNER_ID,
+        scenario.cycleId,
+      );
+      const locked = await createPlanningCommandService(context.db, {
+        now: () => new Date(lockedAt),
+      }).lock(OWNER_ID, {
+        cycleId: scenario.cycleId,
+        inputFingerprint: preview.inputFingerprint,
+        lockRequestId,
+        overrides: [],
+      });
+      if (source === "IN_PRODUCTION") {
+        await service.changeStatus(
+          OWNER_ID,
+          scenario.cycleId,
+          "IN_PRODUCTION",
+        );
+      }
+
+      await expect(
+        service.changeStatus(OWNER_ID, scenario.cycleId, target),
+      ).resolves.toMatchObject({
+        status: target,
+        activePlanningSnapshotId: locked.id,
+        lockedAt,
+      });
+      await expect(
+        planningQueries.getGeneration(OWNER_ID, scenario.cycleId),
+      ).resolves.toMatchObject({
+        id: locked.id,
+        generation: 1,
+        status: "ACTIVE",
+        lockedAt,
+      });
+    },
+  );
 
   it("owner-scopes get, update, and status changes", async () => {
     const cycle = await service.create(OWNER_ID, {

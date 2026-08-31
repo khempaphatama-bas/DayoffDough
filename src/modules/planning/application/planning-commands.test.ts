@@ -510,6 +510,185 @@ describe("planning command service", () => {
     ).resolves.toMatchObject({ id: locked.id, status: "ACTIVE" });
   });
 
+  it("locks the owned cycle and pointed snapshot and retains every unlock CAS predicate", async () => {
+    const loggedQueries: Array<Readonly<{
+      sql: string;
+      params: ReadonlyArray<unknown>;
+    }>> = [];
+    await context.close();
+    context = await createTestDatabase({
+      logger: {
+        logQuery(query: string, params: unknown[]) {
+          loggedQueries.push({
+            sql: query.replaceAll(/\s+/g, " ").trim().toLowerCase(),
+            params: [...params],
+          });
+        },
+      } satisfies Logger,
+    });
+    const scenario = await seedPlanningScenario(context.db);
+    const instants = [LOCKED_AT, UNLOCKED_AT];
+    const commands = createPlanningCommandService(context.db, {
+      now: () => new Date(instants.shift()!),
+    });
+    const preview = await createPlanningQueryService(context.db, {
+      now: () => new Date(LOCKED_AT),
+    }).preview(OWNER_ID, scenario.cycleId);
+    const locked = await commands.lock(OWNER_ID, {
+      cycleId: scenario.cycleId,
+      inputFingerprint: preview.inputFingerprint,
+      lockRequestId: "61616161-6161-4161-8161-616161616161",
+      overrides: [],
+    });
+
+    loggedQueries.length = 0;
+    await commands.unlock(OWNER_ID, {
+      cycleId: scenario.cycleId,
+      reason: "ตรวจขอบเขตปลดล็อก",
+      confirmation: "ปลดล็อก",
+    });
+
+    function expectBoundEquality(
+      query: (typeof loggedQueries)[number],
+      whereSql: string,
+      table: string,
+      column: string,
+      expected: unknown,
+    ) {
+      const escapedTable = table.replaceAll("_", "\\_");
+      const escapedColumn = column.replaceAll("_", "\\_");
+      const match = whereSql.match(
+        new RegExp(
+          `"${escapedTable}"\\."${escapedColumn}" = \\$(\\d+)`,
+        ),
+      );
+      expect(match, `${table}.${column} predicate`).not.toBeNull();
+      expect(query.params[Number(match![1]) - 1]).toBe(expected);
+    }
+
+    const cycleLocks = loggedQueries.filter(
+      (query) =>
+        query.sql.includes('from "bake_cycles"') &&
+        query.sql.includes("for update"),
+    );
+    expect(cycleLocks).toHaveLength(1);
+    expectBoundEquality(
+      cycleLocks[0]!,
+      cycleLocks[0]!.sql.split(" where ")[1]!,
+      "bake_cycles",
+      "owner_id",
+      OWNER_ID,
+    );
+    expectBoundEquality(
+      cycleLocks[0]!,
+      cycleLocks[0]!.sql.split(" where ")[1]!,
+      "bake_cycles",
+      "id",
+      scenario.cycleId,
+    );
+
+    const snapshotLocks = loggedQueries.filter(
+      (query) =>
+        query.sql.includes('from "cycle_planning_snapshots"') &&
+        query.sql.includes("for update"),
+    );
+    expect(snapshotLocks).toHaveLength(1);
+    const snapshotLockWhere = snapshotLocks[0]!.sql.split(" where ")[1]!;
+    expectBoundEquality(
+      snapshotLocks[0]!,
+      snapshotLockWhere,
+      "cycle_planning_snapshots",
+      "owner_id",
+      OWNER_ID,
+    );
+    expectBoundEquality(
+      snapshotLocks[0]!,
+      snapshotLockWhere,
+      "cycle_planning_snapshots",
+      "bake_cycle_id",
+      scenario.cycleId,
+    );
+    expectBoundEquality(
+      snapshotLocks[0]!,
+      snapshotLockWhere,
+      "cycle_planning_snapshots",
+      "id",
+      locked.id,
+    );
+
+    const snapshotUpdates = loggedQueries.filter((query) =>
+      query.sql.startsWith('update "cycle_planning_snapshots"'),
+    );
+    expect(snapshotUpdates).toHaveLength(1);
+    const snapshotUpdateWhere = snapshotUpdates[0]!.sql
+      .split(" where ")[1]!
+      .split(" returning ")[0]!;
+    expectBoundEquality(
+      snapshotUpdates[0]!,
+      snapshotUpdateWhere,
+      "cycle_planning_snapshots",
+      "owner_id",
+      OWNER_ID,
+    );
+    expectBoundEquality(
+      snapshotUpdates[0]!,
+      snapshotUpdateWhere,
+      "cycle_planning_snapshots",
+      "bake_cycle_id",
+      scenario.cycleId,
+    );
+    expectBoundEquality(
+      snapshotUpdates[0]!,
+      snapshotUpdateWhere,
+      "cycle_planning_snapshots",
+      "id",
+      locked.id,
+    );
+    expectBoundEquality(
+      snapshotUpdates[0]!,
+      snapshotUpdateWhere,
+      "cycle_planning_snapshots",
+      "status",
+      "ACTIVE",
+    );
+
+    const cycleUpdates = loggedQueries.filter((query) =>
+      query.sql.startsWith('update "bake_cycles"'),
+    );
+    expect(cycleUpdates).toHaveLength(1);
+    const cycleUpdateWhere = cycleUpdates[0]!.sql
+      .split(" where ")[1]!
+      .split(" returning ")[0]!;
+    expectBoundEquality(
+      cycleUpdates[0]!,
+      cycleUpdateWhere,
+      "bake_cycles",
+      "owner_id",
+      OWNER_ID,
+    );
+    expectBoundEquality(
+      cycleUpdates[0]!,
+      cycleUpdateWhere,
+      "bake_cycles",
+      "id",
+      scenario.cycleId,
+    );
+    expectBoundEquality(
+      cycleUpdates[0]!,
+      cycleUpdateWhere,
+      "bake_cycles",
+      "status",
+      "LOCKED",
+    );
+    expectBoundEquality(
+      cycleUpdates[0]!,
+      cycleUpdateWhere,
+      "bake_cycles",
+      "active_planning_snapshot_id",
+      locked.id,
+    );
+  });
+
   it("locks one complete normalized generation with copied settings and source lineage", async () => {
     const scenario = await seedPlanningScenario(context.db);
     const preview = await createPlanningQueryService(context.db, {

@@ -46,6 +46,11 @@ export function CycleStatusForm({
           defaultValue={status}
           name="status"
         >
+          {status === "LOCKED" ? (
+            <option disabled value="LOCKED">
+              {CYCLE_STATUS_LABELS.LOCKED}
+            </option>
+          ) : null}
           {Object.entries(CYCLE_STATUS_LABELS)
             .filter(([value]) => value !== "LOCKED")
             .map(([value, label]) => (

@@ -13,6 +13,21 @@ import { CycleStatusForm } from "./cycle-status-form";
 describe("CycleStatusForm", () => {
   afterEach(() => vi.restoreAllMocks());
 
+  it("shows the current LOCKED status without enabling it as a target", () => {
+    render(
+      <CycleStatusForm
+        cycleId="11111111-1111-4111-8111-111111111111"
+        status="LOCKED"
+      />,
+    );
+
+    const status = screen.getByLabelText("เปลี่ยนสถานะ");
+    const lockedOption = screen.getByRole("option", { name: "ล็อกรอบแล้ว" });
+    expect(status).toHaveValue("LOCKED");
+    expect(lockedOption).toHaveValue("LOCKED");
+    expect(lockedOption).toBeDisabled();
+  });
+
   it("renders the serialized Thai action error without offering LOCKED", async () => {
     actions.changeCycleStatusAction.mockResolvedValue({
       error: "อัปเดตสถานะรอบอบไม่สำเร็จ กรุณาลองอีกครั้ง",
