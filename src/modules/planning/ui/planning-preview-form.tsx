@@ -2,16 +2,17 @@
 
 import Decimal from "decimal.js";
 import { useRouter } from "next/navigation";
-import { useActionState, useEffect, useRef, useState, type FormEvent } from "react";
+import { useActionState, useEffect, useState, type FormEvent } from "react";
 import {
   lockCycleAction,
   type PlanningActionState,
 } from "@/app/(app)/cycles/[id]/planning/actions";
 import { formatSatangAsBaht } from "@/modules/money/domain/money";
-import type {
-  PlanningIssue,
-  PlanningPreview,
-  PlanningProductPlan,
+import {
+  PLANNING_ISSUE_MESSAGES,
+  type PlanningIssue,
+  type PlanningPreview,
+  type PlanningProductPlan,
 } from "@/modules/planning/domain/types";
 import { formatUnitLabel } from "@/modules/units/domain/units";
 
@@ -86,6 +87,17 @@ function IssueList({
 export function PlanningPreviewForm({
   preview,
 }: Readonly<{ preview: PlanningPreview }>) {
+  return (
+    <FingerprintPlanningPreviewForm
+      key={preview.inputFingerprint}
+      preview={preview}
+    />
+  );
+}
+
+function FingerprintPlanningPreviewForm({
+  preview,
+}: Readonly<{ preview: PlanningPreview }>) {
   const router = useRouter();
   const [state, formAction, pending] = useActionState(
     lockCycleAction,
@@ -97,22 +109,11 @@ export function PlanningPreviewForm({
   const [reasonByProductId, setReasonByProductId] = useState<
     Record<string, string>
   >({});
-  const [lockRequestId, setLockRequestId] = useState(() =>
-    crypto.randomUUID(),
-  );
-  const previousFingerprint = useRef(preview.inputFingerprint);
+  const [lockRequestId] = useState(() => crypto.randomUUID());
 
   useEffect(() => {
     if (state.stale) router.refresh();
-  }, [router, state.stale]);
-
-  useEffect(() => {
-    if (previousFingerprint.current === preview.inputFingerprint) return;
-    previousFingerprint.current = preview.inputFingerprint;
-    setSelectedByProductId(initialSelected(preview));
-    setReasonByProductId({});
-    setLockRequestId(crypto.randomUUID());
-  }, [preview]);
+  }, [router, state]);
 
   const overrides = preview.productPlans.flatMap((plan) => {
     const selected = selectedByProductId[plan.productId] ?? "";
@@ -126,6 +127,33 @@ export function PlanningPreviewForm({
           },
         ];
   });
+  const liveShortfallWarnings: ReadonlyArray<PlanningIssue> =
+    preview.productPlans.flatMap((plan) => {
+      const calculated = calculatedOutput(
+        plan,
+        selectedByProductId[plan.productId] ?? "",
+      );
+      if (calculated === null || !new Decimal(calculated.difference).lt(0)) {
+        return [];
+      }
+      return [
+        {
+          code: "PLANNED_SHORTFALL" as const,
+          scope: "PRODUCT" as const,
+          sourceEntityId: plan.productId,
+          message: PLANNING_ISSUE_MESSAGES.PLANNED_SHORTFALL,
+          context: {
+            orderedQuantity: plan.orderedQuantity,
+            plannedOutput: calculated.output,
+            outputDifference: calculated.difference,
+          },
+        },
+      ];
+    });
+  const visibleWarnings = [
+    ...preview.warnings.filter((issue) => issue.code !== "PLANNED_SHORTFALL"),
+    ...liveShortfallWarnings,
+  ];
   const inputsValid = preview.productPlans.every((plan) => {
     const selected = selectedByProductId[plan.productId] ?? "";
     if (!validBatch(selected)) return false;
@@ -154,7 +182,7 @@ export function PlanningPreviewForm({
       onSubmit={preventInvalidSubmit}
     >
       <IssueList issues={preview.blockers} label="รายการที่ต้องแก้" tone="blocker" />
-      <IssueList issues={preview.warnings} label="คำเตือน" tone="warning" />
+      <IssueList issues={visibleWarnings} label="คำเตือน" tone="warning" />
 
       <input name="payload" type="hidden" value={payload} />
 

@@ -10,8 +10,10 @@ const ITEM_ID = "33333333-3333-4333-8333-333333333333";
 const RULE_ID = "44444444-4444-4444-8444-444444444444";
 const FINGERPRINT = "a".repeat(64);
 const NEXT_FINGERPRINT = "b".repeat(64);
+const THIRD_FINGERPRINT = "c".repeat(64);
 const REQUEST_ID = "55555555-5555-4555-8555-555555555555";
 const NEXT_REQUEST_ID = "66666666-6666-4666-8666-666666666666";
+const THIRD_REQUEST_ID = "77777777-7777-4777-8777-777777777777";
 
 const actions = vi.hoisted(() => ({ lockCycleAction: vi.fn() }));
 const router = vi.hoisted(() => ({ refresh: vi.fn() }));
@@ -183,7 +185,8 @@ describe("PlanningPreviewForm", () => {
     vi.spyOn(globalThis.crypto, "randomUUID")
       .mockReturnValueOnce(REQUEST_ID)
       .mockReturnValueOnce(NEXT_REQUEST_ID)
-      .mockReturnValue(NEXT_REQUEST_ID);
+      .mockReturnValueOnce(THIRD_REQUEST_ID)
+      .mockReturnValue(THIRD_REQUEST_ID);
   });
 
   afterEach(() => vi.restoreAllMocks());
@@ -255,6 +258,32 @@ describe("PlanningPreviewForm", () => {
     resolveAction?.(OK_STATE);
   });
 
+  it("announces a live shortfall without blocking an explained override", async () => {
+    const user = userEvent.setup();
+    render(<PlanningPreviewForm preview={previewWithoutBlockers()} />);
+    const batch = screen.getByLabelText("จำนวนแบตช์ ฟอคคาเซีย");
+
+    await user.clear(batch);
+    await user.type(batch, "1.5");
+    expect(
+      within(screen.getByRole("alert", { name: "คำเตือน" })).getByText(
+        "แผนนี้ผลิตได้น้อยกว่ายอดสั่ง",
+      ),
+    ).toBeInTheDocument();
+
+    await user.type(
+      screen.getByLabelText("เหตุผลที่ปรับ ฟอคคาเซีย"),
+      "ยืนยันผลิตน้อยลง",
+    );
+    expect(screen.getByRole("button", { name: "ยืนยันล็อกรอบ" })).toBeEnabled();
+
+    await user.clear(batch);
+    await user.type(batch, "2");
+    expect(screen.queryByText("แผนนี้ผลิตได้น้อยกว่ายอดสั่ง")).toBeNull();
+    expect(screen.queryByLabelText("เหตุผลที่ปรับ ฟอคคาเซีย")).toBeNull();
+    expect(screen.getByRole("button", { name: "ยืนยันล็อกรอบ" })).toBeEnabled();
+  });
+
   it("renders product-keyed server errors beside the matching override controls", async () => {
     actions.lockCycleAction.mockResolvedValueOnce({
       error: null,
@@ -292,12 +321,22 @@ describe("PlanningPreviewForm", () => {
     );
   });
 
-  it("refreshes stale data and resets override state and request id for a new fingerprint", async () => {
+  it("refreshes every stale result and scopes action state and request ids to each fingerprint", async () => {
     actions.lockCycleAction
       .mockResolvedValueOnce({
         error: "ข้อมูลรอบเปลี่ยนแล้ว กรุณาตรวจสอบแผนอีกครั้ง",
         fieldErrors: {},
         stale: true,
+      })
+      .mockResolvedValueOnce({
+        error: "ข้อมูลรอบเปลี่ยนแล้ว กรุณาตรวจสอบแผนอีกครั้ง",
+        fieldErrors: {},
+        stale: true,
+      })
+      .mockResolvedValueOnce({
+        error: "ระบบบันทึกแผนไม่สำเร็จ กรุณาลองอีกครั้ง",
+        fieldErrors: {},
+        stale: false,
       })
       .mockResolvedValue(OK_STATE);
     const user = userEvent.setup();
@@ -322,16 +361,48 @@ describe("PlanningPreviewForm", () => {
     await waitFor(() =>
       expect(screen.getByLabelText("จำนวนแบตช์ ฟอคคาเซีย")).toHaveValue("2"),
     );
+    expect(
+      screen.queryByText("ข้อมูลรอบเปลี่ยนแล้ว กรุณาตรวจสอบแผนอีกครั้ง"),
+    ).toBeNull();
     expect(screen.queryByLabelText("เหตุผลที่ปรับ ฟอคคาเซีย")).toBeNull();
     await user.click(screen.getByRole("button", { name: "ยืนยันล็อกรอบ" }));
     await waitFor(() => expect(actions.lockCycleAction).toHaveBeenCalledTimes(2));
-    const submitted = actions.lockCycleAction.mock.calls[1]![1] as FormData;
-    expect(JSON.parse(String(submitted.get("payload")))).toEqual({
-      cycleId: CYCLE_ID,
-      inputFingerprint: NEXT_FINGERPRINT,
-      lockRequestId: NEXT_REQUEST_ID,
-      overrides: [],
-    });
+    await waitFor(() => expect(router.refresh).toHaveBeenCalledTimes(2));
+
+    rerender(
+      <PlanningPreviewForm
+        preview={previewWithoutBlockers({ inputFingerprint: THIRD_FINGERPRINT })}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByLabelText("จำนวนแบตช์ ฟอคคาเซีย")).toHaveValue("2"),
+    );
+    expect(
+      screen.queryByText("ข้อมูลรอบเปลี่ยนแล้ว กรุณาตรวจสอบแผนอีกครั้ง"),
+    ).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "ยืนยันล็อกรอบ" }));
+    expect(
+      await screen.findByText("ระบบบันทึกแผนไม่สำเร็จ กรุณาลองอีกครั้ง"),
+    ).toBeInTheDocument();
+    expect(router.refresh).toHaveBeenCalledTimes(2);
+    await user.click(screen.getByRole("button", { name: "ยืนยันล็อกรอบ" }));
+    await waitFor(() => expect(actions.lockCycleAction).toHaveBeenCalledTimes(4));
+
+    const submitted = actions.lockCycleAction.mock.calls.map((call) =>
+      JSON.parse(String((call[1] as FormData).get("payload"))),
+    );
+    expect(
+      submitted.map(({ inputFingerprint, lockRequestId }) => ({
+        inputFingerprint,
+        lockRequestId,
+      })),
+    ).toEqual([
+      { inputFingerprint: FINGERPRINT, lockRequestId: REQUEST_ID },
+      { inputFingerprint: NEXT_FINGERPRINT, lockRequestId: NEXT_REQUEST_ID },
+      { inputFingerprint: THIRD_FINGERPRINT, lockRequestId: THIRD_REQUEST_ID },
+      { inputFingerprint: THIRD_FINGERPRINT, lockRequestId: THIRD_REQUEST_ID },
+    ]);
   });
 
   it("keeps every interactive control touch-safe and the phone action above navigation", async () => {
