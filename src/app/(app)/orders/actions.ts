@@ -62,6 +62,15 @@ const THAI_FIELD_ERRORS: Readonly<Record<string, string>> = {
   items: "กรุณาเพิ่มสินค้าอย่างน้อย 1 รายการ",
   orderId: "รหัสออเดอร์ไม่ถูกต้อง",
 };
+const PRODUCTION_FROZEN_ERROR =
+  "รอบผลิตถูกล็อก กรุณาปลดล็อกรอบก่อนแก้ข้อมูลนี้";
+
+function isProductionFrozenError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message === "Cycle production inputs are locked"
+  );
+}
 
 function issueMessage(issue: ZodIssue): string {
   const field = issue.path.join(".");
@@ -140,7 +149,10 @@ export async function saveOrderAction(
     revalidatePath("/cycles");
     revalidatePath(`/cycles/${result.bakeCycleId}`);
     revalidatePath("/dashboard");
-  } catch {
+  } catch (error) {
+    if (isProductionFrozenError(error)) {
+      return { error: PRODUCTION_FROZEN_ERROR, fieldErrors: {} };
+    }
     return {
       error: "บันทึกออเดอร์ไม่สำเร็จ กรุณาตรวจสอบข้อมูลแล้วลองอีกครั้ง",
       fieldErrors: {},
@@ -214,7 +226,10 @@ export async function cancelOrderAction(
     );
     revalidateOrderStatusPaths(order);
     return { error: null, saved: true };
-  } catch {
+  } catch (error) {
+    if (isProductionFrozenError(error)) {
+      return { error: PRODUCTION_FROZEN_ERROR, saved: false };
+    }
     return {
       error: "ยกเลิกออเดอร์ไม่สำเร็จ กรุณาลองอีกครั้ง",
       saved: false,

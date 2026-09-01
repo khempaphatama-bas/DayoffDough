@@ -34,6 +34,7 @@ describe("OrderStatusActions", () => {
     render(
       <OrderStatusActions
         cancelOrder={cancelOrder}
+        cycleStatus="OPEN"
         fulfillmentStatus="CONFIRMED"
         markOrderRefunded={markOrderRefunded}
         orderId={ORDER_ID}
@@ -74,6 +75,7 @@ describe("OrderStatusActions", () => {
     render(
       <OrderStatusActions
         cancelOrder={vi.fn()}
+        cycleStatus="OPEN"
         fulfillmentStatus="CANCELLED"
         markOrderRefunded={vi.fn()}
         orderId={ORDER_ID}
@@ -113,6 +115,7 @@ describe("OrderStatusActions", () => {
     const { rerender } = render(
       <OrderStatusActions
         cancelOrder={vi.fn()}
+        cycleStatus="OPEN"
         fulfillmentStatus="PACKED"
         markOrderRefunded={vi.fn()}
         orderId={ORDER_ID}
@@ -134,6 +137,7 @@ describe("OrderStatusActions", () => {
     rerender(
       <OrderStatusActions
         cancelOrder={vi.fn()}
+        cycleStatus="OPEN"
         fulfillmentStatus="DELIVERED"
         markOrderRefunded={vi.fn()}
         orderId={ORDER_ID}
@@ -144,5 +148,25 @@ describe("OrderStatusActions", () => {
     );
     expect(screen.queryByRole("button", { name: "ยกเลิกออเดอร์" }))
       .not.toBeInTheDocument();
+  });
+
+  it("hides cancellation for a production-frozen cycle but keeps forward and refund controls", () => {
+    render(
+      <OrderStatusActions
+        cancelOrder={vi.fn()}
+        cycleStatus="LOCKED"
+        fulfillmentStatus="CONFIRMED"
+        markOrderRefunded={vi.fn()}
+        orderId={ORDER_ID}
+        paymentStatus="PARTIAL"
+        restoreOrderPaymentTracking={vi.fn()}
+        updateFulfillmentStatus={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "ยกเลิกออเดอร์" })).toBeNull();
+    expect(screen.getByRole("button", { name: "เริ่มผลิต" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "แพ็กเสร็จแล้ว" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "บันทึกคืนเงิน" })).toBeInTheDocument();
   });
 });

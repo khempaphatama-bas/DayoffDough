@@ -185,18 +185,23 @@ describe("OrderDetailPage", () => {
     expect(screen.getByText("KEX เก่า")).toBeInTheDocument();
     expect(screen.getAllByText("ชำระบางส่วน").length).toBeGreaterThan(0);
     expect(screen.getByText("ยืนยันแล้ว")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "ยกเลิกออเดอร์" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "ยกเลิกออเดอร์" })).toBeNull();
+    expect(screen.getByRole("button", { name: "เริ่มผลิต" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "บันทึกคืนเงิน" })).toBeInTheDocument();
     expect(screen.getByLabelText("ลูกค้า")).toHaveValue(CUSTOMER_ID);
     expect(screen.getByLabelText("รอบผลิต")).toHaveValue(CYCLE_ID);
     expect(screen.getByLabelText("วิธีจัดส่ง")).toHaveValue(METHOD_ID);
     expect(screen.getAllByRole("option", { name: /Focaccia เก่า/ })).toHaveLength(2);
     expect(screen.getByLabelText("ราคาต่อหน่วย รายการที่ 1 (บาท)")).toHaveValue("220.50");
     expect(screen.getByLabelText("ต้นทุนจัดส่ง (บาท)")).toHaveValue("115.50");
-    expect(
-      screen.getByText(
-        "รอบผลิตนี้เริ่มผลิตหรือเสร็จสิ้นแล้ว กรุณาตรวจสอบก่อนแก้ไขออเดอร์",
-      ),
-    ).toBeInTheDocument();
+    expect(screen.getByText(
+      "รอบผลิตถูกล็อกแล้ว แก้ได้เฉพาะยอดชำระและสถานะที่ไม่กระทบการผลิต",
+    )).toBeInTheDocument();
+    expect(screen.getByLabelText("ลูกค้า")).toBeDisabled();
+    expect(screen.getByLabelText("จำนวน รายการที่ 1")).toBeDisabled();
+    expect(screen.getByLabelText("ยอดชำระแล้ว (บาท)")).toBeEnabled();
+    expect(screen.getAllByRole("button", { name: "บันทึกยอดชำระ" }))
+      .toHaveLength(2);
   });
 
   it("turns only the exact missing-order service error into not found", async () => {

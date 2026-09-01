@@ -8,6 +8,7 @@ import type {
   OrderDetail,
   OrderFulfillmentStatus,
 } from "@/modules/orders/application/orders";
+import type { BakeCycleStatus } from "@/modules/cycles/application/cycles";
 export {
   ORDER_FULFILLMENT_STATUS_LABELS,
   ORDER_PAYMENT_STATUS_LABELS,
@@ -20,6 +21,7 @@ type StatusAction = (
 
 type OrderStatusActionsProps = Readonly<{
   orderId: string;
+  cycleStatus: BakeCycleStatus;
   paymentStatus: OrderDetail["paymentStatus"];
   fulfillmentStatus: OrderFulfillmentStatus;
   updateFulfillmentStatus: StatusAction;
@@ -62,6 +64,7 @@ function ActionFeedback({
 
 export function OrderStatusActions({
   orderId,
+  cycleStatus,
   paymentStatus,
   fulfillmentStatus,
   updateFulfillmentStatus,
@@ -90,6 +93,7 @@ export function OrderStatusActions({
     fulfillmentStatus === "CANCELLED" || fulfillmentStatus === "DELIVERED"
       ? []
       : FORWARD_ACTIONS.filter((_, index) => index > currentIndex);
+  const productionFrozen = cycleStatus !== "DRAFT" && cycleStatus !== "OPEN";
 
   function confirmCancellation(event: FormEvent<HTMLFormElement>) {
     if (!window.confirm("ยืนยันยกเลิกออเดอร์นี้หรือไม่?")) {
@@ -163,7 +167,8 @@ export function OrderStatusActions({
           </form>
         )}
         {fulfillmentStatus !== "CANCELLED" &&
-        fulfillmentStatus !== "DELIVERED" ? (
+        fulfillmentStatus !== "DELIVERED" &&
+        !productionFrozen ? (
           <form action={cancelAction} onSubmit={confirmCancellation}>
             <input name="orderId" type="hidden" value={orderId} />
             <input name="status" type="hidden" value="CANCELLED" />

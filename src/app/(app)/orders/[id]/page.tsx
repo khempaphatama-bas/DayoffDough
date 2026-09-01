@@ -70,6 +70,8 @@ export default async function OrderDetailPage({
       lineNote: item.lineNote ?? "",
     })),
   };
+  const productionFrozen =
+    order.cycleStatus !== "DRAFT" && order.cycleStatus !== "OPEN";
 
   return (
     <main className="mx-auto grid max-w-5xl gap-7 px-5 py-8">
@@ -87,6 +89,11 @@ export default async function OrderDetailPage({
           {order.customerName} · {order.cycleName}
         </p>
       </header>
+      {productionFrozen ? (
+        <p className="rounded-2xl border border-amber-300 bg-amber-50 p-4 font-semibold text-amber-950">
+          รอบผลิตถูกล็อกแล้ว แก้ได้เฉพาะยอดชำระและสถานะที่ไม่กระทบการผลิต
+        </p>
+      ) : null}
       <section className="grid gap-5 rounded-3xl border border-stone-200 bg-white p-5 shadow-sm lg:grid-cols-[minmax(0,1fr)_minmax(18rem,.7fr)]">
         <div>
           <h2 className="text-xl font-bold text-stone-900">สรุปออเดอร์</h2>
@@ -143,6 +150,7 @@ export default async function OrderDetailPage({
         </div>
         <OrderStatusActions
           cancelOrder={cancelOrderAction}
+          cycleStatus={order.cycleStatus}
           fulfillmentStatus={order.fulfillmentStatus}
           markOrderRefunded={markOrderRefundedAction}
           orderId={order.id}
@@ -157,6 +165,7 @@ export default async function OrderDetailPage({
         mode="edit"
         options={options}
         orderId={order.id}
+        productionFrozen={productionFrozen}
       />
     </main>
   );

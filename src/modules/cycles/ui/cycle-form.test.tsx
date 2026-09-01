@@ -40,16 +40,41 @@ describe("CycleForm", () => {
     expect(screen.getByLabelText("วันส่งหลัก")).toBeRequired();
   });
 
-  it("keeps status out of metadata edits and displays Bangkok-local cutoff time", () => {
-    render(<CycleForm cycle={CYCLE} />);
+  it.each(["DRAFT", "OPEN"] as const)(
+    "keeps metadata editable only while the cycle is %s",
+    (status) => {
+      render(<CycleForm cycle={{ ...CYCLE, status }} />);
 
-    expect(screen.queryByLabelText("สถานะเริ่มต้น")).not.toBeInTheDocument();
-    expect(screen.getByLabelText("วันปิดรับออเดอร์")).toHaveValue(
-      "2026-08-27T12:00",
-    );
-    expect(screen.getByLabelText("ชื่อรอบอบ")).toHaveValue(CYCLE.name);
-    expect(screen.getByDisplayValue("อบช่วงเช้า")).toBeInTheDocument();
-  });
+      expect(screen.queryByLabelText("สถานะเริ่มต้น")).not.toBeInTheDocument();
+      expect(screen.getByLabelText("วันปิดรับออเดอร์")).toHaveValue(
+        "2026-08-27T12:00",
+      );
+      expect(screen.getByLabelText("ชื่อรอบอบ")).toHaveValue(CYCLE.name);
+      expect(screen.getByLabelText("ชื่อรอบอบ")).toBeEnabled();
+      expect(screen.getByRole("button", { name: "บันทึกข้อมูลรอบอบ" }))
+        .toBeInTheDocument();
+    },
+  );
+
+  it.each(["LOCKED", "IN_PRODUCTION", "COMPLETED", "CANCELLED"] as const)(
+    "renders copied metadata read-only with a planning link for %s",
+    (status) => {
+      render(<CycleForm cycle={{ ...CYCLE, status }} />);
+
+      expect(screen.queryByLabelText("ชื่อรอบอบ")).toBeNull();
+      expect(screen.getByText(CYCLE.name)).toBeInTheDocument();
+      expect(screen.getByText("2026-08-27T12:00")).toBeInTheDocument();
+      expect(screen.getByText(CYCLE.targetProductionDate)).toBeInTheDocument();
+      expect(screen.getByText(CYCLE.primaryDeliveryDate)).toBeInTheDocument();
+      expect(screen.getByText("อบช่วงเช้า")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "บันทึกข้อมูลรอบอบ" }))
+        .toBeNull();
+      expect(screen.getByRole("link", { name: "เปิดหน้าแผนการผลิต" })).toHaveAttribute(
+        "href",
+        `/cycles/${CYCLE.id}/planning`,
+      );
+    },
+  );
 
   it("keeps typed values and shows Thai errors after an expected action failure", async () => {
     actions.createCycleAction.mockResolvedValue({

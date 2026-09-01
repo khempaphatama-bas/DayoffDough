@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import {
   startTransition,
   useActionState,
@@ -34,7 +35,7 @@ function formatBangkokDateTime(value: Date | null): string {
   return bangkokTime.toISOString().slice(0, 16);
 }
 
-export function CycleForm({
+function EditableCycleForm({
   cycle,
 }: Readonly<{ cycle?: BakeCycle }>) {
   const action = cycle ? updateCycleAction : createCycleAction;
@@ -146,4 +147,52 @@ export function CycleForm({
       </button>
     </form>
   );
+}
+
+function ReadOnlyCycle({ cycle }: Readonly<{ cycle: BakeCycle }>) {
+  return (
+    <section className="grid gap-4 rounded-3xl border border-stone-200 bg-white p-5 shadow-sm">
+      <dl className="grid gap-4 text-sm md:grid-cols-2">
+        <div className="md:col-span-2">
+          <dt className="text-stone-500">ชื่อรอบอบ</dt>
+          <dd className="mt-1 font-semibold text-stone-900">{cycle.name}</dd>
+        </div>
+        <div>
+          <dt className="text-stone-500">วันปิดรับออเดอร์</dt>
+          <dd className="mt-1 font-semibold text-stone-900">
+            {formatBangkokDateTime(cycle.orderCutoffAt) || "ยังไม่กำหนด"}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-stone-500">วันผลิต</dt>
+          <dd className="mt-1 font-semibold text-stone-900">
+            {cycle.targetProductionDate}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-stone-500">วันส่งหลัก</dt>
+          <dd className="mt-1 font-semibold text-stone-900">
+            {cycle.primaryDeliveryDate}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-stone-500">หมายเหตุ</dt>
+          <dd className="mt-1 text-stone-900">{cycle.notes || "ยังไม่มีหมายเหตุ"}</dd>
+        </div>
+      </dl>
+      <Link
+        className="inline-flex min-h-11 items-center justify-center rounded-xl border border-stone-800 px-5 font-semibold text-stone-900"
+        href={`/cycles/${cycle.id}/planning`}
+      >
+        เปิดหน้าแผนการผลิต
+      </Link>
+    </section>
+  );
+}
+
+export function CycleForm({ cycle }: Readonly<{ cycle?: BakeCycle }>) {
+  if (cycle && cycle.status !== "DRAFT" && cycle.status !== "OPEN") {
+    return <ReadOnlyCycle cycle={cycle} />;
+  }
+  return cycle ? <EditableCycleForm cycle={cycle} /> : <EditableCycleForm />;
 }

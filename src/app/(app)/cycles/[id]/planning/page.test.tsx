@@ -3,16 +3,20 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BakeCycle } from "@/modules/cycles/application/cycles";
 import type {
   PlanningGenerationSummary,
+  PlanningGenerationView,
 } from "@/modules/planning/application/planning-queries";
 import type { PlanningPreview } from "@/modules/planning/domain/types";
 
 const mocks = vi.hoisted(() => ({
   cycleGet: vi.fn(),
+  generationView: vi.fn(),
+  getGeneration: vi.fn(),
   listGenerations: vi.fn(),
   notFound: vi.fn(),
   preview: vi.fn(),
   previewForm: vi.fn(),
   requireOwner: vi.fn(),
+  unlockForm: vi.fn(),
 }));
 
 vi.mock("next/navigation", () => ({ notFound: mocks.notFound }));
@@ -25,14 +29,33 @@ vi.mock("@/modules/cycles/application/cycles", () => ({
 }));
 vi.mock("@/modules/planning/application/planning-queries", () => ({
   createPlanningQueryService: () => ({
+    getGeneration: mocks.getGeneration,
     listGenerations: mocks.listGenerations,
     preview: mocks.preview,
   }),
+}));
+vi.mock("@/modules/planning/ui/planning-generation-view", () => ({
+  PlanningGenerationView: ({
+    generation,
+    generations,
+  }: {
+    generation: PlanningGenerationView;
+    generations: ReadonlyArray<PlanningGenerationSummary>;
+  }) => {
+    mocks.generationView(generation, generations);
+    return <div data-testid="planning-generation">รุ่น {generation.generation}</div>;
+  },
 }));
 vi.mock("@/modules/planning/ui/planning-preview-form", () => ({
   PlanningPreviewForm: ({ preview }: { preview: PlanningPreview }) => {
     mocks.previewForm(preview);
     return <div data-testid="planning-preview">{preview.inputFingerprint}</div>;
+  },
+}));
+vi.mock("@/modules/planning/ui/unlock-cycle-form", () => ({
+  UnlockCycleForm: ({ cycleId, status }: { cycleId: string; status: string }) => {
+    mocks.unlockForm(cycleId, status);
+    return <div data-testid="unlock-cycle">ปลดล็อกรอบ</div>;
   },
 }));
 
@@ -108,12 +131,26 @@ const GENERATIONS: ReadonlyArray<PlanningGenerationSummary> = [
   },
 ];
 
+const GENERATION_VIEW: PlanningGenerationView = {
+  ...GENERATIONS[0]!,
+  cycleName: "ชื่อรอบที่คัดลอกตอนล็อก",
+  warnings: [],
+  orders: [],
+  productPlans: [],
+  recipePlans: [],
+  materialRequirements: [],
+  packagingRequirements: [],
+  productCosts: [],
+  cycleCost: PREVIEW.cycleCost,
+};
+
 describe("PlanningPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.requireOwner.mockResolvedValue({ id: OWNER_ID, email: "owner@example.com" });
     mocks.cycleGet.mockResolvedValue(CYCLE);
     mocks.listGenerations.mockResolvedValue([]);
+    mocks.getGeneration.mockResolvedValue(GENERATION_VIEW);
     mocks.preview.mockResolvedValue(PREVIEW);
     mocks.notFound.mockImplementation(() => {
       throw new Error("NEXT_NOT_FOUND");
@@ -133,6 +170,7 @@ describe("PlanningPage", () => {
     expect(mocks.listGenerations).toHaveBeenCalledWith(OWNER_ID, CYCLE_ID);
     expect(mocks.preview).toHaveBeenCalledWith(OWNER_ID, CYCLE_ID);
     expect(mocks.previewForm).toHaveBeenCalledWith(PREVIEW);
+    expect(mocks.unlockForm).not.toHaveBeenCalled();
   });
 
   it("asks a DRAFT cycle to open before planning and never builds a preview", async () => {
@@ -146,7 +184,7 @@ describe("PlanningPage", () => {
     expect(mocks.preview).not.toHaveBeenCalled();
   });
 
-  it("leaves active and historical generation rendering for the next UI step", async () => {
+  it("loads the active-pointer generation for a frozen cycle", async () => {
     mocks.cycleGet.mockResolvedValueOnce({
       ...CYCLE,
       status: "LOCKED",
@@ -157,9 +195,109 @@ describe("PlanningPage", () => {
 
     render(await PlanningPage({ params: Promise.resolve({ id: CYCLE_ID }) }));
 
-    expect(screen.getByText("มีแผนที่ล็อกไว้ 1 รุ่น")).toBeInTheDocument();
+    expect(screen.getByTestId("planning-generation")).toHaveTextContent("รุ่น 1");
     expect(screen.queryByTestId("planning-preview")).toBeNull();
     expect(mocks.preview).not.toHaveBeenCalled();
+    expect(mocks.getGeneration).toHaveBeenCalledWith(OWNER_ID, CYCLE_ID);
+    expect(mocks.generationView).toHaveBeenCalledWith(
+      GENERATION_VIEW,
+      GENERATIONS,
+    );
+    expect(screen.getByTestId("unlock-cycle")).toBeInTheDocument();
+    expect(mocks.unlockForm).toHaveBeenCalledWith(CYCLE_ID, "LOCKED");
+  });
+
+  it("renders unlock controls for IN_PRODUCTION but not a terminal cycle", async () => {
+    mocks.cycleGet.mockResolvedValueOnce({
+      ...CYCLE,
+      status: "IN_PRODUCTION",
+      activePlanningSnapshotId: SNAPSHOT_ID,
+    });
+    render(await PlanningPage({ params: Promise.resolve({ id: CYCLE_ID }) }));
+    expect(mocks.unlockForm).toHaveBeenCalledWith(CYCLE_ID, "IN_PRODUCTION");
+
+    vi.clearAllMocks();
+    mocks.requireOwner.mockResolvedValue({ id: OWNER_ID, email: "owner@example.com" });
+    mocks.cycleGet.mockResolvedValue({
+      ...CYCLE,
+      status: "COMPLETED",
+      activePlanningSnapshotId: SNAPSHOT_ID,
+    });
+    mocks.listGenerations.mockResolvedValue(GENERATIONS);
+    mocks.getGeneration.mockResolvedValue(GENERATION_VIEW);
+    render(await PlanningPage({ params: Promise.resolve({ id: CYCLE_ID }) }));
+    expect(mocks.unlockForm).not.toHaveBeenCalled();
+  });
+
+  it("opens an explicitly selected historical generation instead of an OPEN live preview", async () => {
+    mocks.listGenerations.mockResolvedValueOnce(GENERATIONS);
+
+    render(
+      await PlanningPage({
+        params: Promise.resolve({ id: CYCLE_ID }),
+        searchParams: Promise.resolve({ generation: "1" }),
+      }),
+    );
+
+    expect(screen.getByTestId("planning-generation")).toBeInTheDocument();
+    expect(screen.queryByTestId("planning-preview")).toBeNull();
+    expect(mocks.preview).not.toHaveBeenCalled();
+    expect(mocks.getGeneration).toHaveBeenCalledWith(OWNER_ID, CYCLE_ID, 1);
+    expect(
+      screen.getByRole("link", { name: `← ${GENERATION_VIEW.cycleName}` }),
+    ).toHaveAttribute("href", `/cycles/${CYCLE_ID}`);
+  });
+
+  it.each(["0", "-1", "1.5", "1e2", "9007199254740992"])(
+    "rejects invalid generation search input %s before immutable reads",
+    async (generation) => {
+      await expect(
+        PlanningPage({
+          params: Promise.resolve({ id: CYCLE_ID }),
+          searchParams: Promise.resolve({ generation }),
+        }),
+      ).rejects.toThrow("NEXT_NOT_FOUND");
+
+      expect(mocks.notFound).toHaveBeenCalledOnce();
+      expect(mocks.getGeneration).not.toHaveBeenCalled();
+      expect(mocks.preview).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["COMPLETED", "CANCELLED"] as const)(
+    "renders a legitimate no-plan state for a terminal %s cycle without an active pointer",
+    async (status) => {
+      mocks.cycleGet.mockResolvedValueOnce({
+        ...CYCLE,
+        status,
+        activePlanningSnapshotId: null,
+      });
+
+      render(await PlanningPage({ params: Promise.resolve({ id: CYCLE_ID }) }));
+
+      expect(screen.getByText("รอบนี้ไม่มีแผนที่ล็อกไว้")).toBeInTheDocument();
+      expect(mocks.getGeneration).not.toHaveBeenCalled();
+      expect(mocks.preview).not.toHaveBeenCalled();
+    },
+  );
+
+  it("uses an explicit generation even when a terminal cycle has no active pointer", async () => {
+    mocks.cycleGet.mockResolvedValueOnce({
+      ...CYCLE,
+      status: "CANCELLED",
+      activePlanningSnapshotId: null,
+    });
+    mocks.listGenerations.mockResolvedValueOnce(GENERATIONS);
+
+    render(
+      await PlanningPage({
+        params: Promise.resolve({ id: CYCLE_ID }),
+        searchParams: Promise.resolve({ generation: "1" }),
+      }),
+    );
+
+    expect(screen.getByTestId("planning-generation")).toBeInTheDocument();
+    expect(mocks.getGeneration).toHaveBeenCalledWith(OWNER_ID, CYCLE_ID, 1);
   });
 
   it.each([

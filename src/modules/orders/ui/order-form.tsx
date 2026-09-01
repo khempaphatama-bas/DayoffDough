@@ -27,6 +27,7 @@ type OrderFormProps = Readonly<{
   options: OrderFormOptions;
   initialValues: OrderFormValues;
   orderId?: string;
+  productionFrozen?: boolean;
   createQuickCustomer: typeof createQuickCustomerAction;
 }>;
 
@@ -70,6 +71,7 @@ export function OrderForm({
   options,
   initialValues,
   orderId,
+  productionFrozen = false,
   createQuickCustomer,
 }: OrderFormProps) {
   const [values, setValues] = useState<OrderFormValues>(initialValues);
@@ -101,11 +103,13 @@ export function OrderForm({
   const selectedCycle = options.bakeCycles.find(
     (cycle) => cycle.id === values.bakeCycleId,
   );
-  const showAdvancedCycleWarning =
+  const showAdvancedCycleWarning = !productionFrozen && (
     selectedCycle?.status === "IN_PRODUCTION" ||
-    selectedCycle?.status === "COMPLETED";
+    selectedCycle?.status === "COMPLETED"
+  );
   const showMissingLocation = Boolean(
-    selectedMethod?.requiresDeliveryLocation &&
+    !productionFrozen &&
+      selectedMethod?.requiresDeliveryLocation &&
       values.deliveryLocation.trim() === "",
   );
 
@@ -228,7 +232,11 @@ export function OrderForm({
     startTransition(() => formAction(formData));
   }
 
-  const saveLabel = mode === "edit" ? "บันทึกการแก้ไข" : "บันทึกออเดอร์";
+  const saveLabel = productionFrozen
+    ? "บันทึกยอดชำระ"
+    : mode === "edit"
+      ? "บันทึกการแก้ไข"
+      : "บันทึกออเดอร์";
 
   return (
     <form className="grid gap-6 pb-24 md:pb-0" onSubmit={submitOrder}>
@@ -241,6 +249,7 @@ export function OrderForm({
             ลูกค้า
             <select
               className={INPUT_CLASS}
+              disabled={productionFrozen}
               onChange={(event) => selectCustomer(event.target.value)}
               required
               value={values.customerId}
@@ -256,6 +265,7 @@ export function OrderForm({
           </label>
           <button
             className="min-h-11 rounded-xl border border-amber-800 px-5 font-semibold text-amber-900"
+            disabled={productionFrozen}
             onClick={() => setShowQuickCustomer((current) => !current)}
             type="button"
           >
@@ -372,6 +382,7 @@ export function OrderForm({
           รอบผลิต
           <select
             className={INPUT_CLASS}
+            disabled={productionFrozen}
             onChange={(event) => updateValue("bakeCycleId", event.target.value)}
             required
             value={values.bakeCycleId}
@@ -397,6 +408,7 @@ export function OrderForm({
           ช่องทางออเดอร์
           <select
             className={INPUT_CLASS}
+            disabled={productionFrozen}
             onChange={(event) =>
               updateValue(
                 "sourceChannel",
@@ -417,6 +429,7 @@ export function OrderForm({
           วันส่งที่ลูกค้าขอ
           <input
             className={INPUT_CLASS}
+            disabled={productionFrozen}
             onChange={(event) => updateValue("requestedDeliveryDate", event.target.value)}
             type="date"
             value={values.requestedDeliveryDate}
@@ -427,6 +440,7 @@ export function OrderForm({
           วันส่งยืนยัน
           <input
             className={INPUT_CLASS}
+            disabled={productionFrozen}
             onChange={(event) => updateValue("confirmedDeliveryDate", event.target.value)}
             type="date"
             value={values.confirmedDeliveryDate}
@@ -440,6 +454,7 @@ export function OrderForm({
           <h2 className="text-xl font-bold text-stone-900">รายการสินค้า</h2>
           <button
             className="min-h-11 rounded-xl border border-amber-800 px-4 font-semibold text-amber-900"
+            disabled={productionFrozen}
             onClick={() =>
               setValues((current) => ({
                 ...current,
@@ -460,6 +475,7 @@ export function OrderForm({
               สินค้า รายการที่ {itemIndex + 1}
               <select
                 className={INPUT_CLASS}
+                disabled={productionFrozen}
                 onChange={(event) => selectProduct(itemIndex, event.target.value)}
                 required
                 value={item.productId}
@@ -477,6 +493,7 @@ export function OrderForm({
               จำนวน รายการที่ {itemIndex + 1}
               <input
                 className={INPUT_CLASS}
+                disabled={productionFrozen}
                 inputMode="numeric"
                 min="1"
                 onChange={(event) => updateItem(itemIndex, { quantity: event.target.value })}
@@ -490,6 +507,7 @@ export function OrderForm({
               ราคาต่อหน่วย รายการที่ {itemIndex + 1} (บาท)
               <input
                 className={INPUT_CLASS}
+                disabled={productionFrozen}
                 inputMode="decimal"
                 onChange={(event) => updateItem(itemIndex, { unitPriceBaht: event.target.value })}
                 required
@@ -501,6 +519,7 @@ export function OrderForm({
               หมายเหตุสินค้า รายการที่ {itemIndex + 1}
               <input
                 className={INPUT_CLASS}
+                disabled={productionFrozen}
                 onChange={(event) => updateItem(itemIndex, { lineNote: event.target.value })}
                 value={item.lineNote}
               />
@@ -508,7 +527,7 @@ export function OrderForm({
             </label>
             <button
               className="min-h-11 self-end rounded-xl border border-red-300 px-4 font-semibold text-red-800 disabled:opacity-50"
-              disabled={values.items.length === 1}
+              disabled={productionFrozen || values.items.length === 1}
               onClick={() =>
                 setValues((current) => ({
                   ...current,
@@ -530,6 +549,7 @@ export function OrderForm({
           วิธีจัดส่ง
           <select
             className={INPUT_CLASS}
+            disabled={productionFrozen}
             onChange={(event) => selectDeliveryMethod(event.target.value)}
             value={values.deliveryMethodId}
           >
@@ -546,6 +566,7 @@ export function OrderForm({
           ผู้รับภาระค่าส่ง
           <select
             className={INPUT_CLASS}
+            disabled={productionFrozen}
             onChange={(event) =>
               updateValue(
                 "deliveryFeePayer",
@@ -564,6 +585,7 @@ export function OrderForm({
           ค่าส่งที่เรียกเก็บ (บาท)
           <input
             className={INPUT_CLASS}
+            disabled={productionFrozen}
             inputMode="decimal"
             onChange={(event) => updateValue("deliveryFeeChargedBaht", event.target.value)}
             required
@@ -575,6 +597,7 @@ export function OrderForm({
           ต้นทุนจัดส่ง (บาท)
           <input
             className={INPUT_CLASS}
+            disabled={productionFrozen}
             inputMode="decimal"
             onChange={(event) => updateValue("deliveryCostBaht", event.target.value)}
             required
@@ -586,6 +609,7 @@ export function OrderForm({
           ส่วนลด (บาท)
           <input
             className={INPUT_CLASS}
+            disabled={productionFrozen}
             inputMode="decimal"
             onChange={(event) => updateValue("discountBaht", event.target.value)}
             required
@@ -608,6 +632,7 @@ export function OrderForm({
           สถานที่จัดส่ง
           <textarea
             className={TEXTAREA_CLASS}
+            disabled={productionFrozen}
             onChange={(event) => updateValue("deliveryLocation", event.target.value)}
             value={values.deliveryLocation}
           />
@@ -622,6 +647,7 @@ export function OrderForm({
           หมายเหตุการส่ง
           <textarea
             className={TEXTAREA_CLASS}
+            disabled={productionFrozen}
             onChange={(event) => updateValue("deliveryNote", event.target.value)}
             value={values.deliveryNote}
           />
@@ -631,6 +657,7 @@ export function OrderForm({
           คำสั่งพิเศษ
           <textarea
             className={TEXTAREA_CLASS}
+            disabled={productionFrozen}
             onChange={(event) => updateValue("specialInstructions", event.target.value)}
             value={values.specialInstructions}
           />

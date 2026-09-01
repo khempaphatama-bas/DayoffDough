@@ -186,6 +186,31 @@ describe("saveOrderAction", () => {
     expect(mocks.redirect).not.toHaveBeenCalled();
   });
 
+  it("maps only the exact production-freeze rejection for order saves", async () => {
+    mocks.update.mockRejectedValueOnce(
+      new Error("Cycle production inputs are locked"),
+    );
+
+    await expect(
+      saveOrderAction({ error: null, fieldErrors: {} }, formData(ORDER_ID)),
+    ).resolves.toEqual({
+      error: "รอบผลิตถูกล็อก กรุณาปลดล็อกรอบก่อนแก้ข้อมูลนี้",
+      fieldErrors: {},
+    });
+    expect(mocks.redirect).not.toHaveBeenCalled();
+    expect(mocks.revalidatePath).not.toHaveBeenCalled();
+
+    mocks.update.mockRejectedValueOnce(
+      new Error("Cycle production inputs are locked by database unavailable"),
+    );
+    await expect(
+      saveOrderAction({ error: null, fieldErrors: {} }, formData(ORDER_ID)),
+    ).resolves.toEqual({
+      error: "บันทึกออเดอร์ไม่สำเร็จ กรุณาตรวจสอบข้อมูลแล้วลองอีกครั้ง",
+      fieldErrors: {},
+    });
+  });
+
   it.each([
     [
       "updates fulfillment",
@@ -266,6 +291,23 @@ describe("saveOrderAction", () => {
       updateFulfillmentStatusAction({ error: null, saved: false }, data),
     ).resolves.toEqual({
       error: "อัปเดตสถานะออเดอร์ไม่สำเร็จ กรุณาลองอีกครั้ง",
+      saved: false,
+    });
+    expect(mocks.revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("maps the exact production-freeze rejection for cancellation without raw leakage", async () => {
+    mocks.cancel.mockRejectedValueOnce(
+      new Error("Cycle production inputs are locked"),
+    );
+    const data = new FormData();
+    data.set("orderId", ORDER_ID);
+    data.set("status", "CANCELLED");
+
+    await expect(
+      cancelOrderAction({ error: null, saved: false }, data),
+    ).resolves.toEqual({
+      error: "รอบผลิตถูกล็อก กรุณาปลดล็อกรอบก่อนแก้ข้อมูลนี้",
       saved: false,
     });
     expect(mocks.revalidatePath).not.toHaveBeenCalled();

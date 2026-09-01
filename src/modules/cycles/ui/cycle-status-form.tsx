@@ -5,7 +5,10 @@ import {
   changeCycleStatusAction,
   type CycleStatusActionState,
 } from "@/app/(app)/cycles/actions";
-import type { BakeCycleStatus } from "@/modules/cycles/application/cycles";
+import {
+  BAKE_CYCLE_STATUS_TRANSITIONS,
+  type BakeCycleStatus,
+} from "@/modules/cycles/application/cycles";
 import { CYCLE_STATUS_LABELS } from "@/modules/cycles/ui/cycle-list";
 
 const INITIAL_STATE: CycleStatusActionState = {
@@ -21,6 +24,17 @@ export function CycleStatusForm({
     changeCycleStatusAction,
     INITIAL_STATE,
   );
+  const allowed = BAKE_CYCLE_STATUS_TRANSITIONS[status] as readonly BakeCycleStatus[];
+
+  if (allowed.length === 0) {
+    return <p className="text-sm text-stone-600">รอบนี้ไม่มีสถานะถัดไป</p>;
+  }
+  const frozenLifecycle = status === "LOCKED" || status === "IN_PRODUCTION";
+  const targets = frozenLifecycle
+    ? allowed
+    : (Object.keys(CYCLE_STATUS_LABELS) as BakeCycleStatus[]).filter(
+        (value) => value !== "LOCKED",
+      );
 
   function confirmCancellation(event: FormEvent<HTMLFormElement>) {
     const formData = new FormData(event.currentTarget);
@@ -35,6 +49,7 @@ export function CycleStatusForm({
   return (
     <form
       action={formAction}
+      aria-label="เปลี่ยนสถานะรอบผลิต"
       className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]"
       onSubmit={confirmCancellation}
     >
@@ -43,21 +58,18 @@ export function CycleStatusForm({
         เปลี่ยนสถานะ
         <select
           className="min-h-11 rounded-xl border border-stone-300 bg-white px-4 text-base font-normal"
-          defaultValue={status}
+          defaultValue={frozenLifecycle ? "" : status}
           name="status"
+          required
         >
-          {status === "LOCKED" ? (
-            <option disabled value="LOCKED">
-              {CYCLE_STATUS_LABELS.LOCKED}
-            </option>
+          {frozenLifecycle ? (
+            <option disabled value="">เลือกสถานะใหม่</option>
           ) : null}
-          {Object.entries(CYCLE_STATUS_LABELS)
-            .filter(([value]) => value !== "LOCKED")
-            .map(([value, label]) => (
-              <option key={value} value={value}>
-                {label}
-              </option>
-            ))}
+          {targets.map((value) => (
+            <option key={value} value={value}>
+              {CYCLE_STATUS_LABELS[value]}
+            </option>
+          ))}
         </select>
       </label>
       <button

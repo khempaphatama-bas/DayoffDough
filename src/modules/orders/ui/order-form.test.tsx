@@ -419,4 +419,88 @@ describe("OrderForm", () => {
     await user.selectOptions(screen.getByLabelText("รอบผลิต"), CYCLE_ID);
     expect(screen.queryByText(warning)).not.toBeInTheDocument();
   });
+
+  it("freezes production inputs but submits the retained full payload with an updated payment", async () => {
+    actions.saveOrderAction.mockResolvedValue({
+      error: "รอบผลิตถูกล็อก กรุณาปลดล็อกรอบก่อนแก้ข้อมูลนี้",
+      fieldErrors: {},
+    });
+    const frozenValues: OrderFormValues = {
+      ...INITIAL_VALUES,
+      customerId: CUSTOMER_ID,
+      sourceChannel: "INSTAGRAM",
+      requestedDeliveryDate: "2026-08-30",
+      confirmedDeliveryDate: "2026-08-30",
+      deliveryMethodId: KEX_ID,
+      deliveryFeeChargedBaht: "120.00",
+      deliveryCostBaht: "115.00",
+      discountBaht: "20.00",
+      deliveryLocation: "บางรัก กรุงเทพฯ",
+      deliveryNote: "โทรก่อนส่ง",
+      specialInstructions: "แยกถุง",
+      items: [
+        {
+          productId: FOCACCIA_ID,
+          quantity: "2",
+          unitPriceBaht: "220.00",
+          lineNote: "อบเข้ม",
+        },
+      ],
+    };
+    const user = userEvent.setup();
+    const { container } = render(
+      <OrderForm
+        createQuickCustomer={successfulQuickCustomer}
+        initialValues={frozenValues}
+        mode="edit"
+        options={OPTIONS}
+        orderId="00000000-0000-4000-8000-000000000060"
+        productionFrozen
+      />,
+    );
+
+    for (const label of [
+      "ลูกค้า",
+      "รอบผลิต",
+      "ช่องทางออเดอร์",
+      "วันส่งที่ลูกค้าขอ",
+      "วันส่งยืนยัน",
+      "สินค้า รายการที่ 1",
+      "จำนวน รายการที่ 1",
+      "ราคาต่อหน่วย รายการที่ 1 (บาท)",
+      "หมายเหตุสินค้า รายการที่ 1",
+      "วิธีจัดส่ง",
+      "ผู้รับภาระค่าส่ง",
+      "ค่าส่งที่เรียกเก็บ (บาท)",
+      "ต้นทุนจัดส่ง (บาท)",
+      "ส่วนลด (บาท)",
+      "สถานที่จัดส่ง",
+      "หมายเหตุการส่ง",
+      "คำสั่งพิเศษ",
+    ]) {
+      expect(screen.getByLabelText(label)).toBeDisabled();
+    }
+    expect(screen.getByRole("button", { name: "สร้างลูกค้าใหม่" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "เพิ่มรายการสินค้า" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "ลบรายการที่ 1" })).toBeDisabled();
+
+    const amountPaid = screen.getByLabelText("ยอดชำระแล้ว (บาท)");
+    expect(amountPaid).toBeEnabled();
+    expect(screen.getAllByRole("button", { name: "บันทึกยอดชำระ" })).toHaveLength(2);
+    await user.clear(amountPaid);
+    await user.type(amountPaid, "300");
+    await user.click(screen.getAllByRole("button", { name: "บันทึกยอดชำระ" })[0]!);
+
+    await waitFor(() => expect(actions.saveOrderAction).toHaveBeenCalledOnce());
+    const submitted = actions.saveOrderAction.mock.calls[0]?.[1] as FormData;
+    expect(JSON.parse(String(submitted.get("payload")))).toEqual({
+      ...frozenValues,
+      amountPaidBaht: "300",
+    });
+    expect(
+      JSON.parse(
+        container.querySelector<HTMLInputElement>('input[name="payload"]')!.value,
+      ),
+    ).toEqual({ ...frozenValues, amountPaidBaht: "300" });
+  });
 });
