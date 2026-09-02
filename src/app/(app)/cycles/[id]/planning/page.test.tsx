@@ -133,6 +133,7 @@ const GENERATIONS: ReadonlyArray<PlanningGenerationSummary> = [
 
 const GENERATION_VIEW: PlanningGenerationView = {
   ...GENERATIONS[0]!,
+  cycleNumber: 7,
   cycleName: "ชื่อรอบที่คัดลอกตอนล็อก",
   warnings: [],
   orders: [],
@@ -246,6 +247,8 @@ describe("PlanningPage", () => {
     expect(
       screen.getByRole("link", { name: `← ${GENERATION_VIEW.cycleName}` }),
     ).toHaveAttribute("href", `/cycles/${CYCLE_ID}`);
+    expect(screen.getByText("รอบ #7")).toBeInTheDocument();
+    expect(screen.queryByText(`รอบ #${CYCLE.cycleNumber}`)).toBeNull();
   });
 
   it.each(["0", "-1", "1.5", "1e2", "9007199254740992"])(

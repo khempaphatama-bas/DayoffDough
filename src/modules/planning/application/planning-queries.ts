@@ -44,6 +44,7 @@ export type PlanningGenerationSummary = Readonly<{
 
 export type PlanningGenerationView = PlanningGenerationSummary &
   Readonly<{
+    cycleNumber: number;
     cycleName: string;
     warnings: ReadonlyArray<PlanningIssue>;
     orders: ReadonlyArray<PlanningOrderSnapshot>;
@@ -474,6 +475,7 @@ export function createPlanningQueryService(
 
       return {
         ...toGenerationSummary(snapshot),
+        cycleNumber: snapshot.cycleNumber,
         cycleName: snapshot.cycleName,
         warnings,
         orders,

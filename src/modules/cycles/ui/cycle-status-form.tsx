@@ -7,9 +7,9 @@ import {
 } from "@/app/(app)/cycles/actions";
 import {
   BAKE_CYCLE_STATUS_TRANSITIONS,
+  CYCLE_STATUS_LABELS,
   type BakeCycleStatus,
-} from "@/modules/cycles/application/cycles";
-import { CYCLE_STATUS_LABELS } from "@/modules/cycles/ui/cycle-list";
+} from "@/modules/cycles/domain/cycle-lifecycle";
 
 const INITIAL_STATE: CycleStatusActionState = {
   error: null,
@@ -24,17 +24,11 @@ export function CycleStatusForm({
     changeCycleStatusAction,
     INITIAL_STATE,
   );
-  const allowed = BAKE_CYCLE_STATUS_TRANSITIONS[status] as readonly BakeCycleStatus[];
+  const targets = BAKE_CYCLE_STATUS_TRANSITIONS[status];
 
-  if (allowed.length === 0) {
+  if (targets.length === 0) {
     return <p className="text-sm text-stone-600">รอบนี้ไม่มีสถานะถัดไป</p>;
   }
-  const frozenLifecycle = status === "LOCKED" || status === "IN_PRODUCTION";
-  const targets = frozenLifecycle
-    ? allowed
-    : (Object.keys(CYCLE_STATUS_LABELS) as BakeCycleStatus[]).filter(
-        (value) => value !== "LOCKED",
-      );
 
   function confirmCancellation(event: FormEvent<HTMLFormElement>) {
     const formData = new FormData(event.currentTarget);
@@ -58,13 +52,11 @@ export function CycleStatusForm({
         เปลี่ยนสถานะ
         <select
           className="min-h-11 rounded-xl border border-stone-300 bg-white px-4 text-base font-normal"
-          defaultValue={frozenLifecycle ? "" : status}
+          defaultValue=""
           name="status"
           required
         >
-          {frozenLifecycle ? (
-            <option disabled value="">เลือกสถานะใหม่</option>
-          ) : null}
+          <option disabled value="">เลือกสถานะใหม่</option>
           {targets.map((value) => (
             <option key={value} value={value}>
               {CYCLE_STATUS_LABELS[value]}

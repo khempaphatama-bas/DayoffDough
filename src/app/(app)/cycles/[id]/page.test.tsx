@@ -140,9 +140,14 @@ describe("CycleDetail", () => {
     ).toHaveClass("min-h-12");
     expect(screen.queryByRole("link", { name: "ดูแผนการผลิต" })).toBeNull();
     const status = screen.getByLabelText("เปลี่ยนสถานะ");
-    expect(status).toHaveValue("OPEN");
-    expect(status.querySelector('option[value="LOCKED"]')).toBeNull();
-    expect(status.querySelectorAll("option")).toHaveLength(5);
+    const statusOptions = Array.from(status.querySelectorAll("option"));
+    expect(status).toHaveValue("");
+    expect(statusOptions.map((option) => option.value)).toEqual([
+      "",
+      "DRAFT",
+      "CANCELLED",
+    ]);
+    expect(statusOptions[0]).toBeDisabled();
     expect(screen.getByText("ออเดอร์ที่ใช้งาน")).toBeInTheDocument();
     expect(screen.getByText("1 ออเดอร์")).toBeInTheDocument();
     expect(screen.getAllByText("฿620.00").length).toBeGreaterThan(0);

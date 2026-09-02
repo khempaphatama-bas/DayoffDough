@@ -1,21 +1,13 @@
 import Link from "next/link";
-import type {
-  BakeCycle,
-  BakeCycleStatus,
-} from "@/modules/cycles/application/cycles";
+import {
+  CYCLE_STATUS_LABELS,
+  type BakeCycle,
+  type BakeCycleStatus,
+} from "@/modules/cycles/domain/cycle-lifecycle";
 import { formatSatangAsBaht } from "@/modules/money/domain/money";
 import type { CycleOrderSummary } from "@/modules/orders/application/orders";
 
-export const CYCLE_STATUS_LABELS: Readonly<
-  Record<BakeCycleStatus, string>
-> = {
-  DRAFT: "แบบร่าง",
-  OPEN: "เปิดรับออเดอร์",
-  LOCKED: "ล็อกรอบแล้ว",
-  IN_PRODUCTION: "กำลังผลิต",
-  COMPLETED: "เสร็จสิ้น",
-  CANCELLED: "ยกเลิก",
-};
+export { CYCLE_STATUS_LABELS } from "@/modules/cycles/domain/cycle-lifecycle";
 
 function formatCycleDate(value: string): string {
   return new Intl.DateTimeFormat("th-TH", {

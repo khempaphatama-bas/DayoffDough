@@ -14,9 +14,11 @@ describe("CycleStatusForm", () => {
   afterEach(() => vi.restoreAllMocks());
 
   it.each([
+    ["DRAFT", ["", "OPEN", "CANCELLED"]],
+    ["OPEN", ["", "DRAFT", "CANCELLED"]],
     ["LOCKED", ["", "IN_PRODUCTION", "CANCELLED"]],
     ["IN_PRODUCTION", ["", "COMPLETED", "CANCELLED"]],
-  ] as const)("offers only legal frozen transitions from %s", (current, expected) => {
+  ] as const)("offers only legal transitions from %s", (current, expected) => {
     render(
       <CycleStatusForm
         cycleId="11111111-1111-4111-8111-111111111111"
@@ -25,8 +27,11 @@ describe("CycleStatusForm", () => {
     );
 
     const status = screen.getByLabelText("เปลี่ยนสถานะ");
-    expect(screen.getAllByRole("option").map((option) => option.getAttribute("value")))
-      .toEqual(expected);
+    const options = screen.getAllByRole("option");
+    expect(options.map((option) => option.getAttribute("value"))).toEqual(
+      expected,
+    );
+    expect(options[0]).toBeDisabled();
     expect(status.querySelector('option[value="LOCKED"]')).toBeNull();
   });
 

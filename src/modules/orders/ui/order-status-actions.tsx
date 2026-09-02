@@ -8,7 +8,7 @@ import type {
   OrderDetail,
   OrderFulfillmentStatus,
 } from "@/modules/orders/application/orders";
-import type { BakeCycleStatus } from "@/modules/cycles/application/cycles";
+import type { BakeCycleStatus } from "@/modules/cycles/domain/cycle-lifecycle";
 export {
   ORDER_FULFILLMENT_STATUS_LABELS,
   ORDER_PAYMENT_STATUS_LABELS,

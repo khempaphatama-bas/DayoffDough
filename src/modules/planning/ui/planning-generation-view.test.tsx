@@ -37,6 +37,7 @@ const GENERATIONS: ReadonlyArray<PlanningGenerationSummary> = [
 
 const INCOMPLETE_GENERATION: PlanningGenerationViewData = {
   ...GENERATIONS[0]!,
+  cycleNumber: 12,
   cycleName: "รอบส่ง 30 ส.ค.",
   warnings: [
     {

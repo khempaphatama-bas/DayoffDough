@@ -9,15 +9,9 @@ import {
   uuid,
   varchar,
 } from "drizzle-orm/pg-core";
+import { bakeCycleStatus } from "@/modules/cycles/domain/cycle-lifecycle";
 
-export const bakeCycleStatus = [
-  "DRAFT",
-  "OPEN",
-  "LOCKED",
-  "IN_PRODUCTION",
-  "COMPLETED",
-  "CANCELLED",
-] as const;
+export { bakeCycleStatus } from "@/modules/cycles/domain/cycle-lifecycle";
 
 export const bakeCycleStatusEnum = pgEnum(
   "bake_cycle_status",

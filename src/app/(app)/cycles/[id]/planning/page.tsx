@@ -72,6 +72,7 @@ export default async function PlanningPage({
     }
     throw error;
   }
+  const displayedCycleNumber = generationView?.cycleNumber ?? cycle.cycleNumber;
   const displayedCycleName = generationView?.cycleName ?? cycle.name;
 
   return (
@@ -84,7 +85,7 @@ export default async function PlanningPage({
           ← {displayedCycleName}
         </Link>
         <p className="mt-4 text-sm font-bold text-amber-800">
-          รอบ #{cycle.cycleNumber}
+          รอบ #{displayedCycleNumber}
         </p>
         <h1 className="mt-1 text-3xl font-bold tracking-tight text-stone-900">
           วางแผนการผลิต

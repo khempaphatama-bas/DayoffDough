@@ -6,7 +6,7 @@ import {
   unlockCycleAction,
   type UnlockActionState,
 } from "@/app/(app)/cycles/[id]/planning/actions";
-import type { BakeCycleStatus } from "@/modules/cycles/application/cycles";
+import type { BakeCycleStatus } from "@/modules/cycles/domain/cycle-lifecycle";
 
 const INITIAL_STATE: UnlockActionState = {
   error: null,

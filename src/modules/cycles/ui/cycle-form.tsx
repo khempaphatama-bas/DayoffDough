@@ -11,7 +11,7 @@ import {
   type CycleActionState,
   updateCycleAction,
 } from "@/app/(app)/cycles/actions";
-import type { BakeCycle } from "@/modules/cycles/application/cycles";
+import type { BakeCycle } from "@/modules/cycles/domain/cycle-lifecycle";
 
 const INITIAL_STATE: CycleActionState = {
   error: null,

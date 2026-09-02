@@ -2,20 +2,19 @@ import { and, desc, eq, ilike } from "drizzle-orm";
 import { z } from "zod";
 import type { DatabaseClient } from "@/lib/db/types";
 import { lockOwnedBakeCycle } from "@/lib/db/row-locks";
-import { bakeCycles, bakeCycleStatus } from "@/modules/cycles/db/schema";
+import { bakeCycles } from "@/modules/cycles/db/schema";
+import {
+  BAKE_CYCLE_STATUS_TRANSITIONS,
+  bakeCycleStatus,
+  type BakeCycle,
+  type BakeCycleStatus,
+} from "@/modules/cycles/domain/cycle-lifecycle";
 
-export type BakeCycleStatus = (typeof bakeCycleStatus)[number];
-
-export const BAKE_CYCLE_STATUS_TRANSITIONS = {
-  DRAFT: ["OPEN", "CANCELLED"],
-  OPEN: ["DRAFT", "CANCELLED"],
-  LOCKED: ["IN_PRODUCTION", "CANCELLED"],
-  IN_PRODUCTION: ["COMPLETED", "CANCELLED"],
-  COMPLETED: [],
-  CANCELLED: [],
-} as const satisfies Readonly<
-  Record<BakeCycleStatus, ReadonlyArray<BakeCycleStatus>>
->;
+export { BAKE_CYCLE_STATUS_TRANSITIONS } from "@/modules/cycles/domain/cycle-lifecycle";
+export type {
+  BakeCycle,
+  BakeCycleStatus,
+} from "@/modules/cycles/domain/cycle-lifecycle";
 
 export type BakeCycleInput = Readonly<{
   name: string;
@@ -23,22 +22,6 @@ export type BakeCycleInput = Readonly<{
   targetProductionDate: string;
   primaryDeliveryDate: string;
   notes?: string;
-}>;
-
-export type BakeCycle = Readonly<{
-  id: string;
-  ownerId: string;
-  cycleNumber: number;
-  name: string;
-  status: BakeCycleStatus;
-  orderCutoffAt: Date | null;
-  targetProductionDate: string;
-  primaryDeliveryDate: string;
-  notes: string | null;
-  lockedAt: Date | null;
-  activePlanningSnapshotId: string | null;
-  createdAt: Date;
-  updatedAt: Date;
 }>;
 
 export type BakeCycleFilters = Readonly<{

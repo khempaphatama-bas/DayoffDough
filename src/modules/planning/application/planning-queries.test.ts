@@ -759,6 +759,14 @@ describe("planning query service", () => {
     );
 
     await context.db
+      .update(bakeCycles)
+      .set({
+        cycleNumber: preview.cycle.cycleNumber + 100,
+        name: "ชื่อและเลขรอบปัจจุบันหลังล็อก",
+      })
+      .where(eq(bakeCycles.id, scenario.cycleId));
+
+    await context.db
       .update(products)
       .set({ name: "ชื่อสินค้าใหม่" })
       .where(eq(products.id, scenario.productId));
@@ -836,6 +844,7 @@ describe("planning query service", () => {
       cycleId: scenario.cycleId,
       generation: 1,
       status: "ACTIVE",
+      cycleNumber: preview.cycle.cycleNumber,
       cycleName: "รอบส่ง 30 ส.ค.",
       warnings: [],
       orders: [
