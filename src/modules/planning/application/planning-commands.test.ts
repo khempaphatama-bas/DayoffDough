@@ -955,6 +955,48 @@ describe("planning command service", () => {
     expect(snapshotCount!.value).toBe(0);
   });
 
+  it("rejects numeric-looking instruction changes that were not previewed", async () => {
+    const scenario = await seedPlanningScenario(context.db);
+    const clock = { now: () => new Date(LOCKED_AT) };
+    await context.db
+      .update(orders)
+      .set({ specialInstructions: "01" })
+      .where(eq(orders.id, scenario.orderIds[0]!));
+    const preview = await createPlanningQueryService(context.db, clock).preview(
+      OWNER_ID,
+      scenario.cycleId,
+    );
+    await context.db
+      .update(orders)
+      .set({ specialInstructions: "1" })
+      .where(eq(orders.id, scenario.orderIds[0]!));
+
+    await expect(
+      createPlanningCommandService(context.db, clock).lock(OWNER_ID, {
+        cycleId: scenario.cycleId,
+        inputFingerprint: preview.inputFingerprint,
+        lockRequestId: "34343434-3434-4434-8434-343434343434",
+        overrides: [],
+      }),
+    ).rejects.toBeInstanceOf(PlanningStaleError);
+
+    const [cycle] = await context.db
+      .select({
+        status: bakeCycles.status,
+        activePlanningSnapshotId: bakeCycles.activePlanningSnapshotId,
+      })
+      .from(bakeCycles)
+      .where(eq(bakeCycles.id, scenario.cycleId));
+    const [snapshotCount] = await context.db
+      .select({ value: count() })
+      .from(cyclePlanningSnapshots);
+    expect(cycle).toEqual({
+      status: "OPEN",
+      activePlanningSnapshotId: null,
+    });
+    expect(snapshotCount!.value).toBe(0);
+  });
+
   it("returns the same generation for a repeated lock request without duplicating rows", async () => {
     const scenario = await seedPlanningScenario(context.db);
     const clock = { now: () => new Date(LOCKED_AT) };

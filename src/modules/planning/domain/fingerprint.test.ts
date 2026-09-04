@@ -251,6 +251,50 @@ describe("planning source fingerprint", () => {
     );
   });
 
+  it("preserves numeric-looking semantic text exactly", () => {
+    const source = sourceFixture();
+    const withNumericText: PlanningSourceData = {
+      ...source,
+      orders: source.orders.map((order, index) =>
+        index === 0
+          ? {
+              ...order,
+              specialInstructions: "01",
+              items: order.items.map((item, itemIndex) =>
+                itemIndex === 0 ? { ...item, lineNote: "001" } : item,
+              ),
+            }
+          : order,
+      ),
+    };
+    const changedInstructions: PlanningSourceData = {
+      ...withNumericText,
+      orders: withNumericText.orders.map((order, index) =>
+        index === 0 ? { ...order, specialInstructions: "1" } : order,
+      ),
+    };
+    const changedLineNote: PlanningSourceData = {
+      ...withNumericText,
+      orders: withNumericText.orders.map((order, index) =>
+        index === 0
+          ? {
+              ...order,
+              items: order.items.map((item, itemIndex) =>
+                itemIndex === 0 ? { ...item, lineNote: "1" } : item,
+              ),
+            }
+          : order,
+      ),
+    };
+
+    expect(createPlanningFingerprint(changedInstructions)).not.toBe(
+      createPlanningFingerprint(withNumericText),
+    );
+    expect(createPlanningFingerprint(changedLineNote)).not.toBe(
+      createPlanningFingerprint(withNumericText),
+    );
+  });
+
   it("ignores values belonging only to already-cancelled orders", () => {
     const source = sourceFixture();
     const cancelled = {

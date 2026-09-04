@@ -3,6 +3,13 @@ import Decimal from "decimal.js";
 import type { PlanningSourceData } from "./types";
 
 const NUMERIC_STRING = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i;
+const DECIMAL_STRING_KEYS: ReadonlySet<string> = new Set([
+  "defaultWasteAllowancePercent",
+  "baseYieldQuantity",
+  "wasteAllowancePercent",
+  "quantityInBaseUnit",
+  "packBaseQuantity",
+]);
 const STABLE_ID_KEYS = [
   "id",
   "recipeIngredientId",
@@ -35,7 +42,7 @@ function stableId(value: unknown): string | null {
   return null;
 }
 
-function canonicalize(value: unknown): CanonicalValue {
+function canonicalize(value: unknown, key?: string): CanonicalValue {
   if (value === null || typeof value === "boolean") return value;
   if (value instanceof Date) return value.toISOString();
   if (typeof value === "number") {
@@ -45,7 +52,9 @@ function canonicalize(value: unknown): CanonicalValue {
     return value;
   }
   if (typeof value === "string") {
-    if (!NUMERIC_STRING.test(value)) return value;
+    if (!key || !DECIMAL_STRING_KEYS.has(key) || !NUMERIC_STRING.test(value)) {
+      return value;
+    }
     const numeric = new Decimal(value);
     return numeric.isFinite() ? numeric.toString() : value;
   }
@@ -56,14 +65,14 @@ function canonicalize(value: unknown): CanonicalValue {
         stableId(left)!.localeCompare(stableId(right)!),
       );
     }
-    return ordered.map(canonicalize);
+    return ordered.map((item) => canonicalize(item));
   }
   if (typeof value === "object") {
     const result: Record<string, CanonicalValue> = {};
     const source = value as Record<string, unknown>;
     for (const key of Object.keys(source).sort()) {
       if (key === "calculatedAt" || source[key] === undefined) continue;
-      result[key] = canonicalize(source[key]);
+      result[key] = canonicalize(source[key], key);
     }
     return result;
   }
