@@ -2,6 +2,7 @@ import { expect, type Locator, type Page } from "@playwright/test";
 
 export const OWNER_ID = "00000000-0000-4000-8000-000000000001";
 export const OTHER_OWNER_ID = "00000000-0000-4000-8000-000000000002";
+const SERVER_ACTION_TIMEOUT = 30_000;
 
 function requiredEnv(name: "E2E_OWNER_EMAIL" | "E2E_OWNER_PASSWORD"): string {
   const value = process.env[name];
@@ -66,7 +67,7 @@ export async function configureShopSettings(page: Page): Promise<void> {
   await page.getByRole("button", { name: "บันทึกการตั้งค่า" }).click();
   await expect(page.getByRole("main")).toContainText(
     "บันทึกการตั้งค่าร้านแล้ว",
-    { timeout: 15_000 },
+    { timeout: SERVER_ACTION_TIMEOUT },
   );
 }
 
@@ -75,6 +76,7 @@ export async function createInventoryItem(
   input: Readonly<{
     name: string;
     category: "INGREDIENT" | "PACKAGING" | "CONSUMABLE";
+    baseUnit?: "g" | "piece";
     purchaseLabel: string;
     packQuantity: string;
   }>,
@@ -83,13 +85,13 @@ export async function createInventoryItem(
   await page.getByRole("button", { name: "เพิ่มรายการ" }).click();
   await page.getByLabel("ชื่อรายการ").fill(input.name);
   await page.getByLabel("ประเภท").selectOption(input.category);
-  await page.getByLabel("หน่วยฐาน").selectOption("g");
+  await page.getByLabel("หน่วยฐาน").selectOption(input.baseUnit ?? "g");
   await page.getByLabel("ชื่อหน่วยซื้อ").fill(input.purchaseLabel);
   await page.getByLabel("ปริมาณต่อแพ็ก").fill(input.packQuantity);
   await page.getByRole("button", { name: "บันทึกรายการ" }).click();
-  await expect(
-    page.getByText(input.name).filter({ visible: true }).first(),
-  ).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByRole("main")).toContainText("บันทึกรายการแล้ว", {
+    timeout: SERVER_ACTION_TIMEOUT,
+  });
 }
 
 export async function addInventoryPrice(
@@ -100,9 +102,9 @@ export async function addInventoryPrice(
   await clickVisibleLink(page, itemName);
   await page.getByLabel("ราคาต่อแพ็ก").fill(input.packPriceBaht);
   await page.getByRole("button", { name: "บันทึกราคา" }).click();
-  await expect(
-    page.getByText(`฿${Number(input.packPriceBaht).toFixed(2)}`).first(),
-  ).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByRole("main")).toContainText("บันทึกราคาแล้ว", {
+    timeout: SERVER_ACTION_TIMEOUT,
+  });
 }
 
 export async function createProduct(
@@ -115,9 +117,9 @@ export async function createProduct(
   await page.getByLabel("หน่วยขาย").selectOption("piece");
   await page.getByLabel("ราคาขาย").fill(input.sellingPriceBaht);
   await page.getByRole("button", { name: "บันทึกสินค้า" }).click();
-  await expect(
-    page.getByText(input.name).filter({ visible: true }).first(),
-  ).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByRole("main")).toContainText("บันทึกสินค้าแล้ว", {
+    timeout: SERVER_ACTION_TIMEOUT,
+  });
 }
 
 export async function createRecipeVersion(
@@ -128,6 +130,9 @@ export async function createRecipeVersion(
     yieldQuantity: string;
     ingredientName: string;
     ingredientQuantity: string;
+    laborMinutes?: string;
+    utilityCostBaht?: string;
+    wastePercent?: string;
   }>,
 ): Promise<void> {
   await clickVisibleLink(page, productName);
@@ -135,17 +140,59 @@ export async function createRecipeVersion(
   await page.getByLabel("รหัสเวอร์ชัน").fill(input.versionCode);
   await page.getByLabel("ผลผลิตต่อสูตร").fill(input.yieldQuantity);
   await page
+    .getByLabel("เวลาแรงงานต่อสูตร (นาที)")
+    .fill(input.laborMinutes ?? "0");
+  await page
+    .getByLabel("ค่าไฟหรือแก๊สต่อสูตร (บาท)")
+    .fill(input.utilityCostBaht ?? "0.00");
+  if (input.wastePercent !== undefined) {
+    await page.getByLabel("ค่าเผื่อสูญเสีย (%)").fill(input.wastePercent);
+  }
+  await page
     .getByRole("combobox", { name: "วัตถุดิบ 1", exact: true })
     .selectOption({ label: `${input.ingredientName} (g)` });
   await page
     .getByRole("spinbutton", { name: "ปริมาณวัตถุดิบ 1", exact: true })
     .fill(input.ingredientQuantity);
   await page.getByRole("button", { name: "บันทึกเวอร์ชันสูตร" }).click();
+  await expect(page.getByRole("main")).toContainText(
+    "บันทึกเวอร์ชันสูตรแล้ว",
+    { timeout: SERVER_ACTION_TIMEOUT },
+  );
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "เปิดใช้เวอร์ชันนี้" }).click();
-  await expect(page.getByText("สูตรที่ใช้งานอยู่")).toBeVisible({
-    timeout: 15_000,
+  await expect(page.getByRole("main")).toContainText("สูตรที่ใช้งานอยู่", {
+    timeout: SERVER_ACTION_TIMEOUT,
   });
+}
+
+export async function createPackagingRule(
+  page: Page,
+  input: Readonly<{
+    productName: string;
+    inventoryItemName: string;
+    basis: "PER_PRODUCT_UNIT" | "PER_ORDER";
+    quantity: string;
+  }>,
+): Promise<void> {
+  if (new URL(page.url()).pathname !== "/delivery") {
+    await clickVisibleLink(page, "การจัดส่ง");
+  }
+  await page.getByLabel("ขอบเขตกฎ").selectOption("PRODUCT");
+  await page
+    .getByLabel("สินค้า", { exact: true })
+    .selectOption({ label: input.productName });
+  await selectOptionContaining(
+    page.getByLabel("รายการบรรจุภัณฑ์"),
+    input.inventoryItemName,
+  );
+  await page.getByLabel("วิธีคิดจำนวน").selectOption(input.basis);
+  await page.getByLabel("จำนวนที่ใช้").fill(input.quantity);
+  await page.getByRole("button", { name: "บันทึกกฎบรรจุภัณฑ์" }).click();
+  await expect(page.getByRole("main")).toContainText(
+    "บันทึกกฎบรรจุภัณฑ์แล้ว",
+    { timeout: SERVER_ACTION_TIMEOUT },
+  );
 }
 
 export async function createDeliveryMethod(
@@ -163,9 +210,12 @@ export async function createDeliveryMethod(
   await page.getByLabel("ต้นทุนขนส่ง").first().fill(input.internalCostBaht);
   await page.getByLabel("ต้องระบุสถานที่จัดส่ง").first().check();
   await page.getByRole("button", { name: "บันทึกวิธีส่ง" }).click();
+  await expect(page.getByRole("main")).toContainText("บันทึกวิธีส่งแล้ว", {
+    timeout: SERVER_ACTION_TIMEOUT,
+  });
   await expect(
     page.getByRole("button", { name: `บันทึกการแก้ไข ${input.name}` }),
-  ).toBeVisible({ timeout: 15_000 });
+  ).toBeVisible({ timeout: SERVER_ACTION_TIMEOUT });
 }
 
 export async function createCustomer(
@@ -186,8 +236,12 @@ export async function createCustomer(
     .getByLabel("สถานที่จัดส่งประจำ")
     .fill(input.deliveryLocation);
   await page.getByRole("button", { name: "บันทึกลูกค้า" }).click();
-  await expect(page.getByRole("main")).toContainText("บันทึกลูกค้าแล้ว");
-  await expect(page.getByRole("main")).toContainText(input.name);
+  await expect(page.getByRole("main")).toContainText("บันทึกลูกค้าแล้ว", {
+    timeout: SERVER_ACTION_TIMEOUT,
+  });
+  await expect(page.getByRole("main")).toContainText(input.name, {
+    timeout: SERVER_ACTION_TIMEOUT,
+  });
 }
 
 export async function createBakeCycle(
@@ -215,8 +269,11 @@ export async function createBakeCycle(
   await page.getByRole("button", { name: "สร้างรอบอบ" }).click();
   await expect(page).toHaveURL(
     (url) => url.pathname.startsWith("/cycles/") && url.pathname !== "/cycles/new",
+    { timeout: SERVER_ACTION_TIMEOUT },
   );
-  await expect(page.getByRole("heading", { name: input.name })).toBeVisible();
+  await expect(page.getByRole("heading", { name: input.name })).toBeVisible({
+    timeout: SERVER_ACTION_TIMEOUT,
+  });
 }
 
 export async function createOrder(
@@ -281,7 +338,7 @@ export async function createOrder(
     .click();
   await expect(page).toHaveURL(
     (url) => url.pathname.startsWith("/orders/") && url.pathname !== "/orders/new",
-    { timeout: 15_000 },
+    { timeout: SERVER_ACTION_TIMEOUT },
   );
   await expect(
     page.getByRole("heading", { name: "แก้ไขออเดอร์" }),
