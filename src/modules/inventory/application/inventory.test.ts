@@ -64,6 +64,42 @@ describe("inventory service", () => {
     );
   });
 
+  it("locks the owned item before reading its balance and reconciles to the latest count", async () => {
+    const queries: string[] = [];
+    await context.close();
+    context = await createTestDatabase({
+      logger: {
+        logQuery(query: string) {
+          queries.push(query.toLowerCase());
+        },
+      } satisfies Logger,
+    });
+    service = createInventoryService(context.db);
+    const item = await service.createItem(OWNER_ID, {
+      name: "Lockable flour",
+      category: "INGREDIENT",
+      baseUnit: "g",
+      purchaseUnitLabel: "bag",
+      baseQuantityPerPurchasePack: "1000",
+      minimumStockQuantity: "0",
+    });
+    await service.recordCount(OWNER_ID, item.id, "750", new Date("2026-08-21"));
+
+    queries.length = 0;
+    await service.recordCount(OWNER_ID, item.id, "700", new Date("2026-08-22"));
+
+    const itemLockIndex = queries.findIndex(
+      (query) =>
+        query.includes('from "inventory_items"') && query.includes("for update"),
+    );
+    const balanceIndex = queries.findIndex((query) =>
+      query.includes('from "inventory_movements"'),
+    );
+    expect(itemLockIndex).toBeGreaterThanOrEqual(0);
+    expect(balanceIndex).toBeGreaterThan(itemLockIndex);
+    expect((await service.getItemDetail(OWNER_ID, item.id)).stockBalance).toBe("700");
+  });
+
   it("does not allow another owner to attach a price", async () => {
     const item = await service.createItem(OWNER_ID, {
       name: "Cream cheese",

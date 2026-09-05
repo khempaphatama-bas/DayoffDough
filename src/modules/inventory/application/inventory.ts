@@ -1,6 +1,7 @@
 import Decimal from "decimal.js";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
+import { lockOwnedInventoryItems } from "@/lib/db/row-locks";
 import type { DatabaseClient } from "@/lib/db/types";
 import { calculateUnitCostSatang } from "@/modules/inventory/domain/cost";
 import {
@@ -261,13 +262,7 @@ export function createInventoryService(db: DatabaseClient) {
         throw new Error("Invalid physical count");
       }
       return db.transaction(async (tx) => {
-        const [item] = await tx
-          .select({ id: inventoryItems.id })
-          .from(inventoryItems)
-          .where(
-            and(eq(inventoryItems.ownerId, ownerId), eq(inventoryItems.id, itemId)),
-          )
-          .limit(1);
+        const [item] = await lockOwnedInventoryItems(tx, ownerId, [itemId]);
         if (!item) throw new Error("Inventory item not found");
         const [balanceRow] = await tx
           .select({

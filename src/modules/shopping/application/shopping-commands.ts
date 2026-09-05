@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import Decimal from "decimal.js";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { lockOwnedBakeCycle, lockOwnedInventoryItems } from "@/lib/db/row-locks";
 import type { DatabaseClient } from "@/lib/db/types";
@@ -112,29 +112,6 @@ async function loadExistingCounts(
     );
 }
 
-async function loadBalances(
-  db: Pick<DatabaseClient, "select">,
-  ownerId: string,
-  itemIds: ReadonlyArray<string>,
-) {
-  const balances = new Map<string, string>();
-  for (const inventoryItemId of itemIds) {
-    const [row] = await db
-      .select({
-        balance: sql<string>`coalesce(sum(${inventoryMovements.quantityDeltaInBaseUnit}), 0)::text`,
-      })
-      .from(inventoryMovements)
-      .where(
-        and(
-          eq(inventoryMovements.ownerId, ownerId),
-          eq(inventoryMovements.inventoryItemId, inventoryItemId),
-        ),
-      );
-    balances.set(inventoryItemId, new Decimal(row?.balance ?? "0").toString());
-  }
-  return balances;
-}
-
 export function createShoppingCommandService(
   db: DatabaseClient,
   clock: ShoppingClock = { now: () => new Date() },
@@ -212,11 +189,6 @@ export function createShoppingCommandService(
           verifiedInput.planningSnapshotId,
         );
         assertExactCountSet(refreshed, verifiedInput.counts);
-        const balances = await loadBalances(
-          tx,
-          verifiedOwnerId,
-          refreshed.map((row) => row.inventoryItemId),
-        );
         const countByItemId = new Map(
           verifiedInput.counts.map((count) => [
             count.inventoryItemId,
@@ -230,7 +202,7 @@ export function createShoppingCommandService(
           if (countedQuantity === undefined) {
             throw new ShoppingValidationError("Stock counts must match the planning requirements exactly");
           }
-          const systemBalance = balances.get(row.inventoryItemId) ?? "0";
+          const systemBalance = row.systemBalance;
           const countDelta = new Decimal(countedQuantity).minus(systemBalance).toString();
           const [movement] = await tx
             .insert(inventoryMovements)

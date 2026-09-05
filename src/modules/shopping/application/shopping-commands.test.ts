@@ -1,4 +1,5 @@
 import { and, eq, sql } from "drizzle-orm";
+import type { Logger } from "drizzle-orm/logger";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { OTHER_OWNER_ID, OWNER_ID } from "@tests/fixtures/owner";
 import { seedLockedPlanningScenario } from "@tests/fixtures/planning";
@@ -138,6 +139,42 @@ describe("shopping command service", () => {
       .toMatchObject({ systemBalanceBeforeCount: "900.000000", countDeltaQuantity: "100.000000" });
     expect(shoppingRows).toHaveLength(1);
     expect(shoppingRows[0]).toMatchObject({ inventoryItemId: fixture.ingredientItemId });
+  });
+
+  it("uses the single grouped post-lock source balance read without per-item reloads", async () => {
+    const queries: string[] = [];
+    await context.close();
+    context = await createTestDatabase({
+      logger: {
+        logQuery(query: string) {
+          queries.push(query.toLowerCase());
+        },
+      } satisfies Logger,
+    });
+    const fixture = await seedLockedPlanningScenario(context.db);
+    queries.length = 0;
+
+    await createShoppingCommandService(context.db, CLOCK).confirmStock(
+      OWNER_ID,
+      confirmInput(fixture),
+    );
+
+    const movementReadIndexes = queries
+      .map((query, index) => ({ query, index }))
+      .filter(({ query }) => query.includes('from "inventory_movements"'));
+    const itemLockIndexes = queries
+      .map((query, index) => ({ query, index }))
+      .filter(
+        ({ query }) =>
+          query.includes('from "inventory_items"') && query.includes("for update"),
+      )
+      .map(({ index }) => index);
+    expect(movementReadIndexes).toHaveLength(2);
+    expect(movementReadIndexes.every(({ query }) =>
+      query.includes('group by "inventory_movements"."inventory_item_id"'),
+    )).toBe(true);
+    expect(itemLockIndexes).toHaveLength(2);
+    expect(movementReadIndexes[1]!.index).toBeGreaterThan(Math.max(...itemLockIndexes));
   });
 
   it("returns the existing view for an identical retry and rejects a different canonical count set", async () => {
