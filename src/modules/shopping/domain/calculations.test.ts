@@ -156,6 +156,55 @@ describe("shopping recommendation", () => {
     });
   });
 
+  it("preserves full persisted precision before HALF_UP money rounding", () => {
+    expect(
+      calculateShoppingRecommendation({
+        requiredQuantity: "100000000.083197",
+        countedQuantity: "0",
+        packBaseQuantity: "100000000.083197",
+        unitCostSatang: "4.246547351467",
+      }),
+    ).toEqual({
+      shortfallQuantity: "100000000.083197",
+      suggestedPackCount: 1,
+      suggestedPurchaseQuantity: "100000000.083197",
+      estimatedCostSatang: 424654735,
+    });
+  });
+
+  it("accepts the PostgreSQL integer maximum estimated cost", () => {
+    expect(
+      calculateShoppingRecommendation({
+        requiredQuantity: "1",
+        countedQuantity: "0",
+        packBaseQuantity: "1",
+        unitCostSatang: "2147483647",
+      }).estimatedCostSatang,
+    ).toBe(2_147_483_647);
+  });
+
+  it("rejects an estimated cost above the PostgreSQL integer range", () => {
+    expect(() =>
+      calculateShoppingRecommendation({
+        requiredQuantity: "1",
+        countedQuantity: "0",
+        packBaseQuantity: "1",
+        unitCostSatang: "2147483648",
+      }),
+    ).toThrow("Estimated cost exceeds PostgreSQL integer range");
+  });
+
+  it("rejects an estimated cost above the JavaScript safe integer range", () => {
+    expect(() =>
+      calculateShoppingRecommendation({
+        requiredQuantity: "9007199254740991",
+        countedQuantity: "0",
+        packBaseQuantity: "1",
+        unitCostSatang: "1.1",
+      }),
+    ).toThrow("Estimated cost exceeds safe integer range");
+  });
+
   it("does not add a minimum-stock term to the shortfall contract", () => {
     const input = {
       requiredQuantity: "100",

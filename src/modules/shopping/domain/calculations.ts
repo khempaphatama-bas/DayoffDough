@@ -8,6 +8,10 @@ import type {
   StockRequirement,
 } from "./types";
 
+const ShoppingDecimal = Decimal.clone({ precision: 64 });
+const POSTGRESQL_INTEGER_MAX = new ShoppingDecimal("2147483647");
+const SAFE_INTEGER_MAX = new ShoppingDecimal(Number.MAX_SAFE_INTEGER);
+
 function parseDecimal(
   value: string,
   label: string,
@@ -15,7 +19,7 @@ function parseDecimal(
 ): Decimal {
   let quantity: Decimal;
   try {
-    quantity = new Decimal(value);
+    quantity = new ShoppingDecimal(value);
   } catch {
     throw new Error(`Invalid ${label}`);
   }
@@ -71,7 +75,7 @@ export function aggregateSnapshotRequirements(
       }
       byInventoryItemId.set(row.inventoryItemId, {
         ...existing,
-        requiredQuantity: new Decimal(existing.requiredQuantity)
+        requiredQuantity: new ShoppingDecimal(existing.requiredQuantity)
           .plus(planned)
           .toString(),
       });
@@ -109,7 +113,7 @@ export function calculateShoppingRecommendation(
     input.unitCostSatang === null
       ? null
       : exactNonNegative(input.unitCostSatang, "unit cost");
-  const shortfall = Decimal.max(required.minus(counted), 0);
+  const shortfall = ShoppingDecimal.max(required.minus(counted), 0);
 
   if (shortfall.isZero()) {
     return {
@@ -125,13 +129,19 @@ export function calculateShoppingRecommendation(
     throw new Error("Suggested pack count is too large");
   }
   const purchaseQuantity = packs.mul(pack);
-  const estimatedCostSatang =
-    unitCost === null
-      ? null
-      : purchaseQuantity
-          .mul(unitCost)
-          .toDecimalPlaces(0, Decimal.ROUND_HALF_UP)
-          .toNumber();
+  let estimatedCostSatang: number | null = null;
+  if (unitCost !== null) {
+    const roundedEstimate = purchaseQuantity
+      .mul(unitCost)
+      .toDecimalPlaces(0, ShoppingDecimal.ROUND_HALF_UP);
+    if (roundedEstimate.gt(SAFE_INTEGER_MAX)) {
+      throw new Error("Estimated cost exceeds safe integer range");
+    }
+    if (roundedEstimate.gt(POSTGRESQL_INTEGER_MAX)) {
+      throw new Error("Estimated cost exceeds PostgreSQL integer range");
+    }
+    estimatedCostSatang = roundedEstimate.toNumber();
+  }
 
   return {
     shortfallQuantity: shortfall.toString(),
@@ -149,10 +159,10 @@ export function calculatePurchaseProgress(
   const purchased = purchasedQuantities.reduce(
     (total, quantity) =>
       total.plus(exactNonNegative(quantity, "purchased quantity")),
-    new Decimal(0),
+    new ShoppingDecimal(0),
   );
-  const remaining = Decimal.max(shortfall.minus(purchased), 0);
-  const overage = Decimal.max(purchased.minus(shortfall), 0);
+  const remaining = ShoppingDecimal.max(shortfall.minus(purchased), 0);
+  const overage = ShoppingDecimal.max(purchased.minus(shortfall), 0);
 
   return {
     status: remaining.isZero()
