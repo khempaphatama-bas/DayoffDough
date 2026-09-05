@@ -16,9 +16,20 @@ import {
   recipeVersions,
 } from "@/modules/products/db/schema";
 import { bakeCycles, bakeCycleStatus } from "@/modules/cycles/db/schema";
+import { createPlanningCommandService } from "@/modules/planning/application/planning-commands";
+import { createPlanningQueryService } from "@/modules/planning/application/planning-queries";
 import { shopSettings } from "@/modules/settings/db/schema";
 import type { DatabaseClient } from "@/lib/db/types";
 import { OWNER_ID } from "./owner";
+
+const FIXED_CLOCK = {
+  now: () => new Date("2026-08-23T03:00:00.000Z"),
+};
+
+const LOCK_REQUEST_IDS = {
+  PRIMARY: "50000000-0000-4000-8000-000000000001",
+  SECONDARY: "50000000-0000-4000-8000-000000000002",
+} as const;
 
 const IDS = {
   ingredientItem: "10000000-0000-4000-8000-000000000001",
@@ -381,5 +392,33 @@ export async function seedPlanningScenario(
     ingredientItemId: ids.ingredientItem,
     packagingItemId: ids.packagingItem,
     orderIds: [ids.firstOrder, ids.secondOrder, ids.cancelledOrder],
+  };
+}
+
+export async function seedLockedPlanningScenario(
+  db: DatabaseClient,
+  input: NonNullable<Parameters<typeof seedPlanningScenario>[1]> = {},
+) {
+  const source = await seedPlanningScenario(db, input);
+  const ownerId = input.ownerId ?? OWNER_ID;
+  const preview = await createPlanningQueryService(db, FIXED_CLOCK).preview(
+    ownerId,
+    source.cycleId,
+  );
+  const lockRequestId =
+    LOCK_REQUEST_IDS[input.idSet === "SECONDARY" ? "SECONDARY" : "PRIMARY"];
+  const generation = await createPlanningCommandService(db, FIXED_CLOCK).lock(
+    ownerId,
+    {
+      cycleId: source.cycleId,
+      lockRequestId,
+      inputFingerprint: preview.inputFingerprint,
+      overrides: [],
+    },
+  );
+  return {
+    ...source,
+    planningSnapshotId: generation.id,
+    generation: generation.generation,
   };
 }
