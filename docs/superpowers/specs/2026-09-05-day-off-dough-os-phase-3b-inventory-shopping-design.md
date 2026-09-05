@@ -2,7 +2,7 @@
 
 **วันที่:** 2026-09-05
 
-**สถานะ:** รออนุมัติ specification
+**สถานะ:** อนุมัติแล้ว
 
 **ฐานที่ใช้:** Phase 3A immutable planning generations ที่ commit `4400e22`
 
