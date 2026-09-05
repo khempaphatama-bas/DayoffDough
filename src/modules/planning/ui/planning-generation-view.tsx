@@ -168,10 +168,10 @@ export function PlanningGenerationView({
             >
               <h3 className="text-lg font-bold text-stone-900">{plan.productName}</h3>
               <dl className="grid gap-2 text-sm sm:grid-cols-2">
-                <div><dt className="text-stone-500">ยอดสั่ง</dt><dd className="font-semibold">ยอดสั่ง {plan.orderedQuantity} {unit}</dd></div>
+                <div><dt className="text-stone-500">ยอดสั่ง</dt><dd className="font-semibold">ยอดสั่ง {formatQuantity(plan.orderedQuantity)} {unit}</dd></div>
                 <div><dt className="text-stone-500">แบตช์แนะนำ</dt><dd className="font-semibold">แบตช์แนะนำ {plan.suggestedBatchCount}</dd></div>
-                <div><dt className="text-stone-500">แบตช์ที่ล็อก</dt><dd className="font-semibold">แบตช์ที่ล็อก {plan.selectedBatchCount}</dd></div>
-                <div><dt className="text-stone-500">ผลผลิตตามแผน</dt><dd className="font-semibold">ผลผลิตตามแผน {plan.plannedOutput} {unit}</dd></div>
+                <div><dt className="text-stone-500">แบตช์ที่ล็อก</dt><dd className="font-semibold">แบตช์ที่ล็อก {formatQuantity(plan.selectedBatchCount)}</dd></div>
+                <div><dt className="text-stone-500">ผลผลิตตามแผน</dt><dd className="font-semibold">ผลผลิตตามแผน {formatQuantity(plan.plannedOutput)} {unit}</dd></div>
                 <div>
                   <dt className="text-stone-500">ส่วนต่าง</dt>
                   <dd className="font-semibold">

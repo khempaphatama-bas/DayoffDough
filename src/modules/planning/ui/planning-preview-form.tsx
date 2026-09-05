@@ -302,7 +302,10 @@ function FingerprintPlanningPreviewForm({
       </section>
 
       <details className="rounded-2xl border border-stone-200 bg-white px-4">
-        <summary className="flex min-h-11 cursor-pointer items-center font-bold text-stone-900">
+        <summary
+          aria-label="วัตถุดิบที่ต้องใช้"
+          className="flex min-h-11 cursor-pointer items-center font-bold text-stone-900"
+        >
           วัตถุดิบที่ต้องใช้
         </summary>
         <ul className="grid gap-2 border-t border-stone-100 py-4 text-sm">
@@ -321,7 +324,10 @@ function FingerprintPlanningPreviewForm({
       </details>
 
       <details className="rounded-2xl border border-stone-200 bg-white px-4">
-        <summary className="flex min-h-11 cursor-pointer items-center font-bold text-stone-900">
+        <summary
+          aria-label="บรรจุภัณฑ์ที่ต้องใช้"
+          className="flex min-h-11 cursor-pointer items-center font-bold text-stone-900"
+        >
           บรรจุภัณฑ์ที่ต้องใช้
         </summary>
         <ul className="grid gap-2 border-t border-stone-100 py-4 text-sm">

@@ -1,5 +1,5 @@
 import Decimal from "decimal.js";
-import { and, asc, desc, eq, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { DatabaseClient } from "@/lib/db/types";
 import { calculateUnitCostSatang } from "@/modules/inventory/domain/cost";
@@ -146,39 +146,35 @@ export function createInventoryService(db: DatabaseClient) {
       .limit(1);
     if (!itemRow) throw new Error("Inventory item not found");
 
-    const [balanceRow] = await db
-      .select({
-        value: sql<string>`coalesce(sum(${inventoryMovements.quantityDeltaInBaseUnit}), 0)::text`,
-      })
-      .from(inventoryMovements)
-      .where(
-        and(
-          eq(inventoryMovements.ownerId, ownerId),
-          eq(inventoryMovements.inventoryItemId, itemId),
+    const [[balanceRow], priceRows] = await Promise.all([
+      db
+        .select({
+          value: sql<string>`coalesce(sum(${inventoryMovements.quantityDeltaInBaseUnit}), 0)::text`,
+        })
+        .from(inventoryMovements)
+        .where(
+          and(
+            eq(inventoryMovements.ownerId, ownerId),
+            eq(inventoryMovements.inventoryItemId, itemId),
+          ),
         ),
-      );
-    const priceRows = await db
-      .select()
-      .from(inventoryPrices)
-      .where(
-        and(
-          eq(inventoryPrices.ownerId, ownerId),
-          eq(inventoryPrices.inventoryItemId, itemId),
+      db
+        .select()
+        .from(inventoryPrices)
+        .where(
+          and(
+            eq(inventoryPrices.ownerId, ownerId),
+            eq(inventoryPrices.inventoryItemId, itemId),
+          ),
+        )
+        .orderBy(
+          desc(inventoryPrices.effectiveAt),
+          desc(inventoryPrices.createdAt),
         ),
-      )
-      .orderBy(desc(inventoryPrices.effectiveAt), desc(inventoryPrices.createdAt));
-    const [latestPriceRow] = await db
-      .select()
-      .from(inventoryPrices)
-      .where(
-        and(
-          eq(inventoryPrices.ownerId, ownerId),
-          eq(inventoryPrices.inventoryItemId, itemId),
-          lte(inventoryPrices.effectiveAt, effectiveAt),
-        ),
-      )
-      .orderBy(desc(inventoryPrices.effectiveAt), desc(inventoryPrices.createdAt))
-      .limit(1);
+    ]);
+    const latestPriceRow = priceRows.find(
+      (price) => price.effectiveAt <= effectiveAt,
+    );
 
     const latestPrice = latestPriceRow ? toPrice(latestPriceRow) : null;
     return {
@@ -196,6 +192,17 @@ export function createInventoryService(db: DatabaseClient) {
   }
 
   return {
+    async listCatalogItems(
+      ownerId: string,
+    ): Promise<ReadonlyArray<InventoryItem>> {
+      const rows = await db
+        .select()
+        .from(inventoryItems)
+        .where(eq(inventoryItems.ownerId, ownerId))
+        .orderBy(asc(inventoryItems.name));
+      return rows.map(toItem);
+    },
+
     async createItem(
       ownerId: string,
       input: CreateInventoryItemInput,
@@ -293,11 +300,77 @@ export function createInventoryService(db: DatabaseClient) {
 
     async listItems(ownerId: string): Promise<ReadonlyArray<InventoryItemDetail>> {
       const rows = await db
-        .select({ id: inventoryItems.id })
+        .select()
         .from(inventoryItems)
         .where(eq(inventoryItems.ownerId, ownerId))
         .orderBy(asc(inventoryItems.name));
-      return Promise.all(rows.map((row) => getItemDetail(ownerId, row.id)));
+      if (rows.length === 0) return [];
+
+      const itemIds = rows.map((row) => row.id);
+      const [balanceRows, priceRows] = await Promise.all([
+        db
+          .select({
+            inventoryItemId: inventoryMovements.inventoryItemId,
+            value: sql<string>`coalesce(sum(${inventoryMovements.quantityDeltaInBaseUnit}), 0)::text`,
+          })
+          .from(inventoryMovements)
+          .where(
+            and(
+              eq(inventoryMovements.ownerId, ownerId),
+              inArray(inventoryMovements.inventoryItemId, itemIds),
+            ),
+          )
+          .groupBy(inventoryMovements.inventoryItemId),
+        db
+          .select()
+          .from(inventoryPrices)
+          .where(
+            and(
+              eq(inventoryPrices.ownerId, ownerId),
+              inArray(inventoryPrices.inventoryItemId, itemIds),
+            ),
+          )
+          .orderBy(
+            desc(inventoryPrices.effectiveAt),
+            desc(inventoryPrices.createdAt),
+          ),
+      ]);
+
+      const balanceByItemId = new Map(
+        balanceRows.map((row) => [row.inventoryItemId, row.value]),
+      );
+      const pricesByItemId = new Map<
+        string,
+        Array<typeof inventoryPrices.$inferSelect>
+      >();
+      for (const price of priceRows) {
+        const itemPrices = pricesByItemId.get(price.inventoryItemId) ?? [];
+        itemPrices.push(price);
+        pricesByItemId.set(price.inventoryItemId, itemPrices);
+      }
+      const effectiveAt = new Date();
+
+      return rows.map((row) => {
+        const prices = pricesByItemId.get(row.id) ?? [];
+        const latestPriceRow = prices.find(
+          (price) => price.effectiveAt <= effectiveAt,
+        );
+        const latestPrice = latestPriceRow ? toPrice(latestPriceRow) : null;
+        return {
+          ...toItem(row),
+          stockBalance: new Decimal(
+            balanceByItemId.get(row.id) ?? "0",
+          ).toString(),
+          latestPrice,
+          latestUnitCostSatang: latestPrice
+            ? calculateUnitCostSatang(
+                latestPrice.packPriceSatang,
+                latestPrice.packBaseQuantity,
+              )
+            : null,
+          priceHistory: prices.map(toPrice),
+        };
+      });
     },
 
     getItemDetail,

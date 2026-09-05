@@ -408,7 +408,7 @@ describe("PlanningPreviewForm", () => {
   it("keeps every interactive control touch-safe and the phone action above navigation", async () => {
     const user = userEvent.setup();
     render(<PlanningPreviewForm preview={previewWithoutBlockers()} />);
-    await user.click(screen.getByText("วัตถุดิบที่ต้องใช้"));
+    await user.click(screen.getByLabelText("วัตถุดิบที่ต้องใช้"));
     const batch = screen.getByLabelText("จำนวนแบตช์ ฟอคคาเซีย");
     await user.clear(batch);
     await user.type(batch, "1.5");
@@ -418,8 +418,8 @@ describe("PlanningPreviewForm", () => {
     expect(screen.getByLabelText("เหตุผลที่ปรับ ฟอคคาเซีย")).toHaveClass(
       "min-h-11",
     );
-    expect(screen.getByText("วัตถุดิบที่ต้องใช้")).toHaveClass("min-h-11");
-    expect(screen.getByText("บรรจุภัณฑ์ที่ต้องใช้")).toHaveClass("min-h-11");
+    expect(screen.getByLabelText("วัตถุดิบที่ต้องใช้")).toHaveClass("min-h-11");
+    expect(screen.getByLabelText("บรรจุภัณฑ์ที่ต้องใช้")).toHaveClass("min-h-11");
     expect(screen.getByRole("button", { name: "ยืนยันล็อกรอบ" })).toHaveClass(
       "min-h-12",
     );

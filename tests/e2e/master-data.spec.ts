@@ -9,9 +9,9 @@ import {
   loginAsOwner,
 } from "../fixtures/owner";
 
-test("owner prepares the bakery master data", async ({ page }) => {
+test("owner prepares the bakery master data", async ({ page }, testInfo) => {
   test.setTimeout(120_000);
-  const runId = Date.now().toString();
+  const runId = `master-${testInfo.project.name}-${Date.now()}`;
   const ingredientName = `NS Wonder ${runId}`;
   const productName = `Focaccia ${runId}`;
 

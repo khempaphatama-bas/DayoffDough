@@ -15,7 +15,7 @@ async function tryClickVisibleLink(page: Page, name: string): Promise<boolean> {
   for (let index = 0; index < (await links.count()); index += 1) {
     const link = links.nth(index);
     if (await link.isVisible()) {
-      await link.click();
+      await link.press("Enter");
       return true;
     }
   }
@@ -159,8 +159,18 @@ export async function createRecipeVersion(
     "บันทึกเวอร์ชันสูตรแล้ว",
     { timeout: SERVER_ACTION_TIMEOUT },
   );
+  const productUrl = page.url();
+  const activationResponse = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      new URL(response.url()).pathname === new URL(productUrl).pathname,
+    { timeout: SERVER_ACTION_TIMEOUT },
+  );
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "เปิดใช้เวอร์ชันนี้" }).click();
+  const response = await activationResponse;
+  expect(response.ok()).toBe(true);
+  await page.goto(productUrl);
   await expect(page.getByRole("main")).toContainText("สูตรที่ใช้งานอยู่", {
     timeout: SERVER_ACTION_TIMEOUT,
   });
@@ -180,7 +190,7 @@ export async function createPackagingRule(
   }
   await page.getByLabel("ขอบเขตกฎ").selectOption("PRODUCT");
   await page
-    .getByLabel("สินค้า", { exact: true })
+    .getByRole("combobox", { name: "สินค้า", exact: true })
     .selectOption({ label: input.productName });
   await selectOptionContaining(
     page.getByLabel("รายการบรรจุภัณฑ์"),
@@ -188,7 +198,9 @@ export async function createPackagingRule(
   );
   await page.getByLabel("วิธีคิดจำนวน").selectOption(input.basis);
   await page.getByLabel("จำนวนที่ใช้").fill(input.quantity);
-  await page.getByRole("button", { name: "บันทึกกฎบรรจุภัณฑ์" }).click();
+  await page
+    .getByRole("button", { name: "บันทึกกฎบรรจุภัณฑ์" })
+    .press("Enter");
   await expect(page.getByRole("main")).toContainText(
     "บันทึกกฎบรรจุภัณฑ์แล้ว",
     { timeout: SERVER_ACTION_TIMEOUT },
@@ -209,10 +221,22 @@ export async function createDeliveryMethod(
   await page.getByLabel("ค่าส่งที่เรียกเก็บ").first().fill(input.customerFeeBaht);
   await page.getByLabel("ต้นทุนขนส่ง").first().fill(input.internalCostBaht);
   await page.getByLabel("ต้องระบุสถานที่จัดส่ง").first().check();
+  const saveResponse = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      new URL(response.url()).pathname === "/delivery",
+    { timeout: SERVER_ACTION_TIMEOUT },
+  );
   await page.getByRole("button", { name: "บันทึกวิธีส่ง" }).click();
+  const response = await saveResponse;
+  expect(response.ok()).toBe(true);
   await expect(page.getByRole("main")).toContainText("บันทึกวิธีส่งแล้ว", {
     timeout: SERVER_ACTION_TIMEOUT,
   });
+  await page.goto("/delivery");
+  await expect(
+    page.getByRole("heading", { name: "การจัดส่ง", exact: true }),
+  ).toBeVisible({ timeout: SERVER_ACTION_TIMEOUT });
   await expect(
     page.getByRole("button", { name: `บันทึกการแก้ไข ${input.name}` }),
   ).toBeVisible({ timeout: SERVER_ACTION_TIMEOUT });
@@ -235,7 +259,7 @@ export async function createCustomer(
   await page
     .getByLabel("สถานที่จัดส่งประจำ")
     .fill(input.deliveryLocation);
-  await page.getByRole("button", { name: "บันทึกลูกค้า" }).click();
+  await page.getByRole("button", { name: "บันทึกลูกค้า" }).press("Enter");
   await expect(page.getByRole("main")).toContainText("บันทึกลูกค้าแล้ว", {
     timeout: SERVER_ACTION_TIMEOUT,
   });
@@ -319,7 +343,7 @@ export async function createOrder(
     .getByLabel("หมายเหตุสินค้า รายการที่ 1", { exact: true })
     .fill("บรรทัดแรก");
 
-  await page.getByRole("button", { name: "เพิ่มรายการสินค้า" }).click();
+  await page.getByRole("button", { name: "เพิ่มรายการสินค้า" }).press("Enter");
   await page
     .getByRole("combobox", { name: "สินค้า รายการที่ 2", exact: true })
     .selectOption({ label: input.productName });

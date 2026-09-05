@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { Logger } from "drizzle-orm/logger";
 import { OTHER_OWNER_ID, OWNER_ID } from "@tests/fixtures/owner";
 import { createTestDatabase } from "@tests/helpers/test-db";
 import { createInventoryService } from "@/modules/inventory/application/inventory";
@@ -113,5 +114,67 @@ describe("product and recipe service", () => {
         ingredients: [{ inventoryItemId: bag.id, quantityInBaseUnit: "1" }],
       }),
     ).rejects.toThrow("Ingredient must be INGREDIENT");
+  });
+
+  it("loads the product list with one select regardless of recipe count", async () => {
+    const queries: string[] = [];
+    await context.close();
+    context = await createTestDatabase({
+      logger: {
+        logQuery(query: string) {
+          queries.push(query.toLowerCase());
+        },
+      } satisfies Logger,
+    });
+    inventoryService = createInventoryService(context.db);
+    productService = createProductService(context.db);
+
+    flour = await inventoryService.createItem(OWNER_ID, {
+      name: "NS Wonder",
+      category: "INGREDIENT",
+      baseUnit: "g",
+      purchaseUnitLabel: "ถุง 1 kg",
+      baseQuantityPerPurchasePack: "1000",
+      minimumStockQuantity: "0",
+    });
+    const focaccia = await productService.createProduct(OWNER_ID, {
+      name: "Focaccia",
+      sellingUnit: "piece",
+      defaultUnitPriceSatang: 22000,
+    });
+    const ciabatta = await productService.createProduct(OWNER_ID, {
+      name: "Ciabatta",
+      sellingUnit: "piece",
+      defaultUnitPriceSatang: 18000,
+    });
+    const focacciaVersion = await productService.createRecipeVersion(
+      OWNER_ID,
+      focaccia.id,
+      validInput(),
+    );
+    await productService.createRecipeVersion(OWNER_ID, ciabatta.id, {
+      ...validInput(),
+      versionCode: "DOD-CIA-001",
+      ingredients: [
+        { inventoryItemId: flour.id, quantityInBaseUnit: "300" },
+      ],
+    });
+    await productService.activateRecipeVersion(
+      OWNER_ID,
+      focaccia.id,
+      focacciaVersion.id,
+    );
+
+    queries.length = 0;
+    const listed = await productService.listProducts(OWNER_ID);
+
+    expect(listed.map((item) => item.name)).toEqual(["Ciabatta", "Focaccia"]);
+    expect(listed.find((item) => item.id === focaccia.id)).toMatchObject({
+      activeRecipeVersionId: focacciaVersion.id,
+    });
+
+    const selects = queries.filter((query) => query.startsWith("select"));
+    expect(selects).toHaveLength(1);
+    expect(selects.filter((query) => query.includes('from "products"'))).toHaveLength(1);
   });
 });

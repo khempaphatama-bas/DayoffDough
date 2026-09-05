@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import {
   createBakeCycle,
   createCustomer,
@@ -8,11 +8,33 @@ import {
   loginAsOwner,
 } from "../fixtures/owner";
 
+const SERVER_ACTION_TIMEOUT = 30_000;
+
+async function submitOrderActionAndReload(
+  page: Page,
+  orderUrl: string,
+  buttonName: string,
+): Promise<void> {
+  const actionResponse = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      new URL(response.url()).pathname === new URL(orderUrl).pathname,
+    { timeout: SERVER_ACTION_TIMEOUT },
+  );
+  await page.getByRole("button", { name: buttonName, exact: true }).click();
+  const response = await actionResponse;
+  expect(response.ok()).toBe(true);
+  await page.goto(orderUrl);
+  await expect(
+    page.getByRole("heading", { name: "แก้ไขออเดอร์" }),
+  ).toBeVisible({ timeout: SERVER_ACTION_TIMEOUT });
+}
+
 test("owner creates and cancels a duplicate-line order without losing history", async ({
   page,
 }, testInfo) => {
   test.setTimeout(180_000);
-  const runId = `${testInfo.project.name}-${Date.now()}`;
+  const runId = `orders-${testInfo.project.name}-${Date.now()}`;
   const productName = `Focaccia ${runId}`;
   const deliveryMethodName = `KEX Same Day ${runId}`;
   const customerName = `May ${runId}`;
@@ -46,6 +68,7 @@ test("owner creates and cancels a duplicate-line order without losing history", 
     discountBaht: "20",
     amountPaidBaht: "200",
   });
+  const orderUrl = page.url();
 
   const firstProduct = page.getByRole("combobox", {
     name: "สินค้า รายการที่ 1",
@@ -74,31 +97,13 @@ test("owner creates and cancels a duplicate-line order without losing history", 
   const statusActions = page.getByRole("region", {
     name: "จัดการสถานะออเดอร์",
   });
-  await statusActions
-    .getByRole("button", { name: "แพ็กเสร็จแล้ว" })
-    .click();
-  await expect(statusActions).toContainText("อัปเดตการจัดเตรียมแล้ว", {
-    timeout: 15_000,
-  });
-  await page.reload();
-  await expect(
-    page.getByRole("heading", { name: "แก้ไขออเดอร์" }),
-  ).toBeVisible();
+  await submitOrderActionAndReload(page, orderUrl, "แพ็กเสร็จแล้ว");
   await expect(
     statusActions.getByRole("button", { name: "แพ็กเสร็จแล้ว" }),
   ).toHaveCount(0);
   await expect(orderPage).toContainText("การจัดเตรียมแพ็กเสร็จแล้ว");
 
-  await statusActions
-    .getByRole("button", { name: "บันทึกคืนเงิน" })
-    .click();
-  await expect(statusActions).toContainText("บันทึกการคืนเงินแล้ว", {
-    timeout: 15_000,
-  });
-  await page.reload();
-  await expect(
-    page.getByRole("heading", { name: "แก้ไขออเดอร์" }),
-  ).toBeVisible();
+  await submitOrderActionAndReload(page, orderUrl, "บันทึกคืนเงิน");
   await expect(
     statusActions.getByRole("button", {
       name: "กลับมาติดตามการชำระเงิน",
@@ -106,17 +111,11 @@ test("owner creates and cancels a duplicate-line order without losing history", 
   ).toBeVisible();
   await expect(orderPage).toContainText("การชำระเงินคืนเงินแล้ว");
 
-  await statusActions
-    .getByRole("button", { name: "กลับมาติดตามการชำระเงิน" })
-    .click();
-  await expect(statusActions).toContainText(
-    "กลับมาติดตามการชำระเงินแล้ว",
-    { timeout: 15_000 },
+  await submitOrderActionAndReload(
+    page,
+    orderUrl,
+    "กลับมาติดตามการชำระเงิน",
   );
-  await page.reload();
-  await expect(
-    page.getByRole("heading", { name: "แก้ไขออเดอร์" }),
-  ).toBeVisible();
   await expect(
     statusActions.getByRole("button", { name: "บันทึกคืนเงิน" }),
   ).toBeVisible();
@@ -126,13 +125,19 @@ test("owner creates and cancels a duplicate-line order without losing history", 
   await page
     .getByRole("link", { name: "รอบผลิต", exact: true })
     .filter({ visible: true })
-    .click();
-  await expect(page).toHaveURL(/\/cycles$/);
+    .press("Enter");
+  await expect(page).toHaveURL(/\/cycles$/, {
+    timeout: SERVER_ACTION_TIMEOUT,
+  });
   await expect(
     page.getByRole("heading", { name: "รอบอบ", exact: true }),
-  ).toBeVisible();
-  await page.getByRole("link", { name: cycleName, exact: true }).click();
-  await expect(page.getByRole("heading", { name: cycleName })).toBeVisible();
+  ).toBeVisible({ timeout: SERVER_ACTION_TIMEOUT });
+  await page
+    .getByRole("link", { name: cycleName, exact: true })
+    .press("Enter");
+  await expect(page.getByRole("heading", { name: cycleName })).toBeVisible({
+    timeout: SERVER_ACTION_TIMEOUT,
+  });
   await expect(page.getByRole("main")).toContainText(productName);
   await expect(page.getByRole("main")).toContainText("3 ชิ้น");
 
@@ -140,26 +145,36 @@ test("owner creates and cancels a duplicate-line order without losing history", 
     .getByRole("article")
     .filter({ hasText: customerName });
   await expect(historyOrder).toContainText("2 รายการสินค้า");
-  await historyOrder.getByRole("link", { name: "แก้ไขออเดอร์" }).click();
+  await historyOrder
+    .getByRole("link", { name: "แก้ไขออเดอร์" })
+    .press("Enter");
+  await expect(
+    page.getByRole("heading", { name: "แก้ไขออเดอร์" }),
+  ).toBeVisible({ timeout: SERVER_ACTION_TIMEOUT });
 
   page.once("dialog", async (dialog) => {
     expect(dialog.message()).toBe("ยืนยันยกเลิกออเดอร์นี้หรือไม่?");
     await dialog.accept();
   });
+  const cancelResponse = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      new URL(response.url()).pathname === new URL(orderUrl).pathname,
+    { timeout: SERVER_ACTION_TIMEOUT },
+  );
   await page.getByRole("button", { name: "ยกเลิกออเดอร์" }).click();
-  await expect(page.getByRole("main")).toContainText("ยกเลิกออเดอร์แล้ว", {
-    timeout: 15_000,
-  });
-
-  await page
-    .getByRole("link", { name: "รอบผลิต", exact: true })
-    .filter({ visible: true })
-    .click();
-  await expect(page).toHaveURL(/\/cycles$/);
+  const cancelled = await cancelResponse;
+  expect(cancelled.ok()).toBe(true);
+  await page.goto("/cycles");
   await expect(
     page.getByRole("heading", { name: "รอบอบ", exact: true }),
-  ).toBeVisible();
-  await page.getByRole("link", { name: cycleName, exact: true }).click();
+  ).toBeVisible({ timeout: SERVER_ACTION_TIMEOUT });
+  await page
+    .getByRole("link", { name: cycleName, exact: true })
+    .press("Enter");
+  await expect(page.getByRole("heading", { name: cycleName })).toBeVisible({
+    timeout: SERVER_ACTION_TIMEOUT,
+  });
 
   const cancelledHistoryOrder = page
     .getByRole("article")

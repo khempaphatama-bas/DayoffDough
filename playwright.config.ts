@@ -5,6 +5,7 @@ loadEnv({ path: [".env.local", ".env"], quiet: true });
 
 export default defineConfig({
   testDir: "./tests/e2e",
+  workers: 1,
   use: { baseURL: "http://127.0.0.1:3000", trace: "on-first-retry" },
   webServer: {
     command: "pnpm dev",

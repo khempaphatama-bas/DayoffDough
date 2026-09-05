@@ -14,14 +14,13 @@ export default async function ProductDetailPage({
   const owner = await requireOwner();
   const { id } = await params;
   const productService = createProductService(db);
-  let product;
-  try {
-    product = await productService.getProductDetail(owner.id, id);
-  } catch (error) {
+  const [product, inventory] = await Promise.all([
+    productService.getProductDetail(owner.id, id),
+    createInventoryService(db).listCatalogItems(owner.id),
+  ]).catch((error: unknown) => {
     if (error instanceof Error && error.message === "Product not found") notFound();
     throw error;
-  }
-  const inventory = await createInventoryService(db).listItems(owner.id);
+  });
   const ingredientOptions = inventory
     .filter((item) => item.category === "INGREDIENT" && item.active)
     .map((item) => ({ id: item.id, name: item.name, baseUnit: item.baseUnit }));

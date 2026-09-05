@@ -16,7 +16,7 @@ export default async function DeliveryPage() {
   const owner = await requireOwner();
   const [configuration, inventory, products] = await Promise.all([
     createDeliveryService(db).listDeliveryConfiguration(owner.id),
-    createInventoryService(db).listItems(owner.id),
+    createInventoryService(db).listCatalogItems(owner.id),
     createProductService(db).listProducts(owner.id),
   ]);
   const packagingItems = inventory

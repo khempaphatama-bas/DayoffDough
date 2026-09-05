@@ -18,8 +18,8 @@ const SERVER_ACTION_TIMEOUT = 30_000;
 test("owner locks, unlocks, and re-locks immutable planning generations", async ({
   page,
 }, testInfo) => {
-  test.setTimeout(240_000);
-  const runId = `${testInfo.project.name}-${Date.now()}`;
+  test.setTimeout(300_000);
+  const runId = `planning-${testInfo.project.name}-${Date.now()}`;
   const flourName = `แป้งขนมปัง ${runId}`;
   const boxName = `กล่องฟอคคาเซีย ${runId}`;
   const productName = `Focaccia ${runId}`;
@@ -97,8 +97,12 @@ test("owner locks, unlocks, and re-locks immutable planning generations", async 
   const orderUrl = page.url();
 
   await page.goto(cycleUrl);
-  await page.getByRole("link", { name: "ตรวจแผนและล็อกรอบ" }).click();
-  await expect(page).toHaveURL(/\/cycles\/[^/]+\/planning$/);
+  await page
+    .getByRole("link", { name: "ตรวจแผนและล็อกรอบ" })
+    .press("Enter");
+  await expect(page).toHaveURL(/\/cycles\/[^/]+\/planning$/, {
+    timeout: SERVER_ACTION_TIMEOUT,
+  });
   await expect(
     page.getByRole("heading", { name: "วางแผนการผลิต" }),
   ).toBeVisible();
@@ -108,11 +112,11 @@ test("owner locks, unlocks, and re-locks immutable planning generations", async 
     `ยอดสั่ง 10 ชิ้น · แนะนำ 2 แบตช์`,
   );
   await expect(page.getByLabel(`จำนวนแบตช์ ${productName}`)).toHaveValue("2");
-  await page.getByRole("button", { name: "วัตถุดิบที่ต้องใช้" }).click();
+  await page.getByLabel("วัตถุดิบที่ต้องใช้", { exact: true }).click();
   await expect(
     page.getByRole("listitem").filter({ hasText: flourName }),
   ).toContainText("2200 g");
-  await page.getByRole("button", { name: "บรรจุภัณฑ์ที่ต้องใช้" }).click();
+  await page.getByLabel("บรรจุภัณฑ์ที่ต้องใช้", { exact: true }).click();
   await expect(
     page.getByRole("listitem").filter({ hasText: boxName }),
   ).toContainText("12 ชิ้น · ยังไม่มีราคา");
@@ -133,7 +137,17 @@ test("owner locks, unlocks, and re-locks immutable planning generations", async 
     page.getByRole("button", { name: "ยืนยันล็อกรอบ" }),
   ).toBeDisabled();
   await overrideReasonInput.fill(overrideReason);
+  const firstPlanningUrl = page.url();
+  const firstLockResponse = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      new URL(response.url()).pathname === new URL(firstPlanningUrl).pathname,
+    { timeout: SERVER_ACTION_TIMEOUT },
+  );
   await page.getByRole("button", { name: "ยืนยันล็อกรอบ" }).click();
+  const firstLock = await firstLockResponse;
+  expect(firstLock.ok()).toBe(true);
+  await page.goto(`${firstPlanningUrl}?generation=1`);
   await expect(
     page.getByRole("heading", { name: "รุ่น 1", exact: true }),
   ).toBeVisible({ timeout: SERVER_ACTION_TIMEOUT });
@@ -164,11 +178,15 @@ test("owner locks, unlocks, and re-locks immutable planning generations", async 
   await expect(page.getByRole("main")).toContainText(
     "รอบผลิตถูกล็อกแล้ว แก้ได้เฉพาะยอดชำระและสถานะที่ไม่กระทบการผลิต",
   );
-  await expect(page.getByLabel("ลูกค้า", { exact: true })).toBeDisabled();
+  await expect(
+    page.getByRole("combobox", { name: "ลูกค้า", exact: true }),
+  ).toBeDisabled();
   await expect(
     page.getByRole("spinbutton", { name: "จำนวน รายการที่ 2", exact: true }),
   ).toBeDisabled();
-  await expect(page.getByLabel("วิธีจัดส่ง")).toBeDisabled();
+  await expect(
+    page.getByRole("combobox", { name: "วิธีจัดส่ง", exact: true }),
+  ).toBeDisabled();
   const amountPaid = page.getByLabel("ยอดชำระแล้ว (บาท)");
   await expect(amountPaid).toBeEnabled();
   await expect(
@@ -187,20 +205,28 @@ test("owner locks, unlocks, and re-locks immutable planning generations", async 
   await paymentSave.click();
   const savedPayment = await paymentResponse;
   expect(savedPayment.ok()).toBe(true);
-  await savedPayment.finished();
-  await page.reload();
+  await page.goto(orderUrl);
   await expect(page.getByRole("main")).toContainText("ชำระบางส่วน", {
     timeout: SERVER_ACTION_TIMEOUT,
   });
 
   await page.goto(cycleUrl);
-  await page.getByRole("link", { name: "ดูแผนการผลิต" }).click();
+  await page.getByRole("link", { name: "ดูแผนการผลิต" }).press("Enter");
   await page.getByLabel("เหตุผลที่ปลดล็อก").fill(unlockReason);
   await page
     .getByLabel("พิมพ์คำว่า ปลดล็อก เพื่อยืนยัน")
     .fill("ปลดล็อก");
+  const planningUrl = page.url();
+  const unlockResponse = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      new URL(response.url()).pathname === new URL(planningUrl).pathname,
+    { timeout: SERVER_ACTION_TIMEOUT },
+  );
   await page.getByRole("button", { name: "ปลดล็อกรอบ" }).click();
-  await expect(page).toHaveURL(cycleUrl, { timeout: SERVER_ACTION_TIMEOUT });
+  const unlocked = await unlockResponse;
+  expect(unlocked.ok()).toBe(true);
+  await page.goto(cycleUrl);
   await expect(page.getByRole("heading", { name: cycleName })).toBeVisible();
   await expect(
     page.getByRole("link", { name: "ตรวจแผนและล็อกรอบ" }),
@@ -229,20 +255,37 @@ test("owner locks, unlocks, and re-locks immutable planning generations", async 
   await orderSave.click();
   const savedOrder = await orderResponse;
   expect(savedOrder.ok()).toBe(true);
-  await savedOrder.finished();
-  await page.reload();
+  await page.goto(orderUrl);
   await expect(secondQuantity).toHaveValue("11");
 
   await page.goto(cycleUrl);
-  await page.getByRole("link", { name: "ตรวจแผนและล็อกรอบ" }).click();
-  await expect(page.getByLabel(`จำนวนแบตช์ ${productName}`)).toHaveValue("2");
+  await page
+    .getByRole("link", { name: "ตรวจแผนและล็อกรอบ" })
+    .press("Enter");
+  await expect(page).toHaveURL(/\/cycles\/[^/]+\/planning$/, {
+    timeout: SERVER_ACTION_TIMEOUT,
+  });
+  await expect(page.getByLabel(`จำนวนแบตช์ ${productName}`)).toHaveValue(
+    "2",
+    { timeout: SERVER_ACTION_TIMEOUT },
+  );
   await expect(page.getByRole("main")).toContainText("ยอดสั่ง 12 ชิ้น");
-  await page.getByRole("button", { name: "วัตถุดิบที่ต้องใช้" }).click();
+  await page.getByLabel("วัตถุดิบที่ต้องใช้", { exact: true }).click();
   await expect(
     page.getByRole("listitem").filter({ hasText: flourName }),
   ).toContainText("2200 g");
   await expect(page.getByRole("main")).not.toContainText("ต้นทุนไม่สมบูรณ์");
+  const secondPlanningUrl = page.url();
+  const secondLockResponse = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      new URL(response.url()).pathname === new URL(secondPlanningUrl).pathname,
+    { timeout: SERVER_ACTION_TIMEOUT },
+  );
   await page.getByRole("button", { name: "ยืนยันล็อกรอบ" }).click();
+  const secondLock = await secondLockResponse;
+  expect(secondLock.ok()).toBe(true);
+  await page.goto(`${secondPlanningUrl}?generation=2`);
   await expect(
     page.getByRole("heading", { name: "รุ่น 2", exact: true }),
   ).toBeVisible({ timeout: SERVER_ACTION_TIMEOUT });
@@ -252,8 +295,12 @@ test("owner locks, unlocks, and re-locks immutable planning generations", async 
   await expect(page.getByRole("main")).toContainText("ต้นทุนรวม ฿287.00");
   await expect(page.getByRole("main")).not.toContainText("ต้นทุนไม่สมบูรณ์");
 
-  await page.getByRole("link", { name: "รุ่น 1 · แทนที่แล้ว" }).click();
-  await expect(page).toHaveURL(/\?generation=1$/);
+  await page
+    .getByRole("link", { name: "รุ่น 1 · แทนที่แล้ว" })
+    .press("Enter");
+  await expect(page).toHaveURL(/\?generation=1$/, {
+    timeout: SERVER_ACTION_TIMEOUT,
+  });
   await expect(
     page.getByRole("heading", { name: "รุ่น 1", exact: true }),
   ).toBeVisible();

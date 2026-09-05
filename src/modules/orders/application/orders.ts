@@ -387,32 +387,32 @@ async function buildOrderDetails(
     ),
   ];
 
-  const customerRows = await reader
-    .select({ id: customers.id, name: customers.name })
-    .from(customers)
-    .where(
-      and(
-        eq(customers.ownerId, ownerId),
-        inArray(customers.id, customerIds),
+  const [customerRows, cycleRows, methodRows, itemRows] = await Promise.all([
+    reader
+      .select({ id: customers.id, name: customers.name })
+      .from(customers)
+      .where(
+        and(
+          eq(customers.ownerId, ownerId),
+          inArray(customers.id, customerIds),
+        ),
       ),
-    );
-  const cycleRows = await reader
-    .select({
-      id: bakeCycles.id,
-      name: bakeCycles.name,
-      status: bakeCycles.status,
-    })
-    .from(bakeCycles)
-    .where(
-      and(
-        eq(bakeCycles.ownerId, ownerId),
-        inArray(bakeCycles.id, cycleIds),
+    reader
+      .select({
+        id: bakeCycles.id,
+        name: bakeCycles.name,
+        status: bakeCycles.status,
+      })
+      .from(bakeCycles)
+      .where(
+        and(
+          eq(bakeCycles.ownerId, ownerId),
+          inArray(bakeCycles.id, cycleIds),
+        ),
       ),
-    );
-  const methodRows =
     deliveryMethodIds.length === 0
-      ? []
-      : await reader
+      ? Promise.resolve([])
+      : reader
           .select({ id: deliveryMethods.id, name: deliveryMethods.name })
           .from(deliveryMethods)
           .where(
@@ -420,22 +420,23 @@ async function buildOrderDetails(
               eq(deliveryMethods.ownerId, ownerId),
               inArray(deliveryMethods.id, deliveryMethodIds),
             ),
-          );
-  const itemRows = await reader
-    .select()
-    .from(orderItems)
-    .where(
-      and(
-        eq(orderItems.ownerId, ownerId),
-        inArray(orderItems.orderId, orderIds),
-        eq(orderItems.active, true),
+          ),
+    reader
+      .select()
+      .from(orderItems)
+      .where(
+        and(
+          eq(orderItems.ownerId, ownerId),
+          inArray(orderItems.orderId, orderIds),
+          eq(orderItems.active, true),
+        ),
+      )
+      .orderBy(
+        asc(orderItems.orderId),
+        asc(orderItems.position),
+        asc(orderItems.id),
       ),
-    )
-    .orderBy(
-      asc(orderItems.orderId),
-      asc(orderItems.position),
-      asc(orderItems.id),
-    );
+  ]);
   const productIds = [...new Set(itemRows.map((item) => item.productId))];
   const productRows =
     productIds.length === 0
@@ -938,97 +939,103 @@ export function createOrderService(db: DatabaseClient) {
         ? [...new Set(included.productIds)]
         : [];
 
-      const customerRows = await db
-        .select({
-          id: customers.id,
-          name: customers.name,
-          contactHandle: customers.contactHandle,
-          phone: customers.phone,
-          defaultDeliveryMethodId: customers.defaultDeliveryMethodId,
-          defaultDeliveryLocation: customers.defaultDeliveryLocation,
-          defaultDeliveryNote: customers.defaultDeliveryNote,
-          active: customers.active,
-        })
-        .from(customers)
-        .where(
-          and(
-            eq(customers.ownerId, parsedOwnerId.data),
-            included
-              ? or(
-                  eq(customers.active, true),
-                  eq(customers.id, included.customerId),
-                )
-              : eq(customers.active, true),
-          ),
-        )
-        .orderBy(asc(customers.name));
-      const productRows = await db
-        .select({
-          id: products.id,
-          name: products.name,
-          defaultUnitPriceSatang: products.defaultUnitPriceSatang,
-          active: products.active,
-        })
-        .from(products)
-        .where(
-          and(
-            eq(products.ownerId, parsedOwnerId.data),
-            includedProductIds.length > 0
-              ? or(
-                  eq(products.active, true),
-                  inArray(products.id, includedProductIds),
-                )
-              : eq(products.active, true),
-          ),
-        )
-        .orderBy(asc(products.name));
-      const methodRows = await db
-        .select({
-          id: deliveryMethods.id,
-          name: deliveryMethods.name,
-          defaultCustomerFeeSatang: deliveryMethods.defaultCustomerFeeSatang,
-          defaultInternalCostSatang: deliveryMethods.defaultInternalCostSatang,
-          requiresDeliveryLocation: deliveryMethods.requiresDeliveryLocation,
-          active: deliveryMethods.active,
-        })
-        .from(deliveryMethods)
-        .where(
-          and(
-            eq(deliveryMethods.ownerId, parsedOwnerId.data),
-            included?.deliveryMethodId
-              ? or(
-                  eq(deliveryMethods.active, true),
-                  eq(deliveryMethods.id, included.deliveryMethodId),
-                )
-              : eq(deliveryMethods.active, true),
-          ),
-        )
-        .orderBy(asc(deliveryMethods.name));
-      const cycleRows = await db
-        .select({
-          id: bakeCycles.id,
-          cycleNumber: bakeCycles.cycleNumber,
-          name: bakeCycles.name,
-          status: bakeCycles.status,
-          targetProductionDate: bakeCycles.targetProductionDate,
-          primaryDeliveryDate: bakeCycles.primaryDeliveryDate,
-        })
-        .from(bakeCycles)
-        .where(
-          and(
-            eq(bakeCycles.ownerId, parsedOwnerId.data),
-            included
-              ? or(
-                  inArray(bakeCycles.status, ["DRAFT", "OPEN"]),
-                  eq(bakeCycles.id, included.bakeCycleId),
-                )
-              : inArray(bakeCycles.status, ["DRAFT", "OPEN"]),
-          ),
-        )
-        .orderBy(
-          desc(bakeCycles.primaryDeliveryDate),
-          desc(bakeCycles.cycleNumber),
-        );
+      const [customerRows, productRows, methodRows, cycleRows] =
+        await Promise.all([
+          db
+            .select({
+              id: customers.id,
+              name: customers.name,
+              contactHandle: customers.contactHandle,
+              phone: customers.phone,
+              defaultDeliveryMethodId: customers.defaultDeliveryMethodId,
+              defaultDeliveryLocation: customers.defaultDeliveryLocation,
+              defaultDeliveryNote: customers.defaultDeliveryNote,
+              active: customers.active,
+            })
+            .from(customers)
+            .where(
+              and(
+                eq(customers.ownerId, parsedOwnerId.data),
+                included
+                  ? or(
+                      eq(customers.active, true),
+                      eq(customers.id, included.customerId),
+                    )
+                  : eq(customers.active, true),
+              ),
+            )
+            .orderBy(asc(customers.name)),
+          db
+            .select({
+              id: products.id,
+              name: products.name,
+              defaultUnitPriceSatang: products.defaultUnitPriceSatang,
+              active: products.active,
+            })
+            .from(products)
+            .where(
+              and(
+                eq(products.ownerId, parsedOwnerId.data),
+                includedProductIds.length > 0
+                  ? or(
+                      eq(products.active, true),
+                      inArray(products.id, includedProductIds),
+                    )
+                  : eq(products.active, true),
+              ),
+            )
+            .orderBy(asc(products.name)),
+          db
+            .select({
+              id: deliveryMethods.id,
+              name: deliveryMethods.name,
+              defaultCustomerFeeSatang:
+                deliveryMethods.defaultCustomerFeeSatang,
+              defaultInternalCostSatang:
+                deliveryMethods.defaultInternalCostSatang,
+              requiresDeliveryLocation:
+                deliveryMethods.requiresDeliveryLocation,
+              active: deliveryMethods.active,
+            })
+            .from(deliveryMethods)
+            .where(
+              and(
+                eq(deliveryMethods.ownerId, parsedOwnerId.data),
+                included?.deliveryMethodId
+                  ? or(
+                      eq(deliveryMethods.active, true),
+                      eq(deliveryMethods.id, included.deliveryMethodId),
+                    )
+                  : eq(deliveryMethods.active, true),
+              ),
+            )
+            .orderBy(asc(deliveryMethods.name)),
+          db
+            .select({
+              id: bakeCycles.id,
+              cycleNumber: bakeCycles.cycleNumber,
+              name: bakeCycles.name,
+              status: bakeCycles.status,
+              targetProductionDate: bakeCycles.targetProductionDate,
+              primaryDeliveryDate: bakeCycles.primaryDeliveryDate,
+            })
+            .from(bakeCycles)
+            .where(
+              and(
+                eq(bakeCycles.ownerId, parsedOwnerId.data),
+                included
+                  ? or(
+                      inArray(bakeCycles.status, ["DRAFT", "OPEN"]),
+                      eq(bakeCycles.id, included.bakeCycleId),
+                    )
+                  : inArray(bakeCycles.status, ["DRAFT", "OPEN"]),
+              ),
+            )
+            .orderBy(
+              desc(bakeCycles.primaryDeliveryDate),
+              desc(bakeCycles.cycleNumber),
+            ),
+        ]);
 
       return {
         customers: customerRows,

@@ -243,28 +243,30 @@ export function createDeliveryService(db: DatabaseClient) {
     },
 
     async listDeliveryConfiguration(ownerId: string): Promise<DeliveryConfiguration> {
-      const methodRows = await db
-        .select()
-        .from(deliveryMethods)
-        .where(eq(deliveryMethods.ownerId, ownerId))
-        .orderBy(asc(deliveryMethods.name));
-      const ruleRows = await db
-        .select()
-        .from(productPackagingRules)
-        .where(eq(productPackagingRules.ownerId, ownerId))
-        .orderBy(asc(productPackagingRules.createdAt));
-      const productRows = await db
-        .select({ id: products.id, name: products.name })
-        .from(products)
-        .where(eq(products.ownerId, ownerId));
-      const itemRows = await db
-        .select({
-          id: inventoryItems.id,
-          name: inventoryItems.name,
-          baseUnit: inventoryItems.baseUnit,
-        })
-        .from(inventoryItems)
-        .where(eq(inventoryItems.ownerId, ownerId));
+      const [methodRows, ruleRows, productRows, itemRows] = await Promise.all([
+        db
+          .select()
+          .from(deliveryMethods)
+          .where(eq(deliveryMethods.ownerId, ownerId))
+          .orderBy(asc(deliveryMethods.name)),
+        db
+          .select()
+          .from(productPackagingRules)
+          .where(eq(productPackagingRules.ownerId, ownerId))
+          .orderBy(asc(productPackagingRules.createdAt)),
+        db
+          .select({ id: products.id, name: products.name })
+          .from(products)
+          .where(eq(products.ownerId, ownerId)),
+        db
+          .select({
+            id: inventoryItems.id,
+            name: inventoryItems.name,
+            baseUnit: inventoryItems.baseUnit,
+          })
+          .from(inventoryItems)
+          .where(eq(inventoryItems.ownerId, ownerId)),
+      ]);
       const productById = new Map(productRows.map((product) => [product.id, product.name]));
       const methodById = new Map(methodRows.map((method) => [method.id, method.name]));
       const itemById = new Map(itemRows.map((item) => [item.id, item]));

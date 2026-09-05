@@ -147,17 +147,21 @@ export function createProductService(db: DatabaseClient) {
     ownerId: string,
     productId: string,
   ): Promise<ProductDetail> {
-    const [productRow] = await db
-      .select()
-      .from(products)
-      .where(and(eq(products.ownerId, ownerId), eq(products.id, productId)))
-      .limit(1);
+    const [[productRow], [recipe]] = await Promise.all([
+      db
+        .select()
+        .from(products)
+        .where(and(eq(products.ownerId, ownerId), eq(products.id, productId)))
+        .limit(1),
+      db
+        .select()
+        .from(recipes)
+        .where(
+          and(eq(recipes.ownerId, ownerId), eq(recipes.productId, productId)),
+        )
+        .limit(1),
+    ]);
     if (!productRow) throw new Error("Product not found");
-    const [recipe] = await db
-      .select()
-      .from(recipes)
-      .where(and(eq(recipes.ownerId, ownerId), eq(recipes.productId, productId)))
-      .limit(1);
     if (!recipe) throw new Error("Recipe not found");
     const versionRows = await db
       .select()
@@ -166,10 +170,13 @@ export function createProductService(db: DatabaseClient) {
         and(eq(recipeVersions.ownerId, ownerId), eq(recipeVersions.recipeId, recipe.id)),
       )
       .orderBy(desc(recipeVersions.createdAt));
-    const versions = await Promise.all(
-      versionRows.map(async (version): Promise<RecipeVersion> => {
-        const ingredientRows = await db
+    const versionIds = versionRows.map((version) => version.id);
+    const ingredientRows =
+      versionIds.length === 0
+        ? []
+        : await db
           .select({
+            recipeVersionId: recipeIngredients.recipeVersionId,
             id: recipeIngredients.id,
             inventoryItemId: recipeIngredients.inventoryItemId,
             inventoryItemName: inventoryItems.name,
@@ -187,11 +194,30 @@ export function createProductService(db: DatabaseClient) {
           .where(
             and(
               eq(recipeIngredients.ownerId, ownerId),
-              eq(recipeIngredients.recipeVersionId, version.id),
+              inArray(recipeIngredients.recipeVersionId, versionIds),
             ),
           )
           .orderBy(asc(recipeIngredients.createdAt));
-        return {
+    const ingredientsByVersionId = new Map<string, Array<RecipeIngredient>>();
+    for (const ingredient of ingredientRows) {
+      const versionIngredients =
+        ingredientsByVersionId.get(ingredient.recipeVersionId) ?? [];
+      versionIngredients.push({
+        id: ingredient.id,
+        inventoryItemId: ingredient.inventoryItemId,
+        inventoryItemName: ingredient.inventoryItemName,
+        baseUnit: ingredient.baseUnit as UnitCode,
+        quantityInBaseUnit: new Decimal(
+          ingredient.quantityInBaseUnit,
+        ).toString(),
+      });
+      ingredientsByVersionId.set(
+        ingredient.recipeVersionId,
+        versionIngredients,
+      );
+    }
+    const versions = versionRows.map(
+      (version): RecipeVersion => ({
           id: version.id,
           versionCode: version.versionCode,
           baseYieldQuantity: new Decimal(version.baseYieldQuantity).toString(),
@@ -203,17 +229,8 @@ export function createProductService(db: DatabaseClient) {
             : null,
           instructions: version.instructions,
           activeFrom: version.activeFrom,
-          ingredients: ingredientRows.map((ingredient) => ({
-            id: ingredient.id,
-            inventoryItemId: ingredient.inventoryItemId,
-            inventoryItemName: ingredient.inventoryItemName,
-            baseUnit: ingredient.baseUnit as UnitCode,
-            quantityInBaseUnit: new Decimal(
-              ingredient.quantityInBaseUnit,
-            ).toString(),
-          })),
-        };
-      }),
+          ingredients: ingredientsByVersionId.get(version.id) ?? [],
+        }),
     );
     return { ...toProduct(productRow), recipeId: recipe.id, versions };
   }
@@ -388,13 +405,13 @@ export function createProductService(db: DatabaseClient) {
       });
     },
 
-    async listProducts(ownerId: string): Promise<ReadonlyArray<ProductDetail>> {
+    async listProducts(ownerId: string): Promise<ReadonlyArray<Product>> {
       const rows = await db
-        .select({ id: products.id })
+        .select()
         .from(products)
         .where(eq(products.ownerId, ownerId))
         .orderBy(asc(products.name));
-      return Promise.all(rows.map((row) => getProductDetail(ownerId, row.id)));
+      return rows.map(toProduct);
     },
 
     getProductDetail,
