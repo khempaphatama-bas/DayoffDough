@@ -1,6 +1,7 @@
 import { and, eq } from "drizzle-orm";
 import type { DatabaseClient } from "@/lib/db/types";
 import { bakeCycles } from "@/modules/cycles/db/schema";
+import { inventoryItems } from "@/modules/inventory/db/schema";
 import { orders } from "@/modules/orders/db/schema";
 
 type LockingReader = Pick<DatabaseClient, "select">;
@@ -35,6 +36,29 @@ export async function lockOwnedBakeCycles(
     if (cycle) cycles.push(cycle);
   }
   return cycles;
+}
+
+export async function lockOwnedInventoryItems(
+  reader: LockingReader,
+  ownerId: string,
+  itemIds: ReadonlyArray<string>,
+) {
+  const rows: Array<typeof inventoryItems.$inferSelect> = [];
+  for (const itemId of [...new Set(itemIds)].sort()) {
+    const [item] = await reader
+      .select()
+      .from(inventoryItems)
+      .where(
+        and(
+          eq(inventoryItems.ownerId, ownerId),
+          eq(inventoryItems.id, itemId),
+        ),
+      )
+      .limit(1)
+      .for("update");
+    if (item) rows.push(item);
+  }
+  return rows;
 }
 
 export async function lockOwnedOrder(
