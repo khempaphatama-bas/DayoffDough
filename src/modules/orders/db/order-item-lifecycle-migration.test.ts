@@ -34,7 +34,7 @@ describe("0010 order item lifecycle migration", () => {
 
     try {
       const migrations = readMigrationFiles({ migrationsFolder: "drizzle" });
-      expect(migrations).toHaveLength(11);
+      expect(migrations.length).toBeGreaterThanOrEqual(11);
       await applyMigrations(db, migrations, 0, 9);
       await db.execute(sql`
         INSERT INTO customers (id, owner_id, name)

@@ -43,6 +43,11 @@ export {
   wasteAllowanceSourceEnum,
 } from "@/modules/planning/db/schema";
 export {
+  cycleInventoryCounts,
+  cyclePurchaseEntries,
+  cycleShoppingItems,
+} from "@/modules/shopping/db/schema";
+export {
   deliveryFeePayer,
   deliveryFeePayerEnum,
   orderFulfillmentStatus,

@@ -78,6 +78,13 @@
       "when": 1788100798766,
       "tag": "0010_order_item_lifecycle",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1788606127251,
+      "tag": "0011_phase_3b_inventory_shopping",
+      "breakpoints": true
     }
   ]
 }
