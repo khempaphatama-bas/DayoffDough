@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { and, eq } from "drizzle-orm";
 import type { Logger } from "drizzle-orm/logger";
 import { createTestDatabase } from "@tests/helpers/test-db";
 import { OTHER_OWNER_ID, OWNER_ID } from "@tests/fixtures/owner";
+import { inventoryPrices } from "@/modules/inventory/db/schema";
 import { createInventoryService } from "./inventory";
 
 describe("inventory service", () => {
@@ -44,6 +46,50 @@ describe("inventory service", () => {
     );
     expect(detail.latestUnitCostSatang?.toString()).toBe("5.5");
     expect(detail.priceHistory).toHaveLength(2);
+  });
+
+  it("uses effective time before creation time for a purchase price with total money and quantity", async () => {
+    const item = await service.createItem(OWNER_ID, {
+      name: "Purchase-priced flour",
+      category: "INGREDIENT",
+      baseUnit: "g",
+      purchaseUnitLabel: "bag",
+      baseQuantityPerPurchasePack: "1000",
+      minimumStockQuantity: "0",
+    });
+    await service.addPrice(OWNER_ID, item.id, {
+      packPriceSatang: 5_700,
+      packBaseQuantity: "2000",
+      effectiveAt: new Date("2026-08-24T00:00:00.000Z"),
+      purchasedFrom: "ร้านวัตถุดิบ",
+    });
+    await service.addPrice(OWNER_ID, item.id, {
+      packPriceSatang: 9_999,
+      packBaseQuantity: "1000",
+      effectiveAt: new Date("2026-08-20T00:00:00.000Z"),
+    });
+    await context.db
+      .update(inventoryPrices)
+      .set({ createdAt: new Date("2026-08-26T00:00:00.000Z") })
+      .where(
+        and(
+          eq(inventoryPrices.ownerId, OWNER_ID),
+          eq(inventoryPrices.inventoryItemId, item.id),
+          eq(inventoryPrices.packPriceSatang, 9_999),
+        ),
+      );
+
+    const detail = await service.getItemDetail(
+      OWNER_ID,
+      item.id,
+      new Date("2026-08-25T00:00:00.000Z"),
+    );
+    expect(detail.latestPrice).toMatchObject({
+      packPriceSatang: 5_700,
+      packBaseQuantity: "2000",
+      purchasedFrom: "ร้านวัตถุดิบ",
+    });
+    expect(detail.latestUnitCostSatang?.toString()).toBe("2.85");
   });
 
   it("reconciles repeated physical counts without leaking another owner's stock", async () => {

@@ -4,20 +4,34 @@ import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { lockOwnedBakeCycle, lockOwnedInventoryItems } from "@/lib/db/row-locks";
 import type { DatabaseClient } from "@/lib/db/types";
-import { inventoryMovements } from "@/modules/inventory/db/schema";
+import { inventoryMovements, inventoryPrices } from "@/modules/inventory/db/schema";
 import { cyclePlanningSnapshots } from "@/modules/planning/db/schema";
-import { calculateShoppingRecommendation } from "@/modules/shopping/domain/calculations";
+import {
+  calculatePurchaseProgress,
+  calculateShoppingRecommendation,
+} from "@/modules/shopping/domain/calculations";
 import {
   confirmStockInputSchema,
   type ConfirmStockInput,
+  recordPurchaseInputSchema,
+  type RecordPurchaseInput,
 } from "@/modules/shopping/domain/forms";
-import type { CycleStockShoppingView, StockCountCandidate } from "@/modules/shopping/domain/types";
-import { cycleInventoryCounts, cycleShoppingItems } from "@/modules/shopping/db/schema";
+import type {
+  CycleStockShoppingView,
+  ShoppingItemProgress,
+  StockCountCandidate,
+} from "@/modules/shopping/domain/types";
+import {
+  cycleInventoryCounts,
+  cyclePurchaseEntries,
+  cycleShoppingItems,
+} from "@/modules/shopping/db/schema";
 import { loadShoppingSource } from "./load-shopping-source";
 import { createShoppingQueryService } from "./shopping-queries";
 
 type ShoppingClock = Readonly<{ now: () => Date }>;
 type LockedCycle = NonNullable<Awaited<ReturnType<typeof lockOwnedBakeCycle>>>;
+const PurchaseDecimal = Decimal.clone({ precision: 64 });
 
 export class ShoppingStateError extends Error {
   constructor(message: string) {
@@ -110,6 +124,75 @@ async function loadExistingCounts(
         eq(cycleInventoryCounts.planningSnapshotId, planningSnapshotId),
       ),
     );
+}
+
+async function loadShoppingItemProgress(
+  db: Pick<DatabaseClient, "select">,
+  ownerId: string,
+  cycleId: string,
+  planningSnapshotId: string,
+  shoppingItemId: string,
+): Promise<ShoppingItemProgress> {
+  const [shoppingItem] = await db
+    .select()
+    .from(cycleShoppingItems)
+    .where(
+      and(
+        eq(cycleShoppingItems.ownerId, ownerId),
+        eq(cycleShoppingItems.bakeCycleId, cycleId),
+        eq(cycleShoppingItems.planningSnapshotId, planningSnapshotId),
+        eq(cycleShoppingItems.id, shoppingItemId),
+      ),
+    )
+    .limit(1);
+  if (!shoppingItem) throw new ShoppingStateError("Shopping item is unavailable for purchase");
+  const purchases = await db
+    .select({ purchasedQuantity: cyclePurchaseEntries.purchasedQuantity })
+    .from(cyclePurchaseEntries)
+    .where(
+      and(
+        eq(cyclePurchaseEntries.ownerId, ownerId),
+        eq(cyclePurchaseEntries.bakeCycleId, cycleId),
+        eq(cyclePurchaseEntries.planningSnapshotId, planningSnapshotId),
+        eq(cyclePurchaseEntries.shoppingItemId, shoppingItem.id),
+      ),
+    );
+  return calculatePurchaseProgress(
+    shoppingItem.shortfallQuantity.toString(),
+    purchases.map((purchase) => purchase.purchasedQuantity.toString()),
+  );
+}
+
+function nullableText(value: string | undefined): string | null {
+  return value ?? null;
+}
+
+function assertSamePurchasePayload(
+  existing: typeof cyclePurchaseEntries.$inferSelect,
+  input: RecordPurchaseInput,
+) {
+  if (
+    existing.bakeCycleId !== input.cycleId ||
+    existing.planningSnapshotId !== input.planningSnapshotId ||
+    existing.shoppingItemId !== input.shoppingItemId ||
+    existing.packCount !== input.packCount ||
+    existing.totalPriceSatang !== input.totalPriceSatang ||
+    existing.purchasedFrom !== nullableText(input.purchasedFrom) ||
+    existing.notes !== nullableText(input.notes) ||
+    existing.occurredAt.getTime() !== input.occurredAt.getTime()
+  ) {
+    throw new ShoppingValidationError("Purchase request differs from the existing purchase");
+  }
+}
+
+function isUniqueViolation(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const candidate = error as Readonly<{ code?: unknown; message?: unknown }>;
+  return (
+    candidate.code === "23505" ||
+    (typeof candidate.message === "string" &&
+      /duplicate key value violates unique constraint/i.test(candidate.message))
+  );
 }
 
 export function createShoppingCommandService(
@@ -266,6 +349,220 @@ export function createShoppingCommandService(
           cycle.id,
         );
       });
+    },
+
+    async recordPurchase(
+      ownerId: string,
+      input: RecordPurchaseInput,
+    ): Promise<ShoppingItemProgress> {
+      const parsedOwnerId = z.string().uuid().safeParse(ownerId);
+      const parsedInput = recordPurchaseInputSchema.safeParse(input);
+      if (!parsedOwnerId.success || !parsedInput.success) {
+        throw new ShoppingValidationError("Invalid purchase record");
+      }
+      const verifiedOwnerId = parsedOwnerId.data;
+      const verifiedInput = parsedInput.data;
+
+      const writePurchase = async (tx: DatabaseClient): Promise<ShoppingItemProgress> => {
+        const cycle = await lockOwnedBakeCycle(
+          tx,
+          verifiedOwnerId,
+          verifiedInput.cycleId,
+        );
+        if (!cycle) throw new ShoppingStateError("Cycle is not writable for purchase recording");
+
+        const [existing] = await tx
+          .select()
+          .from(cyclePurchaseEntries)
+          .where(
+            and(
+              eq(cyclePurchaseEntries.ownerId, verifiedOwnerId),
+              eq(cyclePurchaseEntries.purchaseRequestId, verifiedInput.purchaseRequestId),
+            ),
+          )
+          .limit(1);
+        if (existing) {
+          assertSamePurchasePayload(existing, verifiedInput);
+          return loadShoppingItemProgress(
+            tx,
+            verifiedOwnerId,
+            existing.bakeCycleId,
+            existing.planningSnapshotId,
+            existing.shoppingItemId,
+          );
+        }
+
+        if (!isShoppingWritable(cycle, verifiedInput.planningSnapshotId)) {
+          throw new ShoppingStateError("Cycle is not writable for purchase recording");
+        }
+        const [snapshot] = await tx
+          .select()
+          .from(cyclePlanningSnapshots)
+          .where(
+            and(
+              eq(cyclePlanningSnapshots.ownerId, verifiedOwnerId),
+              eq(cyclePlanningSnapshots.bakeCycleId, cycle.id),
+              eq(cyclePlanningSnapshots.id, verifiedInput.planningSnapshotId),
+            ),
+          )
+          .limit(1)
+          .for("update");
+        if (!snapshot || snapshot.status !== "ACTIVE") {
+          throw new ShoppingStateError("Planning snapshot is not active for purchase recording");
+        }
+
+        const [candidate] = await tx
+          .select({ inventoryItemId: cycleShoppingItems.inventoryItemId })
+          .from(cycleShoppingItems)
+          .where(
+            and(
+              eq(cycleShoppingItems.ownerId, verifiedOwnerId),
+              eq(cycleShoppingItems.bakeCycleId, cycle.id),
+              eq(cycleShoppingItems.planningSnapshotId, verifiedInput.planningSnapshotId),
+              eq(cycleShoppingItems.id, verifiedInput.shoppingItemId),
+            ),
+          )
+          .limit(1);
+        if (!candidate) throw new ShoppingStateError("Shopping item is unavailable for purchase");
+
+        const [inventoryItem] = await lockOwnedInventoryItems(
+          tx,
+          verifiedOwnerId,
+          [candidate.inventoryItemId],
+        );
+        if (!inventoryItem) throw new ShoppingStateError("Inventory item is unavailable for purchase");
+
+        const [shoppingItem] = await tx
+          .select()
+          .from(cycleShoppingItems)
+          .where(
+            and(
+              eq(cycleShoppingItems.ownerId, verifiedOwnerId),
+              eq(cycleShoppingItems.bakeCycleId, cycle.id),
+              eq(cycleShoppingItems.planningSnapshotId, verifiedInput.planningSnapshotId),
+              eq(cycleShoppingItems.inventoryItemId, inventoryItem.id),
+              eq(cycleShoppingItems.id, verifiedInput.shoppingItemId),
+            ),
+          )
+          .limit(1)
+          .for("update");
+        if (!shoppingItem) throw new ShoppingStateError("Shopping item is unavailable for purchase");
+
+        const [count] = await tx
+          .select()
+          .from(cycleInventoryCounts)
+          .where(
+            and(
+              eq(cycleInventoryCounts.ownerId, verifiedOwnerId),
+              eq(cycleInventoryCounts.bakeCycleId, cycle.id),
+              eq(cycleInventoryCounts.planningSnapshotId, verifiedInput.planningSnapshotId),
+              eq(cycleInventoryCounts.inventoryItemId, inventoryItem.id),
+              eq(cycleInventoryCounts.id, shoppingItem.inventoryCountId),
+            ),
+          )
+          .limit(1);
+        if (!count) throw new ShoppingStateError("Shopping count is unavailable for purchase");
+
+        const purchasedQuantity = new PurchaseDecimal(verifiedInput.packCount)
+          .mul(count.baseQuantityPerPurchasePack.toString());
+        if (
+          !purchasedQuantity.isFinite() ||
+          !purchasedQuantity.gt(0) ||
+          purchasedQuantity.decimalPlaces() > 6 ||
+          purchasedQuantity.precision(true) > 18
+        ) {
+          throw new ShoppingValidationError("Purchased quantity is outside inventory precision");
+        }
+        const canonicalPurchasedQuantity = purchasedQuantity.toString();
+        const entryId = randomUUID();
+        const [movement] = await tx
+          .insert(inventoryMovements)
+          .values({
+            ownerId: verifiedOwnerId,
+            inventoryItemId: inventoryItem.id,
+            type: "PURCHASE",
+            quantityDeltaInBaseUnit: canonicalPurchasedQuantity,
+            referenceType: "CYCLE_PURCHASE_ENTRY",
+            referenceId: entryId,
+            occurredAt: verifiedInput.occurredAt,
+          })
+          .returning();
+        if (!movement) throw new ShoppingStateError("Failed to record purchase movement");
+        const [price] = await tx
+          .insert(inventoryPrices)
+          .values({
+            ownerId: verifiedOwnerId,
+            inventoryItemId: inventoryItem.id,
+            packPriceSatang: verifiedInput.totalPriceSatang,
+            packBaseQuantity: canonicalPurchasedQuantity,
+            effectiveAt: verifiedInput.occurredAt,
+            purchasedFrom: nullableText(verifiedInput.purchasedFrom),
+            notes: nullableText(verifiedInput.notes),
+          })
+          .returning();
+        if (!price) throw new ShoppingStateError("Failed to record purchase price");
+        const [entry] = await tx
+          .insert(cyclePurchaseEntries)
+          .values({
+            id: entryId,
+            ownerId: verifiedOwnerId,
+            bakeCycleId: cycle.id,
+            planningSnapshotId: verifiedInput.planningSnapshotId,
+            shoppingItemId: shoppingItem.id,
+            inventoryItemId: inventoryItem.id,
+            purchaseRequestId: verifiedInput.purchaseRequestId,
+            packCount: verifiedInput.packCount,
+            packBaseQuantity: count.baseQuantityPerPurchasePack.toString(),
+            purchasedQuantity: canonicalPurchasedQuantity,
+            totalPriceSatang: verifiedInput.totalPriceSatang,
+            purchasedFrom: nullableText(verifiedInput.purchasedFrom),
+            occurredAt: verifiedInput.occurredAt,
+            notes: nullableText(verifiedInput.notes),
+            inventoryMovementId: movement.id,
+            inventoryPriceId: price.id,
+            createdAt: clock.now(),
+          })
+          .returning();
+        if (!entry) throw new ShoppingStateError("Failed to record purchase entry");
+        return loadShoppingItemProgress(
+          tx,
+          verifiedOwnerId,
+          cycle.id,
+          verifiedInput.planningSnapshotId,
+          shoppingItem.id,
+        );
+      };
+
+      try {
+        return await db.transaction((tx) =>
+          writePurchase(tx as unknown as DatabaseClient),
+        );
+      } catch (error) {
+        if (!isUniqueViolation(error)) throw error;
+        return db.transaction(async (tx) => {
+          const cycle = await lockOwnedBakeCycle(tx, verifiedOwnerId, verifiedInput.cycleId);
+          if (!cycle) throw error;
+          const [existing] = await tx
+            .select()
+            .from(cyclePurchaseEntries)
+            .where(
+              and(
+                eq(cyclePurchaseEntries.ownerId, verifiedOwnerId),
+                eq(cyclePurchaseEntries.purchaseRequestId, verifiedInput.purchaseRequestId),
+              ),
+            )
+            .limit(1);
+          if (!existing) throw error;
+          assertSamePurchasePayload(existing, verifiedInput);
+          return loadShoppingItemProgress(
+            tx,
+            verifiedOwnerId,
+            existing.bakeCycleId,
+            existing.planningSnapshotId,
+            existing.shoppingItemId,
+          );
+        });
+      }
     },
   };
 }

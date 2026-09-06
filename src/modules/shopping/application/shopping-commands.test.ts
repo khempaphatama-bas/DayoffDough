@@ -6,10 +6,15 @@ import { seedLockedPlanningScenario } from "@tests/fixtures/planning";
 import { createTestDatabase } from "@tests/helpers/test-db";
 import { lockOwnedInventoryItems } from "@/lib/db/row-locks";
 import { bakeCycles } from "@/modules/cycles/db/schema";
-import { inventoryItems, inventoryMovements } from "@/modules/inventory/db/schema";
+import {
+  inventoryItems,
+  inventoryMovements,
+  inventoryPrices,
+} from "@/modules/inventory/db/schema";
 import { cyclePlanningSnapshots } from "@/modules/planning/db/schema";
 import {
   cycleInventoryCounts,
+  cyclePurchaseEntries,
   cycleShoppingItems,
 } from "@/modules/shopping/db/schema";
 import {
@@ -23,6 +28,11 @@ const COUNTED_AT = new Date("2026-08-23T04:00:00.000Z");
 const CONFIRMATION_REQUEST_ID = "54000000-0000-4000-8000-000000000001";
 const SECOND_CONFIRMATION_REQUEST_ID = "54000000-0000-4000-8000-000000000002";
 const OTHER_ITEM_ID = "64000000-0000-4000-8000-000000000001";
+const PURCHASE_1 = "55000000-0000-4000-8000-000000000001";
+const PURCHASE_2 = "55000000-0000-4000-8000-000000000002";
+const PURCHASE_5 = "55000000-0000-4000-8000-000000000005";
+const PURCHASED_AT = new Date("2026-08-23T05:00:00.000Z");
+const LATER_PURCHASED_AT = new Date("2026-08-23T06:00:00.000Z");
 
 type Context = Awaited<ReturnType<typeof createTestDatabase>>;
 type Fixture = Awaited<ReturnType<typeof seedLockedPlanningScenario>>;
@@ -54,6 +64,58 @@ async function persistedRows(db: Context["db"]) {
   const persistedCounts = await db.select().from(cycleInventoryCounts);
   const shoppingRows = await db.select().from(cycleShoppingItems);
   return { countMovements, persistedCounts, shoppingRows };
+}
+
+async function shoppingItemForPurchase(
+  db: Context["db"],
+  fixture: Fixture,
+  ownerId = OWNER_ID,
+) {
+  await createShoppingCommandService(db, CLOCK).confirmStock(
+    ownerId,
+    confirmInput(fixture),
+  );
+  const [shoppingItem] = await db
+    .select()
+    .from(cycleShoppingItems)
+    .where(
+      and(
+        eq(cycleShoppingItems.ownerId, ownerId),
+        eq(cycleShoppingItems.bakeCycleId, fixture.cycleId),
+        eq(cycleShoppingItems.planningSnapshotId, fixture.planningSnapshotId),
+      ),
+    )
+    .limit(1);
+  if (!shoppingItem) throw new Error("Shopping fixture missing item");
+  return shoppingItem;
+}
+
+function purchaseInput(
+  fixture: Fixture,
+  shoppingItemId: string,
+  overrides: Partial<{
+    cycleId: string;
+    planningSnapshotId: string;
+    shoppingItemId: string;
+    purchaseRequestId: string;
+    packCount: number;
+    totalPriceSatang: number;
+    purchasedFrom: string;
+    occurredAt: Date;
+    notes: string;
+  }> = {},
+) {
+  return {
+    cycleId: overrides.cycleId ?? fixture.cycleId,
+    planningSnapshotId: overrides.planningSnapshotId ?? fixture.planningSnapshotId,
+    shoppingItemId: overrides.shoppingItemId ?? shoppingItemId,
+    purchaseRequestId: overrides.purchaseRequestId ?? PURCHASE_1,
+    packCount: overrides.packCount ?? 1,
+    totalPriceSatang: overrides.totalPriceSatang ?? 5_500,
+    purchasedFrom: overrides.purchasedFrom ?? "ร้านวัตถุดิบ",
+    occurredAt: overrides.occurredAt ?? PURCHASED_AT,
+    notes: overrides.notes ?? "ซื้อเพิ่ม",
+  };
 }
 
 describe("shopping command service", () => {
@@ -330,5 +392,227 @@ describe("shopping command service", () => {
     expect(countMovements).toHaveLength(2);
     expect(persistedCounts).toHaveLength(2);
     expect(shoppingRows).toHaveLength(1);
+  });
+
+  it("records partial, complete, and overage purchase progress from copied pack quantities", async () => {
+    const fixture = await seedLockedPlanningScenario(context.db);
+    const shoppingItem = await shoppingItemForPurchase(context.db, fixture);
+    const service = createShoppingCommandService(context.db, CLOCK);
+
+    await expect(
+      service.recordPurchase(OWNER_ID, purchaseInput(fixture, shoppingItem.id)),
+    ).resolves.toMatchObject({
+      status: "PARTIAL",
+      purchasedQuantity: "1000",
+      remainingQuantity: "200",
+      overageQuantity: "0",
+    });
+    await expect(
+      service.recordPurchase(OWNER_ID, purchaseInput(fixture, shoppingItem.id, {
+        purchaseRequestId: PURCHASE_2,
+        totalPriceSatang: 5_700,
+        occurredAt: LATER_PURCHASED_AT,
+      })),
+    ).resolves.toMatchObject({
+      status: "COMPLETE",
+      purchasedQuantity: "2000",
+      remainingQuantity: "0",
+      overageQuantity: "800",
+    });
+  });
+
+  it("records one linked purchase entry, movement, and actual-total price per idempotent request", async () => {
+    const fixture = await seedLockedPlanningScenario(context.db);
+    const shoppingItem = await shoppingItemForPurchase(context.db, fixture);
+    const service = createShoppingCommandService(context.db, CLOCK);
+    const input = purchaseInput(fixture, shoppingItem.id);
+
+    await service.recordPurchase(OWNER_ID, input);
+    await expect(service.recordPurchase(OWNER_ID, input)).resolves.toMatchObject({
+      status: "PARTIAL",
+      purchasedQuantity: "1000",
+    });
+
+    const entries = await context.db.select().from(cyclePurchaseEntries);
+    const movements = await context.db
+      .select()
+      .from(inventoryMovements)
+      .where(eq(inventoryMovements.type, "PURCHASE"));
+    const prices = await context.db
+      .select()
+      .from(inventoryPrices)
+      .where(eq(inventoryPrices.inventoryItemId, fixture.ingredientItemId));
+    expect(entries).toHaveLength(1);
+    expect(movements).toHaveLength(1);
+    expect(prices.filter((price) => price.id === entries[0]!.inventoryPriceId)).toHaveLength(1);
+    expect(movements[0]).toMatchObject({
+      type: "PURCHASE",
+      quantityDeltaInBaseUnit: "1000.000000",
+      referenceType: "CYCLE_PURCHASE_ENTRY",
+      referenceId: entries[0]!.id,
+    });
+    expect(prices.find((price) => price.id === entries[0]!.inventoryPriceId)).toMatchObject({
+      packPriceSatang: 5_500,
+      packBaseQuantity: "1000.000000",
+      purchasedFrom: "ร้านวัตถุดิบ",
+      effectiveAt: PURCHASED_AT,
+    });
+  });
+
+  it("rejects every mismatched payload field for an existing purchase request", async () => {
+    const fixture = await seedLockedPlanningScenario(context.db);
+    const shoppingItem = await shoppingItemForPurchase(context.db, fixture);
+    const service = createShoppingCommandService(context.db, CLOCK);
+    const input = purchaseInput(fixture, shoppingItem.id);
+    await service.recordPurchase(OWNER_ID, input);
+
+    const mismatches = [
+      { packCount: 2 },
+      { totalPriceSatang: 5_501 },
+      { occurredAt: LATER_PURCHASED_AT },
+      { purchasedFrom: "ร้านอื่น" },
+      { notes: "หมายเหตุอื่น" },
+      { shoppingItemId: "65000000-0000-4000-8000-000000000001" },
+      { planningSnapshotId: "65000000-0000-4000-8000-000000000002" },
+    ];
+    for (const mismatch of mismatches) {
+      await expect(
+        service.recordPurchase(OWNER_ID, purchaseInput(fixture, shoppingItem.id, mismatch)),
+      ).rejects.toBeInstanceOf(ShoppingValidationError);
+    }
+    await expect(
+      service.recordPurchase(OWNER_ID, purchaseInput(fixture, shoppingItem.id, {
+        cycleId: "65000000-0000-4000-8000-000000000003",
+      })),
+    ).rejects.toBeInstanceOf(ShoppingStateError);
+    expect(await context.db.select().from(cyclePurchaseEntries)).toHaveLength(1);
+  });
+
+  it("accepts purchases while locked or in production, including zero price and post-complete overage", async () => {
+    const fixture = await seedLockedPlanningScenario(context.db);
+    const shoppingItem = await shoppingItemForPurchase(context.db, fixture);
+    const service = createShoppingCommandService(context.db, CLOCK);
+    await service.recordPurchase(OWNER_ID, purchaseInput(fixture, shoppingItem.id, {
+      packCount: 2,
+      totalPriceSatang: 0,
+    }));
+    await context.db
+      .update(bakeCycles)
+      .set({ status: "IN_PRODUCTION" })
+      .where(eq(bakeCycles.id, fixture.cycleId));
+    await expect(
+      service.recordPurchase(OWNER_ID, purchaseInput(fixture, shoppingItem.id, {
+        purchaseRequestId: PURCHASE_2,
+        totalPriceSatang: 5_700,
+      })),
+    ).resolves.toMatchObject({
+      status: "COMPLETE",
+      purchasedQuantity: "3000",
+      overageQuantity: "1800",
+    });
+    const [zeroPrice] = await context.db
+      .select()
+      .from(inventoryPrices)
+      .where(eq(inventoryPrices.packPriceSatang, 0));
+    expect(zeroPrice).toMatchObject({ packBaseQuantity: "2000.000000" });
+  });
+
+  it("rejects OPEN, terminal or superseded lifecycle writes and owner/cycle/item isolation violations", async () => {
+    const fixture = await seedLockedPlanningScenario(context.db);
+    const shoppingItem = await shoppingItemForPurchase(context.db, fixture);
+    const service = createShoppingCommandService(context.db, CLOCK);
+    await context.db.update(bakeCycles).set({ status: "OPEN" }).where(eq(bakeCycles.id, fixture.cycleId));
+    await expect(service.recordPurchase(OWNER_ID, purchaseInput(fixture, shoppingItem.id))).rejects.toBeInstanceOf(ShoppingStateError);
+    for (const status of ["COMPLETED", "CANCELLED"] as const) {
+      await context.db.update(bakeCycles).set({ status }).where(eq(bakeCycles.id, fixture.cycleId));
+      await expect(
+        service.recordPurchase(OWNER_ID, purchaseInput(fixture, shoppingItem.id)),
+      ).rejects.toBeInstanceOf(ShoppingStateError);
+    }
+    await context.db.update(bakeCycles).set({ status: "LOCKED" }).where(eq(bakeCycles.id, fixture.cycleId));
+    await context.db.update(cyclePlanningSnapshots).set({
+      status: "SUPERSEDED",
+      unlockedAt: CLOCK.now(),
+      unlockReason: "ปรับรอบ",
+      unlockedFromStatus: "LOCKED",
+    }).where(eq(cyclePlanningSnapshots.id, fixture.planningSnapshotId));
+    await expect(service.recordPurchase(OWNER_ID, purchaseInput(fixture, shoppingItem.id))).rejects.toBeInstanceOf(ShoppingStateError);
+
+    const isolated = await seedLockedPlanningScenario(context.db, {
+      ownerId: OTHER_OWNER_ID,
+      idSet: "SECONDARY",
+    });
+    const isolatedShoppingItem = await shoppingItemForPurchase(
+      context.db,
+      isolated,
+      OTHER_OWNER_ID,
+    );
+    await expect(
+      service.recordPurchase(OWNER_ID, purchaseInput(fixture, isolatedShoppingItem.id)),
+    ).rejects.toBeInstanceOf(ShoppingStateError);
+    await expect(
+      service.recordPurchase(OTHER_OWNER_ID, purchaseInput(isolated, shoppingItem.id)),
+    ).rejects.toBeInstanceOf(ShoppingStateError);
+    await expect(
+      service.recordPurchase(OTHER_OWNER_ID, purchaseInput(isolated, "65000000-0000-4000-8000-000000000004")),
+    ).rejects.toBeInstanceOf(ShoppingStateError);
+    await expect(
+      service.recordPurchase(OTHER_OWNER_ID, purchaseInput(isolated, isolatedShoppingItem.id, {
+        cycleId: "65000000-0000-4000-8000-000000000005",
+      })),
+    ).rejects.toBeInstanceOf(ShoppingStateError);
+  });
+
+  it("rolls back a purchase movement and price when the entry insert fails", async () => {
+    const fixture = await seedLockedPlanningScenario(context.db);
+    const shoppingItem = await shoppingItemForPurchase(context.db, fixture);
+    await context.db.execute(sql`
+      CREATE FUNCTION fail_cycle_purchase_insert() RETURNS trigger AS $$
+      BEGIN RAISE EXCEPTION 'forced purchase rollback'; END;
+      $$ LANGUAGE plpgsql
+    `);
+    await context.db.execute(sql`
+      CREATE TRIGGER force_cycle_purchase_failure
+      BEFORE INSERT ON cycle_purchase_entries
+      FOR EACH ROW EXECUTE FUNCTION fail_cycle_purchase_insert()
+    `);
+
+    await expect(
+      createShoppingCommandService(context.db, CLOCK).recordPurchase(
+        OWNER_ID,
+        purchaseInput(fixture, shoppingItem.id),
+      ),
+    ).rejects.toThrow();
+    expect(await context.db.select().from(cyclePurchaseEntries)).toEqual([]);
+    expect(await context.db
+      .select()
+      .from(inventoryMovements)
+      .where(eq(inventoryMovements.type, "PURCHASE"))).toEqual([]);
+    expect((await context.db
+      .select()
+      .from(inventoryPrices)
+      .where(eq(inventoryPrices.inventoryItemId, fixture.ingredientItemId))).filter(
+      (price) => price.effectiveAt.getTime() === PURCHASED_AT.getTime(),
+    )).toEqual([]);
+  });
+
+  it("serializes concurrent identical purchase requests into one ledger event", async () => {
+    const fixture = await seedLockedPlanningScenario(context.db);
+    const shoppingItem = await shoppingItemForPurchase(context.db, fixture);
+    const service = createShoppingCommandService(context.db, CLOCK);
+    const input = purchaseInput(fixture, shoppingItem.id, {
+      purchaseRequestId: PURCHASE_5,
+    });
+
+    const [first, second] = await Promise.all([
+      service.recordPurchase(OWNER_ID, input),
+      service.recordPurchase(OWNER_ID, input),
+    ]);
+    expect(first).toEqual(second);
+    expect(await context.db.select().from(cyclePurchaseEntries)).toHaveLength(1);
+    expect(await context.db
+      .select()
+      .from(inventoryMovements)
+      .where(eq(inventoryMovements.type, "PURCHASE"))).toHaveLength(1);
   });
 });
