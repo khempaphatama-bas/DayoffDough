@@ -631,6 +631,14 @@ describe("shopping command service", () => {
         constraint: "cycle_purchase_entries_owner_request_unique",
       },
     });
+    const postgresJsRequestConflict = Object.assign(new Error("Failed query"), {
+      cause: Object.assign(new Error("postgres error"), {
+        cause: {
+          code: "23505",
+          constraint_name: "cycle_purchase_entries_owner_request_unique",
+        },
+      }),
+    });
     const transactionSpy = vi.spyOn(context.db, "transaction");
     transactionSpy.mockImplementationOnce(async () => {
       throw wrappedRequestConflict;
@@ -641,7 +649,15 @@ describe("shopping command service", () => {
     });
 
     transactionSpy.mockImplementationOnce(async () => {
-      throw wrappedRequestConflict;
+      throw postgresJsRequestConflict;
+    });
+    await expect(service.recordPurchase(OWNER_ID, input)).resolves.toMatchObject({
+      status: "PARTIAL",
+      purchasedQuantity: "1000",
+    });
+
+    transactionSpy.mockImplementationOnce(async () => {
+      throw postgresJsRequestConflict;
     });
     await expect(
       service.recordPurchase(OWNER_ID, purchaseInput(fixture, shoppingItem.id, {

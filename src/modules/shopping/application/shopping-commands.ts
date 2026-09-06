@@ -34,6 +34,7 @@ type LockedCycle = NonNullable<Awaited<ReturnType<typeof lockOwnedBakeCycle>>>;
 const PurchaseDecimal = Decimal.clone({ precision: 64 });
 const POSTGRESQL_INTEGER_MAX = 2_147_483_647;
 const PURCHASE_QUANTITY_UPPER_BOUND = new PurchaseDecimal("1000000000000");
+const PURCHASE_REQUEST_UNIQUE_CONSTRAINT = "cycle_purchase_entries_owner_request_unique";
 
 export class ShoppingStateError extends Error {
   constructor(message: string) {
@@ -195,11 +196,13 @@ function isPurchaseRequestUniqueViolation(error: unknown): boolean {
     const candidate = current as Readonly<{
       code?: unknown;
       constraint?: unknown;
+      constraint_name?: unknown;
       cause?: unknown;
     }>;
     if (
       candidate.code === "23505" &&
-      candidate.constraint === "cycle_purchase_entries_owner_request_unique"
+      (candidate.constraint === PURCHASE_REQUEST_UNIQUE_CONSTRAINT ||
+        candidate.constraint_name === PURCHASE_REQUEST_UNIQUE_CONSTRAINT)
     ) {
       return true;
     }
