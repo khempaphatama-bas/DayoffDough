@@ -1,6 +1,6 @@
 import { and, eq, sql } from "drizzle-orm";
 import type { Logger } from "drizzle-orm/logger";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OTHER_OWNER_ID, OWNER_ID } from "@tests/fixtures/owner";
 import { seedLockedPlanningScenario } from "@tests/fixtures/planning";
 import { createTestDatabase } from "@tests/helpers/test-db";
@@ -30,7 +30,10 @@ const SECOND_CONFIRMATION_REQUEST_ID = "54000000-0000-4000-8000-000000000002";
 const OTHER_ITEM_ID = "64000000-0000-4000-8000-000000000001";
 const PURCHASE_1 = "55000000-0000-4000-8000-000000000001";
 const PURCHASE_2 = "55000000-0000-4000-8000-000000000002";
+const PURCHASE_3 = "55000000-0000-4000-8000-000000000003";
+const PURCHASE_4 = "55000000-0000-4000-8000-000000000004";
 const PURCHASE_5 = "55000000-0000-4000-8000-000000000005";
+const POSTGRESQL_INTEGER_MAX = 2_147_483_647;
 const PURCHASED_AT = new Date("2026-08-23T05:00:00.000Z");
 const LATER_PURCHASED_AT = new Date("2026-08-23T06:00:00.000Z");
 
@@ -614,5 +617,139 @@ describe("shopping command service", () => {
       .select()
       .from(inventoryMovements)
       .where(eq(inventoryMovements.type, "PURCHASE"))).toHaveLength(1);
+  });
+
+  it("recovers only Drizzle-wrapped request-id conflicts and preserves payload mismatch validation", async () => {
+    const fixture = await seedLockedPlanningScenario(context.db);
+    const shoppingItem = await shoppingItemForPurchase(context.db, fixture);
+    const service = createShoppingCommandService(context.db, CLOCK);
+    const input = purchaseInput(fixture, shoppingItem.id);
+    await service.recordPurchase(OWNER_ID, input);
+    const wrappedRequestConflict = Object.assign(new Error("Failed query"), {
+      cause: {
+        code: "23505",
+        constraint: "cycle_purchase_entries_owner_request_unique",
+      },
+    });
+    const transactionSpy = vi.spyOn(context.db, "transaction");
+    transactionSpy.mockImplementationOnce(async () => {
+      throw wrappedRequestConflict;
+    });
+    await expect(service.recordPurchase(OWNER_ID, input)).resolves.toMatchObject({
+      status: "PARTIAL",
+      purchasedQuantity: "1000",
+    });
+
+    transactionSpy.mockImplementationOnce(async () => {
+      throw wrappedRequestConflict;
+    });
+    await expect(
+      service.recordPurchase(OWNER_ID, purchaseInput(fixture, shoppingItem.id, {
+        totalPriceSatang: 5_501,
+      })),
+    ).rejects.toBeInstanceOf(ShoppingValidationError);
+    transactionSpy.mockRestore();
+  });
+
+  it("rethrows unrelated and cyclic wrapped database errors unchanged", async () => {
+    const fixture = await seedLockedPlanningScenario(context.db);
+    const shoppingItem = await shoppingItemForPurchase(context.db, fixture);
+    const service = createShoppingCommandService(context.db, CLOCK);
+    const unrelatedUnique = Object.assign(new Error("Failed query"), {
+      cause: {
+        code: "23505",
+        constraint: "cycle_purchase_entries_owner_movement_unique",
+      },
+    });
+    const cyclicCause = Object.assign(new Error("Failed query"), {
+      code: "23503",
+    }) as Error & { cause?: unknown };
+    cyclicCause.cause = cyclicCause;
+    const transactionSpy = vi.spyOn(context.db, "transaction");
+    transactionSpy.mockImplementationOnce(async () => {
+      throw unrelatedUnique;
+    });
+    await expect(
+      service.recordPurchase(OWNER_ID, purchaseInput(fixture, shoppingItem.id)),
+    ).rejects.toBe(unrelatedUnique);
+    transactionSpy.mockImplementationOnce(async () => {
+      throw cyclicCause;
+    });
+    await expect(
+      service.recordPurchase(OWNER_ID, purchaseInput(fixture, shoppingItem.id)),
+    ).rejects.toBe(cyclicCause);
+    transactionSpy.mockRestore();
+  });
+
+  it("accepts persistence maxima for pack count, total price, and computed quantity", async () => {
+    const fixture = await seedLockedPlanningScenario(context.db);
+    const shoppingItem = await shoppingItemForPurchase(context.db, fixture);
+    const service = createShoppingCommandService(context.db, CLOCK);
+    await context.db
+      .update(cycleInventoryCounts)
+      .set({ baseQuantityPerPurchasePack: "0.000001" })
+      .where(eq(cycleInventoryCounts.id, shoppingItem.inventoryCountId));
+    await expect(
+      service.recordPurchase(OWNER_ID, purchaseInput(fixture, shoppingItem.id, {
+        purchaseRequestId: PURCHASE_2,
+        packCount: POSTGRESQL_INTEGER_MAX,
+      })),
+    ).resolves.toMatchObject({ purchasedQuantity: "2147.483647" });
+    await expect(
+      service.recordPurchase(OWNER_ID, purchaseInput(fixture, shoppingItem.id, {
+        purchaseRequestId: PURCHASE_3,
+        totalPriceSatang: POSTGRESQL_INTEGER_MAX,
+      })),
+    ).resolves.toMatchObject({ status: "COMPLETE" });
+    await context.db
+      .update(cycleInventoryCounts)
+      .set({ baseQuantityPerPurchasePack: "999999999999" })
+      .where(eq(cycleInventoryCounts.id, shoppingItem.inventoryCountId));
+    await expect(
+      service.recordPurchase(OWNER_ID, purchaseInput(fixture, shoppingItem.id, {
+        purchaseRequestId: PURCHASE_4,
+      })),
+    ).resolves.toMatchObject({ status: "COMPLETE" });
+    const [maximumQuantityEntry] = await context.db
+      .select()
+      .from(cyclePurchaseEntries)
+      .where(eq(cyclePurchaseEntries.purchaseRequestId, PURCHASE_4));
+    expect(maximumQuantityEntry).toMatchObject({
+      purchasedQuantity: "999999999999.000000",
+    });
+  });
+
+  it("rejects one-overflow persisted integer and quantity values before ledger inserts", async () => {
+    const fixture = await seedLockedPlanningScenario(context.db);
+    const shoppingItem = await shoppingItemForPurchase(context.db, fixture);
+    const service = createShoppingCommandService(context.db, CLOCK);
+    const invalidInputs = [
+      purchaseInput(fixture, shoppingItem.id, {
+        packCount: POSTGRESQL_INTEGER_MAX + 1,
+      }),
+      purchaseInput(fixture, shoppingItem.id, {
+        totalPriceSatang: POSTGRESQL_INTEGER_MAX + 1,
+      }),
+    ];
+    for (const input of invalidInputs) {
+      await expect(service.recordPurchase(OWNER_ID, input)).rejects.toBeInstanceOf(
+        ShoppingValidationError,
+      );
+    }
+    await context.db
+      .update(cycleInventoryCounts)
+      .set({ baseQuantityPerPurchasePack: "500000000000" })
+      .where(eq(cycleInventoryCounts.id, shoppingItem.inventoryCountId));
+    await expect(
+      service.recordPurchase(OWNER_ID, purchaseInput(fixture, shoppingItem.id, {
+        purchaseRequestId: PURCHASE_2,
+        packCount: 2,
+      })),
+    ).rejects.toBeInstanceOf(ShoppingValidationError);
+    expect(await context.db.select().from(cyclePurchaseEntries)).toEqual([]);
+    expect(await context.db
+      .select()
+      .from(inventoryMovements)
+      .where(eq(inventoryMovements.type, "PURCHASE"))).toEqual([]);
   });
 });

@@ -32,6 +32,8 @@ import { createShoppingQueryService } from "./shopping-queries";
 type ShoppingClock = Readonly<{ now: () => Date }>;
 type LockedCycle = NonNullable<Awaited<ReturnType<typeof lockOwnedBakeCycle>>>;
 const PurchaseDecimal = Decimal.clone({ precision: 64 });
+const POSTGRESQL_INTEGER_MAX = 2_147_483_647;
+const PURCHASE_QUANTITY_UPPER_BOUND = new PurchaseDecimal("1000000000000");
 
 export class ShoppingStateError extends Error {
   constructor(message: string) {
@@ -185,14 +187,25 @@ function assertSamePurchasePayload(
   }
 }
 
-function isUniqueViolation(error: unknown): boolean {
-  if (typeof error !== "object" || error === null) return false;
-  const candidate = error as Readonly<{ code?: unknown; message?: unknown }>;
-  return (
-    candidate.code === "23505" ||
-    (typeof candidate.message === "string" &&
-      /duplicate key value violates unique constraint/i.test(candidate.message))
-  );
+function isPurchaseRequestUniqueViolation(error: unknown): boolean {
+  const seen = new Set<object>();
+  let current: unknown = error;
+  while (typeof current === "object" && current !== null && !seen.has(current)) {
+    seen.add(current);
+    const candidate = current as Readonly<{
+      code?: unknown;
+      constraint?: unknown;
+      cause?: unknown;
+    }>;
+    if (
+      candidate.code === "23505" &&
+      candidate.constraint === "cycle_purchase_entries_owner_request_unique"
+    ) {
+      return true;
+    }
+    current = candidate.cause;
+  }
+  return false;
 }
 
 export function createShoppingCommandService(
@@ -362,6 +375,12 @@ export function createShoppingCommandService(
       }
       const verifiedOwnerId = parsedOwnerId.data;
       const verifiedInput = parsedInput.data;
+      if (
+        verifiedInput.packCount > POSTGRESQL_INTEGER_MAX ||
+        verifiedInput.totalPriceSatang > POSTGRESQL_INTEGER_MAX
+      ) {
+        throw new ShoppingValidationError("Purchase values exceed storage bounds");
+      }
 
       const writePurchase = async (tx: DatabaseClient): Promise<ShoppingItemProgress> => {
         const cycle = await lockOwnedBakeCycle(
@@ -469,7 +488,7 @@ export function createShoppingCommandService(
           !purchasedQuantity.isFinite() ||
           !purchasedQuantity.gt(0) ||
           purchasedQuantity.decimalPlaces() > 6 ||
-          purchasedQuantity.precision(true) > 18
+          purchasedQuantity.gte(PURCHASE_QUANTITY_UPPER_BOUND)
         ) {
           throw new ShoppingValidationError("Purchased quantity is outside inventory precision");
         }
@@ -538,7 +557,7 @@ export function createShoppingCommandService(
           writePurchase(tx as unknown as DatabaseClient),
         );
       } catch (error) {
-        if (!isUniqueViolation(error)) throw error;
+        if (!isPurchaseRequestUniqueViolation(error)) throw error;
         return db.transaction(async (tx) => {
           const cycle = await lockOwnedBakeCycle(tx, verifiedOwnerId, verifiedInput.cycleId);
           if (!cycle) throw error;
