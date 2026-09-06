@@ -203,6 +203,32 @@ describe("shopping actions", () => {
     },
   );
 
+  it.each([
+    ["shorthand", "0"],
+    ["impossible calendar date", "2026-02-30T10:00:00.000Z"],
+    ["trailing junk", "2026-09-05T03:00:00.000Zjunk"],
+    ["non-canonical timezone", "2026-09-05T10:00:00.000+07:00"],
+  ])(
+    "rejects a %s stock timestamp before mutation",
+    async (_case, countedAt) => {
+      await expect(
+        confirmCycleStockAction(
+          INITIAL_STOCK_STATE,
+          stockForm({ ...validStockPayload(), countedAt }),
+        ),
+      ).resolves.toEqual({
+        error: "กรุณาตรวจสอบข้อมูลที่กรอก",
+        fieldErrors: {
+          countedAt: "วันและเวลายืนยันสต๊อกไม่ถูกต้อง",
+        },
+        saved: false,
+        stale: false,
+      });
+      expect(commands.confirmStock).not.toHaveBeenCalled();
+      expect(next.revalidatePath).not.toHaveBeenCalled();
+    },
+  );
+
   it("authenticates, parses a purchase, trims optional text, and revalidates exactly the shopping views", async () => {
     commands.recordPurchase.mockResolvedValue({ status: "COMPLETE" });
 
@@ -283,6 +309,54 @@ describe("shopping actions", () => {
     });
     expect(commands.recordPurchase).not.toHaveBeenCalled();
     expect(next.revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["shorthand", "0"],
+    ["impossible Bangkok date", "2026-02-30T10:00"],
+    ["trailing junk", "2026-09-05T10:00junk"],
+    ["timezone-bearing local value", "2026-09-05T10:00+07:00"],
+  ])(
+    "rejects a %s purchase timestamp before mutation",
+    async (_case, occurredAt) => {
+      await expect(
+        recordCyclePurchaseAction(
+          INITIAL_PURCHASE_STATE,
+          purchaseForm({ occurredAt }),
+        ),
+      ).resolves.toEqual({
+        error: "กรุณาตรวจสอบข้อมูลที่กรอก",
+        fieldErrors: {
+          occurredAt: "วันและเวลาที่ซื้อไม่ถูกต้อง",
+        },
+        saved: false,
+        stale: false,
+      });
+      expect(commands.recordPurchase).not.toHaveBeenCalled();
+      expect(next.revalidatePath).not.toHaveBeenCalled();
+    },
+  );
+
+  it("interprets a strict purchase datetime-local value in Asia/Bangkok", async () => {
+    commands.recordPurchase.mockResolvedValue({ status: "PARTIAL" });
+
+    const result = await recordCyclePurchaseAction(
+      INITIAL_PURCHASE_STATE,
+      purchaseForm({ occurredAt: "2026-09-05T10:00" }),
+    );
+
+    expect(commands.recordPurchase).toHaveBeenCalledWith(
+      OWNER_ID,
+      expect.objectContaining({
+        occurredAt: new Date("2026-09-05T03:00:00.000Z"),
+      }),
+    );
+    expect(result).toEqual({
+      error: null,
+      fieldErrors: {},
+      saved: true,
+      stale: false,
+    });
   });
 
   it.each([

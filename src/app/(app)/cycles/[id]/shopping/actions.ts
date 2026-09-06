@@ -38,6 +38,11 @@ const COUNT_QUANTITY_ERROR =
 const PACK_COUNT_ERROR = "จำนวนแพ็กต้องเป็นเลขจำนวนเต็มที่มากกว่า 0";
 const TOTAL_PRICE_ERROR =
   "ราคารวมต้องเป็นเงินบาทไม่ติดลบ ทศนิยมไม่เกิน 2 ตำแหน่ง";
+const CANONICAL_ISO_INSTANT =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+const BANGKOK_LOCAL_DATE_TIME =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/;
+const BANGKOK_OFFSET_MILLISECONDS = 7 * 60 * 60 * 1_000;
 
 function unsavedState(
   error: string,
@@ -64,8 +69,55 @@ function readOptionalString(
   return value === undefined || value.trim() === "" ? undefined : value;
 }
 
-function parseDate(value: unknown): Date {
-  return typeof value === "string" ? new Date(value) : new Date(Number.NaN);
+function invalidDate(): Date {
+  return new Date(Number.NaN);
+}
+
+function parseCanonicalInstant(value: string): Date | null {
+  if (!CANONICAL_ISO_INSTANT.test(value)) return null;
+  const instant = new Date(value);
+  return Number.isFinite(instant.getTime()) && instant.toISOString() === value
+    ? instant
+    : null;
+}
+
+function parseBangkokLocalDateTime(value: string): Date | null {
+  const match = BANGKOK_LOCAL_DATE_TIME.exec(value);
+  if (!match) return null;
+  const [, yearPart, monthPart, dayPart, hourPart, minutePart] = match;
+  const year = Number(yearPart);
+  const month = Number(monthPart);
+  const day = Number(dayPart);
+  const hour = Number(hourPart);
+  const minute = Number(minutePart);
+
+  const localCalendar = new Date(0);
+  localCalendar.setUTCFullYear(year, month - 1, day);
+  localCalendar.setUTCHours(hour, minute, 0, 0);
+  if (
+    localCalendar.getUTCFullYear() !== year ||
+    localCalendar.getUTCMonth() !== month - 1 ||
+    localCalendar.getUTCDate() !== day ||
+    localCalendar.getUTCHours() !== hour ||
+    localCalendar.getUTCMinutes() !== minute
+  ) {
+    return null;
+  }
+
+  return new Date(localCalendar.getTime() - BANGKOK_OFFSET_MILLISECONDS);
+}
+
+function parseTimestamp(
+  value: unknown,
+  options: Readonly<{ allowBangkokLocal: boolean }>,
+): Date {
+  if (typeof value !== "string") return invalidDate();
+  const instant = parseCanonicalInstant(value);
+  if (instant !== null) return instant;
+  if (options.allowBangkokLocal) {
+    return parseBangkokLocalDateTime(value) ?? invalidDate();
+  }
+  return invalidDate();
 }
 
 function stockFieldErrors(
@@ -97,6 +149,8 @@ function stockFieldErrors(
     errors[field] =
       field === "counts"
         ? "กรุณากรอกยอดนับให้ครบทุกวัตถุดิบ"
+        : field === "countedAt"
+          ? "วันและเวลายืนยันสต๊อกไม่ถูกต้อง"
         : "ข้อมูลยืนยันสต๊อกไม่ถูกต้อง";
   }
   return errors;
@@ -204,7 +258,9 @@ export async function confirmCycleStockAction(
 
   const parsed = confirmStockInputSchema.safeParse({
     ...rawPayload,
-    countedAt: parseDate(rawPayload.countedAt),
+    countedAt: parseTimestamp(rawPayload.countedAt, {
+      allowBangkokLocal: false,
+    }),
   });
   if (!parsed.success) {
     return unsavedState(
@@ -265,7 +321,9 @@ export async function recordCyclePurchaseAction(
     packCount,
     totalPriceSatang,
     purchasedFrom: readOptionalString(formData, "purchasedFrom"),
-    occurredAt: parseDate(readString(formData, "occurredAt")),
+    occurredAt: parseTimestamp(readString(formData, "occurredAt"), {
+      allowBangkokLocal: true,
+    }),
     notes: readOptionalString(formData, "notes"),
   });
   if (!parsed.success) {
