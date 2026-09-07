@@ -88,6 +88,18 @@ export function PlanningGenerationView({
         <p className="text-sm text-stone-600">
           ล็อกเมื่อ {formatBangkokDateTime(generation.lockedAt)}
         </p>
+        <Link
+          className="inline-flex min-h-12 w-fit items-center justify-center rounded-xl border border-amber-800 px-5 font-bold text-amber-900"
+          href={
+            generation.status === "ACTIVE"
+              ? `/cycles/${cycleId}/shopping`
+              : `/cycles/${cycleId}/shopping?generation=${generation.generation}`
+          }
+        >
+          {generation.status === "ACTIVE"
+            ? "เช็กสต๊อกและรายการซื้อ"
+            : "ดูประวัติเช็กสต๊อกและรายการซื้อ"}
+        </Link>
       </section>
 
       <nav

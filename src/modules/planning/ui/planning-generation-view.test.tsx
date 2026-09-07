@@ -189,6 +189,10 @@ describe("PlanningGenerationView", () => {
     expect(screen.getByText("ยอดต้นทุนที่ทราบแล้ว ฿211.65")).toBeInTheDocument();
     expect(screen.queryByText(/ต้นทุนรวม ฿/)).toBeNull();
 
+    expect(
+      screen.getByRole("link", { name: "เช็กสต๊อกและรายการซื้อ" }),
+    ).toHaveAttribute("href", `/cycles/${CYCLE_ID}/shopping`);
+
     expect(screen.getByRole("link", { name: /รุ่น 2.*ใช้งานอยู่/ })).toHaveAttribute(
       "href",
       `/cycles/${CYCLE_ID}/planning?generation=2`,
@@ -200,6 +204,31 @@ describe("PlanningGenerationView", () => {
     );
     expect(screen.getByText("เหตุผลที่ปลดล็อก: เพิ่มออเดอร์ด่วน")).toBeInTheDocument();
     expect(screen.getByText(/ปลดล็อกเมื่อ.*28 ส.ค. 2569.*15:30/)).toBeInTheDocument();
+  });
+
+  it("links a displayed superseded generation to its read-only shopping history", () => {
+    render(
+      <PlanningGenerationView
+        cycleId={CYCLE_ID}
+        generation={{
+          ...INCOMPLETE_GENERATION,
+          ...GENERATIONS[1]!,
+        }}
+        generations={GENERATIONS}
+      />,
+    );
+
+    expect(
+      screen.getByRole("link", {
+        name: "ดูประวัติเช็กสต๊อกและรายการซื้อ",
+      }),
+    ).toHaveAttribute(
+      "href",
+      `/cycles/${CYCLE_ID}/shopping?generation=${GENERATIONS[1]!.generation}`,
+    );
+    expect(
+      screen.queryByRole("link", { name: "เช็กสต๊อกและรายการซื้อ" }),
+    ).toBeNull();
   });
 
   it("shows complete totals and derives costs only from positive denominators", () => {

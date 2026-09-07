@@ -139,6 +139,9 @@ describe("CycleDetail", () => {
       screen.getByRole("link", { name: "ตรวจแผนและล็อกรอบ" }),
     ).toHaveClass("min-h-12");
     expect(screen.queryByRole("link", { name: "ดูแผนการผลิต" })).toBeNull();
+    expect(
+      screen.queryByRole("link", { name: "เช็กสต๊อกและรายการซื้อ" }),
+    ).toBeNull();
     const status = screen.getByLabelText("เปลี่ยนสถานะ");
     const statusOptions = Array.from(status.querySelectorAll("option"));
     expect(status).toHaveValue("");
@@ -218,6 +221,12 @@ describe("CycleDetail", () => {
       "min-h-12",
     );
     expect(
+      screen.getByRole("link", { name: "เช็กสต๊อกและรายการซื้อ" }),
+    ).toHaveAttribute("href", `/cycles/${CYCLE.id}/shopping`);
+    expect(
+      screen.getByRole("link", { name: "เช็กสต๊อกและรายการซื้อ" }),
+    ).toHaveClass("min-h-12");
+    expect(
       screen.queryByRole("link", { name: "ตรวจแผนและล็อกรอบ" }),
     ).toBeNull();
   });
@@ -235,5 +244,8 @@ describe("CycleDetail", () => {
       screen.queryByRole("link", { name: "ตรวจแผนและล็อกรอบ" }),
     ).toBeNull();
     expect(screen.queryByRole("link", { name: "ดูแผนการผลิต" })).toBeNull();
+    expect(
+      screen.queryByRole("link", { name: "เช็กสต๊อกและรายการซื้อ" }),
+    ).toBeNull();
   });
 });

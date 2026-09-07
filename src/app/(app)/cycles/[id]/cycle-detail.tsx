@@ -105,12 +105,20 @@ export function CycleDetail({
             </Link>
           ) : null}
           {cycle.activePlanningSnapshotId !== null ? (
-            <Link
-              className="inline-flex min-h-12 items-center justify-center rounded-xl bg-stone-900 px-6 text-lg font-bold text-white shadow-sm"
-              href={`/cycles/${cycle.id}/planning`}
-            >
-              ดูแผนการผลิต
-            </Link>
+            <>
+              <Link
+                className="inline-flex min-h-12 items-center justify-center rounded-xl bg-stone-900 px-6 text-lg font-bold text-white shadow-sm"
+                href={`/cycles/${cycle.id}/planning`}
+              >
+                ดูแผนการผลิต
+              </Link>
+              <Link
+                className="inline-flex min-h-12 items-center justify-center rounded-xl border border-amber-800 px-6 text-lg font-bold text-amber-900"
+                href={`/cycles/${cycle.id}/shopping`}
+              >
+                เช็กสต๊อกและรายการซื้อ
+              </Link>
+            </>
           ) : null}
         </div>
       </header>
