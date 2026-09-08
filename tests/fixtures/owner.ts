@@ -1,8 +1,20 @@
-import { expect, type Locator, type Page } from "@playwright/test";
+import {
+  expect,
+  type Locator,
+  type Page,
+  type Response,
+} from "@playwright/test";
 
 export const OWNER_ID = "00000000-0000-4000-8000-000000000001";
 export const OTHER_OWNER_ID = "00000000-0000-4000-8000-000000000002";
 const SERVER_ACTION_TIMEOUT = 30_000;
+
+function isCurrentPageServerAction(page: Page): (response: Response) => boolean {
+  const pathname = new URL(page.url()).pathname;
+  return (response) =>
+    response.request().method() === "POST" &&
+    new URL(response.url()).pathname === pathname;
+}
 
 function requiredEnv(name: "E2E_OWNER_EMAIL" | "E2E_OWNER_PASSWORD"): string {
   const value = process.env[name];
@@ -82,8 +94,14 @@ export async function createInventoryItem(
   }>,
 ): Promise<void> {
   await clickVisibleLink(page, "วัตถุดิบ");
-  await page.getByRole("button", { name: "เพิ่มรายการ" }).click();
-  await page.getByLabel("ชื่อรายการ").fill(input.name);
+  const addButton = page.getByRole("button", { name: "เพิ่มรายการ" });
+  const nameInput = page.getByLabel("ชื่อรายการ");
+  await expect(async () => {
+    if (await nameInput.isVisible()) return;
+    await addButton.click();
+    await expect(nameInput).toBeVisible({ timeout: 1_000 });
+  }).toPass({ timeout: SERVER_ACTION_TIMEOUT });
+  await nameInput.fill(input.name);
   await page.getByLabel("ประเภท").selectOption(input.category);
   await page.getByLabel("หน่วยฐาน").selectOption(input.baseUnit ?? "g");
   await page.getByLabel("ชื่อหน่วยซื้อ").fill(input.purchaseLabel);
@@ -319,7 +337,7 @@ export async function createOrder(
   await expect(page).toHaveURL(/\/orders$/);
   await expect(
     page.getByRole("heading", { name: "ออเดอร์", exact: true }),
-  ).toBeVisible();
+  ).toBeVisible({ timeout: SERVER_ACTION_TIMEOUT });
   await clickVisibleLink(page, "เพิ่มออเดอร์");
   await expect(page).toHaveURL(/\/orders\/new(?:\?.*)?$/);
   await expect(
@@ -367,4 +385,61 @@ export async function createOrder(
   await expect(
     page.getByRole("heading", { name: "แก้ไขออเดอร์" }),
   ).toBeVisible();
+}
+
+export async function confirmCycleStock(
+  page: Page,
+  counts: ReadonlyArray<{ itemName: string; quantity: string }>,
+): Promise<void> {
+  for (const count of counts) {
+    await page
+      .getByLabel(`จำนวนที่นับจริง ${count.itemName}`)
+      .fill(count.quantity);
+  }
+
+  const currentUrl = page.url();
+  page.once("dialog", (dialog) => dialog.accept());
+  const response = page.waitForResponse(isCurrentPageServerAction(page), {
+    timeout: SERVER_ACTION_TIMEOUT,
+  });
+  await page
+    .getByRole("button", { name: "ยืนยันสต๊อกและสร้างรายการซื้อ" })
+    .press("Enter");
+  expect((await response).ok()).toBe(true);
+  await page.goto(currentUrl);
+}
+
+export async function recordCyclePurchase(
+  page: Page,
+  input: Readonly<{
+    itemName: string;
+    packCount: string;
+    totalPriceBaht: string;
+    purchasedFrom: string;
+    occurredAt: string;
+  }>,
+): Promise<void> {
+  const item = page.getByRole("article", { name: input.itemName });
+  await item.getByLabel("จำนวนแพ็กที่ซื้อ").fill(input.packCount);
+  await item.getByLabel("ราคารวม (บาท)").fill(input.totalPriceBaht);
+  await item.getByLabel("ร้านที่ซื้อ").fill(input.purchasedFrom);
+  await item.getByLabel("วันและเวลาที่ซื้อ").fill(input.occurredAt);
+
+  const currentUrl = page.url();
+  const response = page.waitForResponse(isCurrentPageServerAction(page), {
+    timeout: SERVER_ACTION_TIMEOUT,
+  });
+  await item
+    .getByRole("button", {
+      name: /^(บันทึกการซื้อ|เพิ่มการซื้ออีกครั้ง)$/,
+    })
+    .press("Enter");
+  expect((await response).ok()).toBe(true);
+  await page.goto(currentUrl, {
+    waitUntil: "domcontentloaded",
+    timeout: SERVER_ACTION_TIMEOUT,
+  });
+  await expect(
+    page.getByRole("article", { name: input.itemName }),
+  ).toBeVisible({ timeout: SERVER_ACTION_TIMEOUT });
 }
