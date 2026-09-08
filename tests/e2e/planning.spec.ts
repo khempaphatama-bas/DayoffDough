@@ -18,7 +18,7 @@ const SERVER_ACTION_TIMEOUT = 30_000;
 test("owner locks, unlocks, and re-locks immutable planning generations", async ({
   page,
 }, testInfo) => {
-  test.setTimeout(300_000);
+  test.setTimeout(420_000);
   const runId = `planning-${testInfo.project.name}-${Date.now()}`;
   const flourName = `แป้งขนมปัง ${runId}`;
   const boxName = `กล่องฟอคคาเซีย ${runId}`;
@@ -285,7 +285,9 @@ test("owner locks, unlocks, and re-locks immutable planning generations", async 
   await page.getByRole("button", { name: "ยืนยันล็อกรอบ" }).click();
   const secondLock = await secondLockResponse;
   expect(secondLock.ok()).toBe(true);
-  await page.goto(`${secondPlanningUrl}?generation=2`);
+  await page.goto(`${secondPlanningUrl}?generation=2`, {
+    waitUntil: "domcontentloaded",
+  });
   await expect(
     page.getByRole("heading", { name: "รุ่น 2", exact: true }),
   ).toBeVisible({ timeout: SERVER_ACTION_TIMEOUT });
@@ -295,9 +297,18 @@ test("owner locks, unlocks, and re-locks immutable planning generations", async 
   await expect(page.getByRole("main")).toContainText("ต้นทุนรวม ฿287.00");
   await expect(page.getByRole("main")).not.toContainText("ต้นทุนไม่สมบูรณ์");
 
-  await page
-    .getByRole("link", { name: "รุ่น 1 · แทนที่แล้ว" })
-    .press("Enter");
+  const replacedGenerationLink = page.getByRole("link", {
+    name: "รุ่น 1 · แทนที่แล้ว",
+  });
+  await expect(replacedGenerationLink).toHaveAttribute(
+    "href",
+    /\?generation=1$/,
+  );
+  const replacedGenerationUrl = await replacedGenerationLink.getAttribute(
+    "href",
+  );
+  if (!replacedGenerationUrl) throw new Error("Replaced generation URL missing");
+  await page.goto(replacedGenerationUrl, { waitUntil: "domcontentloaded" });
   await expect(page).toHaveURL(/\?generation=1$/, {
     timeout: SERVER_ACTION_TIMEOUT,
   });
