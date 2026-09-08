@@ -48,6 +48,15 @@ describe("confirm stock input schema", () => {
   );
 
   it.each([
+    ["999999999999.999999", true],
+    ["1000000000000", false],
+  ])("accepts numeric(18,6) count boundary %s: %s", (countedQuantity, expected) => {
+    expect(
+      confirmStockInputSchema.safeParse(confirmInput(countedQuantity)).success,
+    ).toBe(expected);
+  });
+
+  it.each([
     "-1",
     "+1",
     "1.0000001",

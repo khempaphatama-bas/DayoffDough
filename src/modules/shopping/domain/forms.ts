@@ -1,18 +1,11 @@
-import Decimal from "decimal.js";
 import { z } from "zod";
+import { isNonNegativeNumeric18_6 } from "./storage";
 
 const uuidSchema = z.string().uuid();
 const nonNegativeSixDecimalSchema = z
   .string()
   .regex(/^(?:\d+|\d*\.\d{1,6})$/)
-  .refine((value) => {
-    try {
-      const quantity = new Decimal(value);
-      return quantity.isFinite() && quantity.gte(0);
-    } catch {
-      return false;
-    }
-  });
+  .refine(isNonNegativeNumeric18_6);
 
 export const confirmStockInputSchema = z.object({
   cycleId: uuidSchema,

@@ -121,6 +121,18 @@ describe("snapshot requirement aggregation", () => {
       ).toThrow("Invalid planned requirement");
     },
   );
+
+  it("rejects an aggregated requirement outside numeric(18,6) storage", () => {
+    expect(() =>
+      aggregateSnapshotRequirements({
+        materials: [
+          requirement("flour", "INGREDIENT", "g", "999999999999.999999"),
+          requirement("flour", "INGREDIENT", "g", "0.000001"),
+        ],
+        packaging: [],
+      }),
+    ).toThrow("planned requirement exceeds numeric(18,6) storage");
+  });
 });
 
 describe("shopping recommendation", () => {
@@ -194,7 +206,7 @@ describe("shopping recommendation", () => {
     ).toThrow("Estimated cost exceeds PostgreSQL integer range");
   });
 
-  it("rejects an estimated cost above the JavaScript safe integer range", () => {
+  it("rejects a required quantity outside numeric(18,6) before estimate calculation", () => {
     expect(() =>
       calculateShoppingRecommendation({
         requiredQuantity: "9007199254740991",
@@ -202,7 +214,7 @@ describe("shopping recommendation", () => {
         packBaseQuantity: "1",
         unitCostSatang: "1.1",
       }),
-    ).toThrow("Estimated cost exceeds safe integer range");
+    ).toThrow("required quantity exceeds numeric(18,6) storage");
   });
 
   it("does not add a minimum-stock term to the shortfall contract", () => {
@@ -278,7 +290,7 @@ describe("shopping recommendation", () => {
     ).toThrow();
   });
 
-  it("rejects a suggested pack count beyond Number.MAX_SAFE_INTEGER", () => {
+  it("rejects a suggested pack count source outside numeric(18,6) storage", () => {
     expect(() =>
       calculateShoppingRecommendation({
         requiredQuantity: "9007199254740992",
@@ -286,7 +298,51 @@ describe("shopping recommendation", () => {
         packBaseQuantity: "1",
         unitCostSatang: null,
       }),
-    ).toThrow("Suggested pack count is too large");
+    ).toThrow("required quantity exceeds numeric(18,6) storage");
+  });
+
+  it("accepts the PostgreSQL integer maximum suggested pack count", () => {
+    expect(
+      calculateShoppingRecommendation({
+        requiredQuantity: "2147483647",
+        countedQuantity: "0",
+        packBaseQuantity: "1",
+        unitCostSatang: null,
+      }).suggestedPackCount,
+    ).toBe(2_147_483_647);
+  });
+
+  it("rejects a suggested pack count above the PostgreSQL integer range", () => {
+    expect(() =>
+      calculateShoppingRecommendation({
+        requiredQuantity: "2147483648",
+        countedQuantity: "0",
+        packBaseQuantity: "1",
+        unitCostSatang: null,
+      }),
+    ).toThrow("Suggested pack count exceeds PostgreSQL integer range");
+  });
+
+  it("accepts the numeric(18,6) maximum suggested purchase quantity", () => {
+    expect(
+      calculateShoppingRecommendation({
+        requiredQuantity: "999999999999.999999",
+        countedQuantity: "0",
+        packBaseQuantity: "999999999999.999999",
+        unitCostSatang: null,
+      }).suggestedPurchaseQuantity,
+    ).toBe("999999999999.999999");
+  });
+
+  it("rejects a suggested purchase quantity above numeric(18,6)", () => {
+    expect(() =>
+      calculateShoppingRecommendation({
+        requiredQuantity: "999999999999.999999",
+        countedQuantity: "0",
+        packBaseQuantity: "600000000000",
+        unitCostSatang: null,
+      }),
+    ).toThrow("Suggested purchase quantity exceeds numeric(18,6) storage");
   });
 });
 

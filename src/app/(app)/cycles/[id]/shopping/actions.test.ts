@@ -176,6 +176,7 @@ describe("shopping actions", () => {
   it.each([
     ["missing", undefined],
     ["invalid", "1.0000001"],
+    ["outside numeric(18,6) storage", "1000000000000"],
   ])(
     "returns an adjacent count error for a %s counted quantity without mutation",
     async (_case, countedQuantity) => {

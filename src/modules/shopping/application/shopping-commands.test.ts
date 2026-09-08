@@ -11,7 +11,10 @@ import {
   inventoryMovements,
   inventoryPrices,
 } from "@/modules/inventory/db/schema";
-import { cyclePlanningSnapshots } from "@/modules/planning/db/schema";
+import {
+  cycleMaterialRequirements,
+  cyclePlanningSnapshots,
+} from "@/modules/planning/db/schema";
 import {
   cycleInventoryCounts,
   cyclePurchaseEntries,
@@ -204,6 +207,139 @@ describe("shopping command service", () => {
       .toMatchObject({ systemBalanceBeforeCount: "900.000000", countDeltaQuantity: "100.000000" });
     expect(shoppingRows).toHaveLength(1);
     expect(shoppingRows[0]).toMatchObject({ inventoryItemId: fixture.ingredientItemId });
+  });
+
+  it("accepts the maximum numeric(18,6) counted quantity", async () => {
+    const fixture = await seedLockedPlanningScenario(context.db);
+
+    await expect(
+      createShoppingCommandService(context.db, CLOCK).confirmStock(
+        OWNER_ID,
+        confirmInput(fixture, {
+          counts: [
+            {
+              inventoryItemId: fixture.ingredientItemId,
+              countedQuantity: "999999999999.999999",
+            },
+            { inventoryItemId: fixture.packagingItemId, countedQuantity: "14" },
+          ],
+        }),
+      ),
+    ).resolves.toMatchObject({ kind: "SHOPPING" });
+    expect(
+      (await persistedRows(context.db)).persistedCounts.find(
+        (row) => row.inventoryItemId === fixture.ingredientItemId,
+      ),
+    ).toMatchObject({ countedQuantity: "999999999999.999999" });
+  });
+
+  it("maps one-over counted input to validation without writing a count set", async () => {
+    const fixture = await seedLockedPlanningScenario(context.db);
+
+    await expect(
+      createShoppingCommandService(context.db, CLOCK).confirmStock(
+        OWNER_ID,
+        confirmInput(fixture, {
+          counts: [
+            {
+              inventoryItemId: fixture.ingredientItemId,
+              countedQuantity: "1000000000000",
+            },
+            { inventoryItemId: fixture.packagingItemId, countedQuantity: "14" },
+          ],
+        }),
+      ),
+    ).rejects.toBeInstanceOf(ShoppingValidationError);
+    expect(await persistedRows(context.db)).toEqual({
+      countMovements: [],
+      persistedCounts: [],
+      shoppingRows: [],
+    });
+  });
+
+  it("maps an oversized refreshed balance to state without writing a count set", async () => {
+    const fixture = await seedLockedPlanningScenario(context.db);
+    await context.db.insert(inventoryMovements).values([
+      {
+        ownerId: OWNER_ID,
+        inventoryItemId: fixture.ingredientItemId,
+        type: "CORRECTION",
+        quantityDeltaInBaseUnit: "999999999999.999999",
+        occurredAt: COUNTED_AT,
+      },
+      {
+        ownerId: OWNER_ID,
+        inventoryItemId: fixture.ingredientItemId,
+        type: "CORRECTION",
+        quantityDeltaInBaseUnit: "0.000001",
+        occurredAt: COUNTED_AT,
+      },
+    ]);
+
+    await expect(
+      createShoppingCommandService(context.db, CLOCK).confirmStock(
+        OWNER_ID,
+        confirmInput(fixture),
+      ),
+    ).rejects.toBeInstanceOf(ShoppingStateError);
+    expect(await persistedRows(context.db)).toEqual({
+      countMovements: [],
+      persistedCounts: [],
+      shoppingRows: [],
+    });
+  });
+
+  it("maps oversized required and recommendation source values to state before writing", async () => {
+    const fixture = await seedLockedPlanningScenario(context.db);
+    const service = createShoppingCommandService(context.db, CLOCK);
+    const [material] = await context.db
+      .select()
+      .from(cycleMaterialRequirements)
+      .where(eq(cycleMaterialRequirements.inventoryItemId, fixture.ingredientItemId));
+    if (!material) throw new Error("Material fixture missing");
+    await context.db
+      .update(cycleMaterialRequirements)
+      .set({ plannedRequirement: "999999999999.999999" })
+      .where(eq(cycleMaterialRequirements.inventoryItemId, fixture.ingredientItemId));
+    await context.db.insert(cycleMaterialRequirements).values({
+      ...material,
+      id: undefined,
+      plannedRequirement: "0.000001",
+    });
+
+    await expect(service.confirmStock(OWNER_ID, confirmInput(fixture))).rejects.toBeInstanceOf(
+      ShoppingStateError,
+    );
+    expect(await persistedRows(context.db)).toEqual({
+      countMovements: [],
+      persistedCounts: [],
+      shoppingRows: [],
+    });
+
+    await context.db
+      .update(cycleMaterialRequirements)
+      .set({ plannedRequirement: "999999999999.999999" })
+      .where(eq(cycleMaterialRequirements.inventoryItemId, fixture.ingredientItemId));
+    await context.db
+      .update(inventoryItems)
+      .set({ baseQuantityPerPurchasePack: "600000000000" })
+      .where(eq(inventoryItems.id, fixture.ingredientItemId));
+    await expect(
+      service.confirmStock(
+        OWNER_ID,
+        confirmInput(fixture, {
+          counts: [
+            { inventoryItemId: fixture.ingredientItemId, countedQuantity: "0" },
+            { inventoryItemId: fixture.packagingItemId, countedQuantity: "14" },
+          ],
+        }),
+      ),
+    ).rejects.toBeInstanceOf(ShoppingStateError);
+    expect(await persistedRows(context.db)).toEqual({
+      countMovements: [],
+      persistedCounts: [],
+      shoppingRows: [],
+    });
   });
 
   it("uses the single grouped post-lock source balance read without per-item reloads", async () => {

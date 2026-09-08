@@ -1,4 +1,9 @@
 import Decimal from "decimal.js";
+import {
+  assertNumeric18_6,
+  assertPostgreSqlInteger,
+  POSTGRESQL_INTEGER_MAX,
+} from "./storage";
 import type {
   AggregateSnapshotRequirementsInput,
   ShoppingItemProgress,
@@ -9,7 +14,6 @@ import type {
 } from "./types";
 
 const ShoppingDecimal = Decimal.clone({ precision: 64 });
-const POSTGRESQL_INTEGER_MAX = new ShoppingDecimal("2147483647");
 const SAFE_INTEGER_MAX = new ShoppingDecimal(Number.MAX_SAFE_INTEGER);
 
 function parseDecimal(
@@ -67,17 +71,20 @@ export function aggregateSnapshotRequirements(
       row.plannedRequirement,
       "planned requirement",
     );
+    assertNumeric18_6(planned.toString(), "planned requirement");
     const unitCostSatang = canonicalUnitCost(row.unitCostSatang);
     const existing = byInventoryItemId.get(row.inventoryItemId);
     if (existing) {
       if (!sameRequirementIdentity(existing, row, unitCostSatang)) {
         throw new Error("Planning requirement identity mismatch");
       }
+      const requiredQuantity = new ShoppingDecimal(existing.requiredQuantity)
+        .plus(planned)
+        .toString();
+      assertNumeric18_6(requiredQuantity, "planned requirement");
       byInventoryItemId.set(row.inventoryItemId, {
         ...existing,
-        requiredQuantity: new ShoppingDecimal(existing.requiredQuantity)
-          .plus(planned)
-          .toString(),
+        requiredQuantity,
       });
       continue;
     }
@@ -109,6 +116,9 @@ export function calculateShoppingRecommendation(
   );
   const counted = exactNonNegative(input.countedQuantity, "counted quantity");
   const pack = exactPositive(input.packBaseQuantity, "pack quantity");
+  assertNumeric18_6(required.toString(), "required quantity");
+  assertNumeric18_6(counted.toString(), "counted quantity");
+  assertNumeric18_6(pack.toString(), "pack quantity");
   const unitCost =
     input.unitCostSatang === null
       ? null
@@ -125,10 +135,16 @@ export function calculateShoppingRecommendation(
   }
 
   const packs = shortfall.div(pack).ceil();
-  if (!packs.isInteger() || packs.gt(Number.MAX_SAFE_INTEGER)) {
-    throw new Error("Suggested pack count is too large");
-  }
+  const suggestedPackCount = assertPostgreSqlInteger(
+    packs.toString(),
+    "Suggested pack count",
+  );
+  if (suggestedPackCount <= 0) throw new Error("Suggested pack count is too large");
   const purchaseQuantity = packs.mul(pack);
+  assertNumeric18_6(
+    purchaseQuantity.toString(),
+    "Suggested purchase quantity",
+  );
   let estimatedCostSatang: number | null = null;
   if (unitCost !== null) {
     const roundedEstimate = purchaseQuantity
@@ -145,7 +161,7 @@ export function calculateShoppingRecommendation(
 
   return {
     shortfallQuantity: shortfall.toString(),
-    suggestedPackCount: packs.toNumber(),
+    suggestedPackCount,
     suggestedPurchaseQuantity: purchaseQuantity.toString(),
     estimatedCostSatang,
   };

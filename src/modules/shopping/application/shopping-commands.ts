@@ -11,6 +11,13 @@ import {
   calculateShoppingRecommendation,
 } from "@/modules/shopping/domain/calculations";
 import {
+  assertNumeric18_6,
+  assertPostgreSqlInteger,
+  NUMERIC_18_6_UPPER_BOUND,
+  POSTGRESQL_INTEGER_MAX,
+  ShoppingStorageLimitError,
+} from "@/modules/shopping/domain/storage";
+import {
   confirmStockInputSchema,
   type ConfirmStockInput,
   recordPurchaseInputSchema,
@@ -32,9 +39,14 @@ import { createShoppingQueryService } from "./shopping-queries";
 type ShoppingClock = Readonly<{ now: () => Date }>;
 type LockedCycle = NonNullable<Awaited<ReturnType<typeof lockOwnedBakeCycle>>>;
 const PurchaseDecimal = Decimal.clone({ precision: 64 });
-const POSTGRESQL_INTEGER_MAX = 2_147_483_647;
-const PURCHASE_QUANTITY_UPPER_BOUND = new PurchaseDecimal("1000000000000");
 const PURCHASE_REQUEST_UNIQUE_CONSTRAINT = "cycle_purchase_entries_owner_request_unique";
+type ConfirmedStockRow = Readonly<{
+  source: StockCountCandidate;
+  countedQuantity: string;
+  systemBalance: string;
+  countDelta: string;
+  recommendation: ReturnType<typeof calculateShoppingRecommendation>;
+}>;
 
 export class ShoppingStateError extends Error {
   constructor(message: string) {
@@ -111,6 +123,120 @@ function assertExactCountSet(
   }
 }
 
+function canonicalStockQuantity(
+  value: string,
+  label: string,
+  minimum: "NON_NEGATIVE" | "POSITIVE" | "ANY",
+): string {
+  const canonical = assertNumeric18_6(value, label);
+  const quantity = new Decimal(canonical);
+  if (
+    (minimum === "NON_NEGATIVE" && quantity.lt(0)) ||
+    (minimum === "POSITIVE" && quantity.lte(0))
+  ) {
+    throw new ShoppingStorageLimitError(`${label} is outside its storage range`);
+  }
+  return canonical;
+}
+
+function prepareConfirmedStockRows(
+  source: ReadonlyArray<StockCountCandidate>,
+  counts: ConfirmStockInput["counts"],
+): ReadonlyArray<ConfirmedStockRow> {
+  const countedByItemId = new Map<string, string>();
+  for (const count of counts) {
+    try {
+      countedByItemId.set(
+        count.inventoryItemId,
+        canonicalStockQuantity(
+          count.countedQuantity,
+          "Counted quantity",
+          "NON_NEGATIVE",
+        ),
+      );
+    } catch (error) {
+      if (error instanceof ShoppingStorageLimitError) {
+        throw new ShoppingValidationError("Counted quantity exceeds storage bounds");
+      }
+      throw error;
+    }
+  }
+  try {
+    return source.map((row) => {
+      const countedQuantity = countedByItemId.get(row.inventoryItemId);
+      if (countedQuantity === undefined) {
+        throw new ShoppingValidationError("Stock counts must match the planning requirements exactly");
+      }
+      const requiredQuantity = canonicalStockQuantity(
+        row.requiredQuantity,
+        "Required quantity",
+        "POSITIVE",
+      );
+      const systemBalance = canonicalStockQuantity(
+        row.systemBalance,
+        "System balance",
+        "NON_NEGATIVE",
+      );
+      const baseQuantityPerPurchasePack = canonicalStockQuantity(
+        row.baseQuantityPerPurchasePack,
+        "Pack quantity",
+        "POSITIVE",
+      );
+      const countDelta = canonicalStockQuantity(
+        new Decimal(countedQuantity).minus(systemBalance).toString(),
+        "Count delta",
+        "ANY",
+      );
+      const normalizedSource = {
+        ...row,
+        requiredQuantity,
+        systemBalance,
+        baseQuantityPerPurchasePack,
+      };
+      const recommendation = calculateShoppingRecommendation({
+        requiredQuantity,
+        countedQuantity,
+        packBaseQuantity: baseQuantityPerPurchasePack,
+        unitCostSatang: row.unitCostSatang,
+      });
+      if (recommendation.shortfallQuantity !== "0") {
+        canonicalStockQuantity(
+          recommendation.shortfallQuantity,
+          "Shortfall quantity",
+          "POSITIVE",
+        );
+        if (
+          assertPostgreSqlInteger(
+            String(recommendation.suggestedPackCount),
+            "Suggested pack count",
+          ) <= 0
+        ) {
+          throw new ShoppingStorageLimitError(
+            "Suggested pack count is outside its storage range",
+          );
+        }
+        canonicalStockQuantity(
+          recommendation.suggestedPurchaseQuantity,
+          "Suggested purchase quantity",
+          "POSITIVE",
+        );
+      }
+      return {
+        source: normalizedSource,
+        countedQuantity,
+        systemBalance,
+        countDelta,
+        recommendation,
+      };
+    });
+  } catch (error) {
+    if (error instanceof ShoppingStorageLimitError) {
+      throw new ShoppingStateError("Shopping source values exceed storage bounds");
+    }
+    throw error;
+  }
+}
+
 async function loadExistingCounts(
   db: Pick<DatabaseClient, "select">,
   ownerId: string,
@@ -127,6 +253,21 @@ async function loadExistingCounts(
         eq(cycleInventoryCounts.planningSnapshotId, planningSnapshotId),
       ),
     );
+}
+
+async function loadValidatedShoppingSource(
+  reader: DatabaseClient,
+  ownerId: string,
+  planningSnapshotId: string,
+): Promise<ReadonlyArray<StockCountCandidate>> {
+  try {
+    return await loadShoppingSource(reader, ownerId, planningSnapshotId);
+  } catch (error) {
+    if (error instanceof ShoppingStorageLimitError) {
+      throw new ShoppingStateError("Shopping source values exceed storage bounds");
+    }
+    throw error;
+  }
 }
 
 async function loadShoppingItemProgress(
@@ -268,7 +409,7 @@ export function createShoppingCommandService(
           );
         }
 
-        const source = await loadShoppingSource(
+        const source = await loadValidatedShoppingSource(
           tx as unknown as DatabaseClient,
           verifiedOwnerId,
           verifiedInput.planningSnapshotId,
@@ -282,27 +423,20 @@ export function createShoppingCommandService(
         if (lockedItems.length !== source.length) {
           throw new ShoppingStateError("Shopping inventory profile changed");
         }
-        const refreshed = await loadShoppingSource(
-          tx,
+        const refreshed = await loadValidatedShoppingSource(
+          tx as unknown as DatabaseClient,
           verifiedOwnerId,
           verifiedInput.planningSnapshotId,
         );
         assertExactCountSet(refreshed, verifiedInput.counts);
-        const countByItemId = new Map(
-          verifiedInput.counts.map((count) => [
-            count.inventoryItemId,
-            new Decimal(count.countedQuantity).toString(),
-          ]),
+        const confirmedRows = prepareConfirmedStockRows(
+          refreshed,
+          verifiedInput.counts,
         );
 
-        for (const row of refreshed) {
+        for (const confirmed of confirmedRows) {
+          const { source: row, countedQuantity, systemBalance, countDelta, recommendation } = confirmed;
           const countId = randomUUID();
-          const countedQuantity = countByItemId.get(row.inventoryItemId);
-          if (countedQuantity === undefined) {
-            throw new ShoppingValidationError("Stock counts must match the planning requirements exactly");
-          }
-          const systemBalance = row.systemBalance;
-          const countDelta = new Decimal(countedQuantity).minus(systemBalance).toString();
           const [movement] = await tx
             .insert(inventoryMovements)
             .values({
@@ -342,12 +476,6 @@ export function createShoppingCommandService(
             })
             .returning();
           if (!count) throw new ShoppingStateError("Failed to record stock count");
-          const recommendation = calculateShoppingRecommendation({
-            requiredQuantity: row.requiredQuantity,
-            countedQuantity,
-            packBaseQuantity: row.baseQuantityPerPurchasePack,
-            unitCostSatang: row.unitCostSatang,
-          });
           if (recommendation.shortfallQuantity !== "0") {
             await tx.insert(cycleShoppingItems).values({
               ownerId: verifiedOwnerId,
@@ -491,7 +619,7 @@ export function createShoppingCommandService(
           !purchasedQuantity.isFinite() ||
           !purchasedQuantity.gt(0) ||
           purchasedQuantity.decimalPlaces() > 6 ||
-          purchasedQuantity.gte(PURCHASE_QUANTITY_UPPER_BOUND)
+          purchasedQuantity.gte(NUMERIC_18_6_UPPER_BOUND)
         ) {
           throw new ShoppingValidationError("Purchased quantity is outside inventory precision");
         }
