@@ -60,3 +60,12 @@ export {
   orderSourceChannelEnum,
 } from "@/modules/orders/db/schema";
 export { shopSettings } from "@/modules/settings/db/schema";
+export {
+  cycleTaskGenerations,
+  cycleTaskOriginEnum,
+  cycleTaskStatusEnum,
+  cycleTasks,
+  productionTemplateActivities,
+  productionTemplates,
+  productionTemplateScopeEnum,
+} from "@/modules/production/db/schema";
