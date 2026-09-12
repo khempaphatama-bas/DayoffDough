@@ -74,4 +74,24 @@ describe("TemplateForm", () => {
     expect(screen.getByRole("button", { name: "กู้คืนกิจกรรม 1" })).toBeVisible();
     expect(screen.queryByRole("button", { name: /ลบ/ })).toBeNull();
   });
+
+  it("places offset and start-time errors beside their controls and explains the relative delivery date", async () => {
+    const action = vi.fn().mockResolvedValue({
+      status: "ERROR",
+      message: "กรุณาตรวจสอบข้อมูลเทมเพลต",
+      fieldErrors: {
+        "activities.0.offsetDaysFromDelivery": "จำนวนวันต้องเป็นจำนวนเต็ม",
+        "activities.0.defaultTime": "กรุณาระบุเวลาให้ถูกต้อง",
+      },
+      values: { activities: JSON.stringify(DRAFT.activities) },
+    });
+    const user = userEvent.setup();
+    render(<TemplateForm products={PRODUCTS} initialTemplate={DRAFT} action={action} />);
+
+    expect(screen.getByText("ก่อนวันส่ง 1 วัน")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "บันทึกเทมเพลต" }));
+
+    expect(await screen.findByText("จำนวนวันต้องเป็นจำนวนเต็ม")).toBeVisible();
+    expect(screen.getByText("กรุณาระบุเวลาให้ถูกต้อง")).toBeVisible();
+  });
 });

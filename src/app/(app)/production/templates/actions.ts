@@ -20,6 +20,8 @@ export type TemplateActionState = Readonly<{
   values: Readonly<Record<string, string>>;
 }>;
 
+export type TemplateMutationActionState = Readonly<{ error: string | null }>;
+
 const INVALID_TEMPLATE_ERROR = "กรุณาตรวจสอบข้อมูลเทมเพลต";
 const INITIAL_ERROR_STATE: TemplateActionState = {
   status: "ERROR", message: INVALID_TEMPLATE_ERROR, fieldErrors: {}, values: {},
@@ -47,6 +49,7 @@ function thaiFieldErrors(issues: ReadonlyArray<{ path: ReadonlyArray<PropertyKey
     if (path.includes("estimatedDurationMinutes")) errors[path] = "ระยะเวลาต้องมากกว่า 0 นาที";
     else if (path.includes("name")) errors[path] = "กรุณากรอกชื่อให้ครบ";
     else if (path.includes("defaultTime")) errors[path] = "กรุณาระบุเวลาให้ถูกต้อง";
+    else if (path.includes("offsetDaysFromDelivery")) errors[path] = "จำนวนวันต้องเป็นจำนวนเต็ม";
     else if (path.includes("productId")) errors[path] = "กรุณาเลือกสินค้า";
     else errors[path || "template"] = "ข้อมูลกิจกรรมไม่ถูกต้อง";
   }
@@ -125,38 +128,48 @@ export async function saveProductionTemplateAction(
   redirect(`/production/templates/${templateId}`);
 }
 
-export async function duplicateProductionTemplateAction(formData: FormData): Promise<void> {
+function mutationFailure(
+  error: unknown,
+  operation: "duplicate" | "set_active",
+  ownerId: string,
+  templateId: string,
+): TemplateMutationActionState {
+  if (error instanceof TemplateStateError) {
+    return { error: error.message === "Template not found" ? "ไม่พบเทมเพลตที่ต้องการ" : "ไม่สามารถเปิดใช้เทมเพลตนี้ได้ กรุณาตรวจสอบกิจกรรมที่ใช้งาน" };
+  }
+  if (error instanceof TemplateValidationError) {
+    return { error: operation === "duplicate" ? "ทำสำเนาเทมเพลตไม่สำเร็จ กรุณาลองอีกครั้ง" : "ไม่สามารถเปิดใช้เทมเพลตนี้ได้ กรุณาตรวจสอบกิจกรรมที่ใช้งาน" };
+  }
+  unexpectedFailure(operation, ownerId, templateId);
+  return { error: operation === "duplicate" ? "ระบบทำสำเนาเทมเพลตไม่สำเร็จ กรุณาลองอีกครั้ง" : "ระบบเปลี่ยนสถานะเทมเพลตไม่สำเร็จ กรุณาลองอีกครั้ง" };
+}
+
+export async function duplicateProductionTemplateAction(formData: FormData): Promise<TemplateMutationActionState> {
   const owner = await requireOwner();
   const parsed = z.string().uuid().safeParse(formData.get("templateId"));
-  if (!parsed.success) return;
+  if (!parsed.success) return { error: "ไม่พบเทมเพลตที่ต้องการ" };
   let copyId: string;
   try {
     const copy = await createProductionTemplateService(db).duplicate(owner.id, parsed.data);
     revalidateTemplateViews();
     copyId = copy.id;
   } catch (error) {
-    if (!(error instanceof TemplateStateError || error instanceof TemplateValidationError)) {
-      unexpectedFailure("duplicate", owner.id, parsed.data);
-    }
-    return;
+    return mutationFailure(error, "duplicate", owner.id, parsed.data);
   }
   redirect(`/production/templates/${copyId}`);
 }
 
-export async function setProductionTemplateActiveAction(formData: FormData): Promise<void> {
+export async function setProductionTemplateActiveAction(formData: FormData): Promise<TemplateMutationActionState> {
   const owner = await requireOwner();
   const parsed = z.object({ templateId: z.string().uuid(), active: z.enum(["true", "false"]) }).safeParse({
     templateId: formData.get("templateId"), active: formData.get("active"),
   });
-  if (!parsed.success) return;
+  if (!parsed.success) return { error: "ไม่พบเทมเพลตที่ต้องการ" };
   try {
     await createProductionTemplateService(db).setActive(owner.id, parsed.data.templateId, parsed.data.active === "true");
     revalidateTemplateViews();
   } catch (error) {
-    if (!(error instanceof TemplateStateError || error instanceof TemplateValidationError)) {
-      unexpectedFailure("set_active", owner.id, parsed.data.templateId);
-    }
-    return;
+    return mutationFailure(error, "set_active", owner.id, parsed.data.templateId);
   }
   redirect("/production/templates");
 }

@@ -90,4 +90,32 @@ describe("production template actions", () => {
       status: "ERROR", message: "ไม่พบเทมเพลตที่ต้องการ",
     });
   });
+
+  it("returns Thai-safe duplicate and activation errors without raw service details", async () => {
+    service.duplicate.mockRejectedValueOnce(new TemplateValidationError("SELECT * FROM private_rows"));
+    const duplicateData = new FormData(); duplicateData.set("templateId", TEMPLATE_ID);
+    await expect(duplicateProductionTemplateAction(duplicateData)).resolves.toEqual({
+      error: "ทำสำเนาเทมเพลตไม่สำเร็จ กรุณาลองอีกครั้ง",
+    });
+
+    service.setActive.mockRejectedValueOnce(new TemplateStateError("An active template needs an active activity"));
+    const activeData = new FormData(); activeData.set("templateId", TEMPLATE_ID); activeData.set("active", "true");
+    const result = await setProductionTemplateActiveAction(activeData);
+    expect(result).toEqual({ error: "ไม่สามารถเปิดใช้เทมเพลตนี้ได้ กรุณาตรวจสอบกิจกรรมที่ใช้งาน" });
+    expect(JSON.stringify(result)).not.toContain("active activity");
+  });
+
+  it("maps invalid offset and start-time input to adjacent Thai field errors", async () => {
+    const data = form({
+      templateId: "",
+      activities: JSON.stringify([{ id: null, name: "ผสมแป้ง", offsetDaysFromDelivery: 1.5, defaultTime: "08:99", estimatedDurationMinutes: 30, sequence: 1, notes: null, active: true }]),
+    });
+    await expect(saveProductionTemplateAction(INITIAL, data)).resolves.toMatchObject({
+      fieldErrors: {
+        "activities.0.offsetDaysFromDelivery": "จำนวนวันต้องเป็นจำนวนเต็ม",
+        "activities.0.defaultTime": "กรุณาระบุเวลาให้ถูกต้อง",
+      },
+    });
+    expect(service.create).not.toHaveBeenCalled();
+  });
 });

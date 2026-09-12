@@ -63,4 +63,41 @@ describe("TemplateList", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(activate).toHaveBeenCalledWith(TEMPLATE_ID, true);
   });
+
+  it("moves focus into the replacement modal, traps Tab, cancels with Escape, and restores the opener focus", async () => {
+    const user = userEvent.setup();
+    render(<TemplateList view={VIEW} onSetActive={vi.fn()} onDuplicate={vi.fn()} />);
+    const opener = screen.getByRole("button", { name: "เปิดใช้เทมเพลต ฟอคคาเซียชุดใหม่" });
+
+    await user.click(opener);
+    const dialog = screen.getByRole("dialog", { name: "ยืนยันการเปลี่ยนเทมเพลตที่ใช้งาน" });
+    const cancel = screen.getByRole("button", { name: "ยกเลิก" });
+    const confirm = screen.getByRole("button", { name: "ยืนยันการเปิดใช้" });
+    expect(cancel).toHaveFocus();
+
+    await user.tab();
+    expect(confirm).toHaveFocus();
+    await user.tab();
+    expect(cancel).toHaveFocus();
+    await user.keyboard("{Shift>}{Tab}{/Shift}");
+    expect(confirm).toHaveFocus();
+
+    await user.keyboard("{Escape}");
+    expect(dialog).not.toBeInTheDocument();
+    expect(opener).toHaveFocus();
+  });
+
+  it("shows Thai-safe duplicate and activation failures without raw service details", async () => {
+    const duplicate = vi.fn().mockResolvedValue({ error: "ทำสำเนาเทมเพลตไม่สำเร็จ กรุณาลองอีกครั้ง" });
+    const activate = vi.fn().mockResolvedValue({ error: "ไม่สามารถเปิดใช้เทมเพลตนี้ได้ กรุณาตรวจสอบกิจกรรมที่ใช้งาน" });
+    const user = userEvent.setup();
+    render(<TemplateList view={{ ...VIEW, productTemplates: [VIEW.productTemplates[0]!] }} onSetActive={activate} onDuplicate={duplicate} />);
+
+    await user.click(screen.getByRole("button", { name: "ทำสำเนา" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("ทำสำเนาเทมเพลตไม่สำเร็จ กรุณาลองอีกครั้ง");
+    expect(screen.queryByText(/SELECT|secret/i)).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "เปิดใช้เทมเพลต ฟอคคาเซียชุดใหม่" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("ไม่สามารถเปิดใช้เทมเพลตนี้ได้ กรุณาตรวจสอบกิจกรรมที่ใช้งาน");
+  });
 });
