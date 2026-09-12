@@ -32,3 +32,21 @@ Implementation commit: `fefc974` — `feat: add production template screens`
 ## Concerns
 
 - None in the implementation. Full-suite execution could not complete in the current runner session; see command evidence above.
+
+## Fix round 1
+
+### RED / GREEN evidence
+
+- RED: the new focused behavior tests failed exactly as expected: no relative delivery label or offset/time error rendering; no initial modal focus; no error alert for duplicate/activation failures; and actions returned `undefined` for those failures. The action test also showed the offset issue mapped to generic text rather than its adjacent Thai-safe message.
+- GREEN: the focused Task 4 suite now passes with **4 files / 18 tests**. It covers offset/time errors next to their controls, before-delivery wording, safe mutation feedback, focus entry, Tab and Shift+Tab containment, Escape cancellation, and focus restoration.
+
+### Commands and results
+
+- `pnpm test:run src/modules/production/ui/template-form.test.tsx src/modules/production/ui/template-list.test.tsx 'src/app/(app)/production/templates/actions.test.ts' 'src/app/(app)/production/templates/page.test.tsx'` — PASS, 18 tests.
+- `pnpm test:run src/modules/production/application/template-service.test.ts src/modules/production/domain/forms.test.ts` — PASS, 30 tests.
+- `pnpm typecheck` — PASS.
+- `git diff --check` — PASS.
+
+### Commit
+
+- `c504bde` — `fix: improve production template feedback`
