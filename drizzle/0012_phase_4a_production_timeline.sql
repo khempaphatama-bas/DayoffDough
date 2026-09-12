@@ -111,6 +111,20 @@ CREATE FUNCTION enforce_cycle_task_generation_snapshot() RETURNS trigger AS $$
 DECLARE
   snapshot_row cycle_planning_snapshots%ROWTYPE;
 BEGIN
+  IF TG_OP = 'UPDATE' THEN
+    IF NEW.id IS DISTINCT FROM OLD.id
+      OR NEW.owner_id IS DISTINCT FROM OLD.owner_id
+      OR NEW.bake_cycle_id IS DISTINCT FROM OLD.bake_cycle_id
+      OR NEW.planning_snapshot_id IS DISTINCT FROM OLD.planning_snapshot_id
+      OR NEW.generation IS DISTINCT FROM OLD.generation
+      OR NEW.primary_delivery_date IS DISTINCT FROM OLD.primary_delivery_date
+      OR NEW.timezone IS DISTINCT FROM OLD.timezone
+      OR NEW.created_at IS DISTINCT FROM OLD.created_at THEN
+      RAISE EXCEPTION 'task generation is immutable';
+    END IF;
+    RETURN NEW;
+  END IF;
+
   SELECT * INTO snapshot_row
   FROM cycle_planning_snapshots
   WHERE owner_id = NEW.owner_id

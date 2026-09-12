@@ -18,6 +18,7 @@ const OTHER_PRODUCT_ID = "54000000-0000-4000-8000-000000000002";
 const LOCK_REQUEST_ID = "54000000-0000-4000-8000-000000000003";
 const MANUAL_REQUEST_ID = "54000000-0000-4000-8000-000000000004";
 const OTHER_MANUAL_REQUEST_ID = "54000000-0000-4000-8000-000000000005";
+const SECOND_LOCK_REQUEST_ID = "54000000-0000-4000-8000-000000000006";
 const NOW = new Date("2026-09-12T03:00:00.000Z");
 
 async function queryRows<T>(db: DatabaseClient, query: SQL): Promise<T[]> {
@@ -381,6 +382,59 @@ describe("Phase 4A production schema integrity", () => {
         timezone: snapshot.timezone,
       }),
     ).rejects.toThrow();
+  });
+
+  it("rejects rebinding a task generation to another matching snapshot", async () => {
+    const { generation } = await seedWritableTaskFixture(context.db);
+    const [otherCycle] = await context.db
+      .insert(bakeCycles)
+      .values({
+        ownerId: OWNER_ID,
+        name: "รอบ 20 กันยายน",
+        status: "OPEN",
+        targetProductionDate: "2026-09-19",
+        primaryDeliveryDate: "2026-09-20",
+      })
+      .returning();
+    if (!otherCycle) throw new Error("Second bake cycle insert failed");
+
+    const [otherSnapshot] = await context.db
+      .insert(cyclePlanningSnapshots)
+      .values({
+        ownerId: OWNER_ID,
+        bakeCycleId: otherCycle.id,
+        generation: 1,
+        status: "ACTIVE",
+        lockRequestId: SECOND_LOCK_REQUEST_ID,
+        inputFingerprint: "b".repeat(64),
+        cycleNumber: otherCycle.cycleNumber,
+        cycleName: otherCycle.name,
+        targetProductionDate: otherCycle.targetProductionDate,
+        primaryDeliveryDate: otherCycle.primaryDeliveryDate,
+        laborRateSatangPerHour: 6000,
+        defaultWasteAllowancePercent: "3",
+        timezone: "Asia/Bangkok",
+        currency: "THB",
+        costComplete: true,
+        lockedAt: NOW,
+      })
+      .returning();
+    if (!otherSnapshot) throw new Error("Second planning snapshot insert failed");
+
+    await expectDatabaseRejection(
+      () =>
+        context.db
+          .update(cycleTaskGenerations)
+          .set({
+            bakeCycleId: otherCycle.id,
+            planningSnapshotId: otherSnapshot.id,
+            generation: otherSnapshot.generation,
+            primaryDeliveryDate: otherSnapshot.primaryDeliveryDate,
+            timezone: otherSnapshot.timezone,
+          })
+          .where(eq(cycleTaskGenerations.id, generation.id)),
+      /task generation is immutable/i,
+    );
   });
 
   it("rejects invalid template and manual lineage shapes", async () => {
