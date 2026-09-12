@@ -124,3 +124,51 @@ The production focused suite was then rerun and passed again (2 files, 21 tests)
 ## Concerns
 
 - The full parallel Vitest suite remains environment-resource constrained for PGlite-heavy tests. The focused production suite, typecheck, drift check, and a previously failed unrelated suite all pass in isolation. No Task 2 schema or migration failure was observed.
+
+## Fix round 1: immutable task generations
+
+Reviewer finding verified: `enforce_cycle_task_generation_snapshot()` previously accepted `UPDATE` and only validated the replacement row against the replacement snapshot. An existing generation could therefore be rebound to another valid owner-scoped cycle/snapshot, carrying its dependent tasks into different immutable history.
+
+Added a migrated-behavior regression test that creates a second, fully matching active snapshot and attempts exactly that rebind. The test asserts the real database trigger rejects the update with `task generation is immutable`.
+
+### RED
+
+```sh
+/Users/aekkapom/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node node_modules/vitest/vitest.mjs run src/modules/production/db/schema.integrity.test.ts -t "rejects rebinding a task generation to another matching snapshot"
+```
+
+Output before the trigger fix:
+
+```text
+Test Files  1 failed (1)
+Tests  1 failed | 17 skipped (18)
+AssertionError: expected undefined to be an instance of Error
+```
+
+This means the direct rebind resolved instead of being rejected.
+
+### GREEN
+
+The minimal migration-only change makes every generation identity/history field immutable on update (`id`, `owner_id`, cycle/snapshot binding, generation, copied delivery date/timezone, and `created_at`) while retaining the existing insert snapshot-copy validation.
+
+```sh
+/Users/aekkapom/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node node_modules/vitest/vitest.mjs run src/modules/production/db/schema.integrity.test.ts -t "rejects rebinding a task generation to another matching snapshot"
+```
+
+```text
+Test Files  1 passed (1)
+Tests  1 passed | 17 skipped (18)
+```
+
+```sh
+/Users/aekkapom/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node node_modules/vitest/vitest.mjs run src/modules/production/db/schema.test.ts src/modules/production/db/schema.integrity.test.ts
+```
+
+```text
+Test Files  2 passed (2)
+Tests  22 passed (22)
+```
+
+`tsc --noEmit` passed, and `drizzle-kit generate --name phase_4a_task_generation_immutability_drift_check` reported `No schema changes, nothing to migrate`.
+
+Fix commit: `21a89fe fix: make task generations immutable`.
