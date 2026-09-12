@@ -27,7 +27,7 @@ The desktop shell did not expose `node` on `PATH`; all executable checks used th
 
 ## Commit
 
-`1b7b6a1` — `feat: add production template screens`
+Implementation commit: `fefc974` — `feat: add production template screens`
 
 ## Concerns
 
