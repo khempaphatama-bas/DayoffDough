@@ -17,6 +17,7 @@ describe("AppShell", () => {
       "ลูกค้า",
       "วัตถุดิบ",
       "สินค้าและสูตร",
+      "เทมเพลตการผลิต",
       "การจัดส่ง",
       "ตั้งค่าร้าน",
     ]) {
@@ -67,5 +68,18 @@ describe("AppShell", () => {
         { name: "เพิ่มเติม" },
       ),
     ).toHaveAttribute("aria-current", "page");
+  });
+
+  it("marks More active on production template routes", () => {
+    render(
+      <AppShell currentPath="/production/templates/new">
+        <div>content</div>
+      </AppShell>,
+    );
+
+    expect(screen.getByRole("link", { name: "เพิ่มเติม" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
   });
 });

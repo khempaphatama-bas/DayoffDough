@@ -24,6 +24,7 @@ const DESKTOP_ROUTES = [
   "/customers",
   "/inventory",
   "/products",
+  "/production/templates",
   "/delivery",
   "/settings",
 ] as const;
@@ -84,6 +85,12 @@ const ROUTE_META: Readonly<Record<RouteHref, AppRoute>> = {
     shortLabel: "สินค้า",
     icon: PackageOpen,
   },
+  "/production/templates": {
+    href: "/production/templates",
+    label: "เทมเพลตการผลิต",
+    shortLabel: "เทมเพลต",
+    icon: ClipboardList,
+  },
   "/delivery": {
     href: "/delivery",
     label: "การจัดส่ง",
@@ -107,6 +114,7 @@ const ROUTE_META: Readonly<Record<RouteHref, AppRoute>> = {
 const MORE_DESTINATIONS = [
   "/customers",
   "/products",
+  "/production/templates",
   "/delivery",
   "/settings",
 ] as const;

@@ -114,6 +114,12 @@ export function CycleDetail({
               </Link>
               <Link
                 className="inline-flex min-h-12 items-center justify-center rounded-xl border border-amber-800 px-6 text-lg font-bold text-amber-900"
+                href={`/cycles/${cycle.id}/production`}
+              >
+                ดู Production Timeline
+              </Link>
+              <Link
+                className="inline-flex min-h-12 items-center justify-center rounded-xl border border-amber-800 px-6 text-lg font-bold text-amber-900"
                 href={`/cycles/${cycle.id}/shopping`}
               >
                 เช็กสต๊อกและรายการซื้อ

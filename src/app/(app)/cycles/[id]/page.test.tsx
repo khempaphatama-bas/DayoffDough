@@ -217,6 +217,9 @@ describe("CycleDetail", () => {
       "href",
       `/cycles/${CYCLE.id}/planning`,
     );
+    expect(
+      screen.getByRole("link", { name: "ดู Production Timeline" }),
+    ).toHaveAttribute("href", `/cycles/${CYCLE.id}/production`);
     expect(screen.getByRole("link", { name: "ดูแผนการผลิต" })).toHaveClass(
       "min-h-12",
     );

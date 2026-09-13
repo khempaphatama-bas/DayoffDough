@@ -95,6 +95,7 @@ describe("planning actions", () => {
       ["/cycles"],
       [`/cycles/${CYCLE_ID}`],
       [`/cycles/${CYCLE_ID}/planning`],
+      [`/cycles/${CYCLE_ID}/production`],
       ["/orders"],
       ["/dashboard"],
     ]);
@@ -272,6 +273,7 @@ describe("planning actions", () => {
       ["/cycles"],
       [`/cycles/${CYCLE_ID}`],
       [`/cycles/${CYCLE_ID}/planning`],
+      [`/cycles/${CYCLE_ID}/production`],
       ["/orders"],
       ["/dashboard"],
     ]);

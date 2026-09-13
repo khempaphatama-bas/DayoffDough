@@ -75,6 +75,7 @@ function revalidatePlanningViews(cycleId: string): void {
     "/cycles",
     `/cycles/${cycleId}`,
     `/cycles/${cycleId}/planning`,
+    `/cycles/${cycleId}/production`,
     "/orders",
     "/dashboard",
   ]) {

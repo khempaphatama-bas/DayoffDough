@@ -192,6 +192,9 @@ describe("PlanningGenerationView", () => {
     expect(
       screen.getByRole("link", { name: "เช็กสต๊อกและรายการซื้อ" }),
     ).toHaveAttribute("href", `/cycles/${CYCLE_ID}/shopping`);
+    expect(
+      screen.getByRole("link", { name: "เปิด Production Timeline" }),
+    ).toHaveAttribute("href", `/cycles/${CYCLE_ID}/production`);
 
     expect(screen.getByRole("link", { name: /รุ่น 2.*ใช้งานอยู่/ })).toHaveAttribute(
       "href",
@@ -229,6 +232,12 @@ describe("PlanningGenerationView", () => {
     expect(
       screen.queryByRole("link", { name: "เช็กสต๊อกและรายการซื้อ" }),
     ).toBeNull();
+    expect(
+      screen.getByRole("link", { name: "เปิด Production Timeline รุ่น 1" }),
+    ).toHaveAttribute(
+      "href",
+      `/cycles/${CYCLE_ID}/production?generation=1`,
+    );
   });
 
   it("shows complete totals and derives costs only from positive denominators", () => {

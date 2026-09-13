@@ -100,6 +100,18 @@ export function PlanningGenerationView({
             ? "เช็กสต๊อกและรายการซื้อ"
             : "ดูประวัติเช็กสต๊อกและรายการซื้อ"}
         </Link>
+        <Link
+          className="inline-flex min-h-12 w-fit items-center justify-center rounded-xl border border-amber-800 px-5 font-bold text-amber-900"
+          href={
+            generation.status === "ACTIVE"
+              ? `/cycles/${cycleId}/production`
+              : `/cycles/${cycleId}/production?generation=${generation.generation}`
+          }
+        >
+          {generation.status === "ACTIVE"
+            ? "เปิด Production Timeline"
+            : `เปิด Production Timeline รุ่น ${generation.generation}`}
+        </Link>
       </section>
 
       <nav

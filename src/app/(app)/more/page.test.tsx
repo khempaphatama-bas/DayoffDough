@@ -9,6 +9,7 @@ describe("MorePage", () => {
     const destinations = [
       ["ลูกค้า", "/customers"],
       ["สินค้าและสูตร", "/products"],
+      ["เทมเพลตการผลิต", "/production/templates"],
       ["การจัดส่ง", "/delivery"],
       ["ตั้งค่าร้าน", "/settings"],
     ] as const;
@@ -17,5 +18,13 @@ describe("MorePage", () => {
       expect(link).toHaveAttribute("href", href);
       expect(link).toHaveClass("min-h-11");
     }
+  });
+
+  it("describes production templates by their planning purpose", () => {
+    render(<MorePage />);
+
+    expect(
+      screen.getByRole("link", { name: "เทมเพลตการผลิต" }),
+    ).toHaveTextContent("กำหนดขั้นตอนและเวลาเทียบกับวันส่ง");
   });
 });

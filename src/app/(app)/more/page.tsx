@@ -12,6 +12,11 @@ const MORE_DESTINATIONS = [
     description: "ราคาขาย สูตร และบรรจุภัณฑ์",
   },
   {
+    href: "/production/templates",
+    label: "เทมเพลตการผลิต",
+    description: "กำหนดขั้นตอนและเวลาเทียบกับวันส่ง",
+  },
+  {
     href: "/delivery",
     label: "การจัดส่ง",
     description: "วิธีส่ง ค่าบริการ และต้นทุน",
