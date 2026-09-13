@@ -1,6 +1,6 @@
 "use client";
 
-import { startTransition, useActionState, useEffect, useState, type FormEvent } from "react";
+import { startTransition, useActionState, useEffect, useRef, useState, type FormEvent } from "react";
 import {
   createManualCycleTaskAction,
   type ProductionActionState,
@@ -60,9 +60,13 @@ export function bangkokLocalToIso(value: string): string | null {
   const hour = Number(hourText);
   const minute = Number(minuteText);
   if (year < 1 || year > 9999 || month < 1 || month > 12 || hour > 23 || minute > 59) return null;
-  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const monthEnd = new Date(0);
+  monthEnd.setUTCFullYear(year, month, 0);
+  const daysInMonth = monthEnd.getUTCDate();
   if (day < 1 || day > daysInMonth) return null;
-  const instant = new Date(Date.UTC(year, month - 1, day, hour, minute));
+  const instant = new Date(0);
+  instant.setUTCFullYear(year, month - 1, day);
+  instant.setUTCHours(hour, minute, 0, 0);
   instant.setUTCHours(instant.getUTCHours() - 7);
   return instant.toISOString();
 }
@@ -98,12 +102,15 @@ export function CycleTaskForm({
   );
   const [creationRequestId, setCreationRequestId] = useState(uuid);
   const [status, setStatus] = useState(task?.status ?? "PENDING");
+  const lastSuccessState = useRef<ProductionActionState | null>(null);
 
   useEffect(() => {
     if (mode !== "create" || !state.saved) return;
+    if (lastSuccessState.current === state) return;
+    lastSuccessState.current = state;
     const timer = window.setTimeout(() => setCreationRequestId(uuid()), 0);
     return () => window.clearTimeout(timer);
-  }, [mode, state.saved]);
+  }, [mode, state]);
 
   const values = state.values;
   const scheduledAt = values.scheduledAt ? formatBangkokDateTime(new Date(values.scheduledAt)) : formatBangkokDateTime(task?.scheduledAt);
@@ -119,6 +126,11 @@ export function CycleTaskForm({
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const formData = new FormData(event.currentTarget);
+    if (mode === "create" && state.saved) {
+      const freshRequestId = uuid();
+      setCreationRequestId(freshRequestId);
+      formData.set("creationRequestId", freshRequestId);
+    }
     const local = String(formData.get("scheduledAt") ?? "");
     const utc = bangkokLocalToIso(local);
     if (utc) formData.set("scheduledAt", utc);

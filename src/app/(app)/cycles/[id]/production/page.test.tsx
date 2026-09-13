@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CycleProductionView } from "@/modules/production/domain/types";
 
@@ -52,8 +52,8 @@ describe("ProductionPage", () => {
     for (const cycleStatus of ["LOCKED", "IN_PRODUCTION"] as const) {
       mocks.get.mockResolvedValueOnce({ ...VIEW, cycle: { ...VIEW.cycle, cycleStatus }, generation: { ...VIEW.generation, planningStatus: "ACTIVE" } });
       const result = await ProductionPage({ params: Promise.resolve({ id: CYCLE_ID }) });
-      render(result);
-      expect(screen.getAllByText("ปลดล็อกเพื่อสร้างรุ่นใหม่ได้จากหน้าแผนการผลิต").length).toBeGreaterThan(0);
+      const { container } = render(result);
+      expect(within(container).getByText("ปลดล็อกเพื่อสร้างรุ่นใหม่ได้จากหน้าแผนการผลิต")).toBeInTheDocument();
     }
   });
 });

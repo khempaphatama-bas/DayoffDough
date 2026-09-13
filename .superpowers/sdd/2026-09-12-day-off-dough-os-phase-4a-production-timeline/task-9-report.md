@@ -53,3 +53,23 @@ Added regression tests for each review finding. The focused suite failed with fo
 - Show visible quick-status and delete failure alerts.
 - Render primary delivery date in the generated timeline header.
 - Show unlock/re-lock guidance for both `LOCKED` and `IN_PRODUCTION` generated views.
+
+## Fix round 2
+
+### RED evidence
+
+Added a user-flow regression that dispatches a failed manual creation, then two successful distinct intents. The focused run failed because the second successful intent reused the prior request ID. Added accepted-year round-trip cases; `0001` was observed as `1901` due to `Date.UTC` remapping. The malformed-schedule regression now dispatches the failing action and asserts visible error feedback; lifecycle guidance assertions are container-scoped.
+
+### GREEN evidence
+
+- Focused Task 9 suite: `25 passed`.
+- Task 7–8 regressions: `35 passed`.
+- `pnpm typecheck`: passed.
+- Changed-file ESLint: passed with warnings only (unused parameters in test doubles); no errors.
+- `git diff --check`: passed.
+
+### Fixes
+
+- Rotate the manual request ID for every new successful action-state object, with submit-time freshness fallback so consecutive successes cannot reuse an ID.
+- Construct years 0001–0099 using `setUTCFullYear` rather than `Date.UTC`'s 1900 offset behavior.
+- Strengthened malformed schedule and lifecycle guidance tests to exercise/observe the actual rendered flow.

@@ -15,8 +15,18 @@ describe("CycleTaskForm", () => {
     expect(bangkokLocalToIso(value)).toBeNull();
   });
 
-  it("retains an invalid submitted schedule as an error instead of throwing while rendering", () => {
-    expect(() => render(<CycleTaskForm mode="create" cycleId={cycleId} taskGenerationId={generationId} products={[]} action={async () => ({ error: "invalid", fieldErrors: { scheduledAt: "invalid" }, values: { scheduledAt: "not-a-date" }, saved: false })} />)).not.toThrow();
+  it("converts accepted years 0001 through 0099 without JavaScript year remapping", () => {
+    expect(bangkokLocalToIso("0001-01-01T10:00")).toBe("0001-01-01T03:00:00.000Z");
+    expect(bangkokLocalToIso("0099-12-31T23:59")).toBe("0099-12-31T16:59:00.000Z");
+  });
+
+  it("retains an invalid submitted schedule after dispatch as an error instead of throwing while rendering", async () => {
+    const user = userEvent.setup();
+    const action = vi.fn(async () => ({ error: "invalid", fieldErrors: { scheduledAt: "invalid" }, values: { scheduledAt: "not-a-date" }, saved: false }));
+    render(<CycleTaskForm mode="edit" cycleId={cycleId} taskGenerationId={generationId} products={[]} action={action} task={{ id: "72000000-0000-4000-8000-000000000003", taskGenerationId: generationId, origin: "TEMPLATE", sourceTemplateName: "หลัก", sourceActivityName: "อบ", title: "อบ", productId: null, productName: null, batchCount: null, scheduledAt: new Date("2026-09-10T17:30:00.000Z"), estimatedDurationMinutes: 45, notes: null, sequence: 1, status: "PENDING", skipReason: null }} />);
+    await user.click(screen.getByRole("button", { name: "บันทึกงาน" }));
+    expect(action).toHaveBeenCalledTimes(1);
+    expect(await screen.findByRole("alert")).toHaveTextContent("invalid");
   });
 
   it("renders product, batch, duration, and sequence errors next to their fields", async () => {
@@ -62,5 +72,30 @@ describe("CycleTaskForm", () => {
     expect(screen.getByTestId("creation-request-id")).toHaveValue(requestId);
     await user.click(screen.getByRole("button", { name: "สร้างงาน" }));
     await waitFor(() => expect(screen.getByTestId("creation-request-id")).not.toHaveValue(requestId));
+  });
+
+  it("uses a fresh request ID for every successful manual intent after a validation failure", async () => {
+    const user = userEvent.setup();
+    const requestIds: string[] = [];
+    const action = vi.fn().mockImplementation(async (_previous: unknown, data: FormData) => {
+      requestIds.push(String(data.get("creationRequestId")));
+      const saved = requestIds.length > 1;
+      return { error: saved ? null : "กรุณาตรวจสอบข้อมูลงาน", fieldErrors: saved ? {} : { title: "ไม่ถูกต้อง" }, values: Object.fromEntries(data.entries()) as Record<string, string>, saved };
+    });
+    render(<CycleTaskForm mode="create" cycleId={cycleId} taskGenerationId={generationId} products={[]} action={action} />);
+    await user.type(screen.getByLabelText("ชื่องาน"), "งานแรก");
+    await user.type(screen.getByLabelText("ระยะเวลา (นาที)"), "30");
+    fireEvent.change(screen.getByLabelText("เวลาที่กำหนด"), { target: { value: "2026-09-11T10:00" } });
+    await user.click(screen.getByRole("button", { name: "สร้างงาน" }));
+    await user.click(screen.getByRole("button", { name: "สร้างงาน" }));
+    await waitFor(() => expect(requestIds).toHaveLength(2));
+    const secondRequestId = requestIds[1];
+    expect(secondRequestId).toBe(requestIds[0]);
+    await user.clear(screen.getByLabelText("ชื่องาน"));
+    await user.type(screen.getByLabelText("ชื่องาน"), "งานสอง");
+    await user.click(screen.getByRole("button", { name: "สร้างงาน" }));
+    await waitFor(() => expect(requestIds).toHaveLength(3));
+    expect(requestIds[2]).not.toBe(secondRequestId);
+    expect(new Set(requestIds).size).toBe(2);
   });
 });
