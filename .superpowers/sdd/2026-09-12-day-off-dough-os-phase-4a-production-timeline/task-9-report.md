@@ -73,3 +73,20 @@ Added a user-flow regression that dispatches a failed manual creation, then two 
 - Rotate the manual request ID for every new successful action-state object, with submit-time freshness fallback so consecutive successes cannot reuse an ID.
 - Construct years 0001–0099 using `setUTCFullYear` rather than `Date.UTC`'s 1900 offset behavior.
 - Strengthened malformed schedule and lifecycle guidance tests to exercise/observe the actual rendered flow.
+
+## Fix round 3
+
+### RED evidence
+
+Added direct formatter round-trip tests for accepted years 0001 and 0099 and a retained historical `datetime-local` form-value test. The focused RED run reproduced the formatter defect: `1-01-01T09:42` instead of `0001-01-01T10:00`, and an empty retained input.
+
+### GREEN evidence
+
+- Focused Task 9 + Task 7–8 regression suite: `62 passed` across six files.
+- `pnpm typecheck`: passed.
+- Changed-file ESLint: passed with warnings only (unused parameters in test doubles); no errors.
+- `git diff --check`: passed.
+
+### Fix
+
+Replaced historical Intl timezone formatting with deterministic fixed UTC+07:00 wall-clock arithmetic, preserving supported datetime-local components and zero-padding four-digit years while retaining safe invalid-input fallback behavior.

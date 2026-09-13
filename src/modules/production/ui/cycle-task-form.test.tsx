@@ -5,7 +5,7 @@ vi.mock("@/app/(app)/cycles/[id]/production/actions", () => ({
   createManualCycleTaskAction: vi.fn(async (_previous: unknown, _data: FormData) => ({ error: null, fieldErrors: {}, values: {}, saved: true })),
   updateCycleTaskAction: vi.fn(async (_previous: unknown, _data: FormData) => ({ error: null, fieldErrors: {}, values: {}, saved: true })),
 }));
-import { bangkokLocalToIso, CycleTaskForm } from "./cycle-task-form";
+import { bangkokLocalToIso, CycleTaskForm, formatBangkokDateTime } from "./cycle-task-form";
 
 const cycleId = "72000000-0000-4000-8000-000000000001";
 const generationId = "72000000-0000-4000-8000-000000000002";
@@ -18,6 +18,16 @@ describe("CycleTaskForm", () => {
   it("converts accepted years 0001 through 0099 without JavaScript year remapping", () => {
     expect(bangkokLocalToIso("0001-01-01T10:00")).toBe("0001-01-01T03:00:00.000Z");
     expect(bangkokLocalToIso("0099-12-31T23:59")).toBe("0099-12-31T16:59:00.000Z");
+  });
+
+  it("formats accepted historical years with a deterministic Bangkok wall-clock round trip", () => {
+    expect(formatBangkokDateTime(new Date("0001-01-01T03:00:00.000Z"))).toBe("0001-01-01T10:00");
+    expect(formatBangkokDateTime(new Date("0099-12-31T16:59:00.000Z"))).toBe("0099-12-31T23:59");
+  });
+
+  it("retains a historical datetime-local value in the edit form", () => {
+    render(<CycleTaskForm mode="edit" cycleId={cycleId} taskGenerationId={generationId} products={[]} task={{ id: "72000000-0000-4000-8000-000000000003", taskGenerationId: generationId, origin: "TEMPLATE", sourceTemplateName: "หลัก", sourceActivityName: "อบ", title: "อบ", productId: null, productName: null, batchCount: null, scheduledAt: new Date("0001-01-01T03:00:00.000Z"), estimatedDurationMinutes: 45, notes: null, sequence: 1, status: "PENDING", skipReason: null }} />);
+    expect(screen.getByLabelText("เวลาที่กำหนด")).toHaveValue("0001-01-01T10:00");
   });
 
   it("retains an invalid submitted schedule after dispatch as an error instead of throwing while rendering", async () => {

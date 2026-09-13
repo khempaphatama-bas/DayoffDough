@@ -34,19 +34,9 @@ function uuid(): string {
 export function formatBangkokDateTime(value: Date | null | undefined): string {
   if (!value) return "";
   if (Number.isNaN(value.getTime())) return "";
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Bangkok",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(value).reduce<Record<string, string>>((acc, part) => {
-    acc[part.type] = part.value;
-    return acc;
-  }, {});
-  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
+  const bangkokWallClock = new Date(value.getTime() + 7 * 60 * 60 * 1000);
+  const pad = (part: number, width: number) => String(part).padStart(width, "0");
+  return `${pad(bangkokWallClock.getUTCFullYear(), 4)}-${pad(bangkokWallClock.getUTCMonth() + 1, 2)}-${pad(bangkokWallClock.getUTCDate(), 2)}T${pad(bangkokWallClock.getUTCHours(), 2)}:${pad(bangkokWallClock.getUTCMinutes(), 2)}`;
 }
 
 /** Convert a Bangkok wall-clock value to the canonical UTC instant expected by Task 8. */
