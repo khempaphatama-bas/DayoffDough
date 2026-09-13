@@ -52,9 +52,9 @@ The E2E runs used loopback placeholder endpoints and credentials only; this prov
 ## Commits and status
 
 - `1578ce2 fix: avoid synchronous template form state updates` — release-blocking lint fix.
-- Release slice commit: recorded after staging this report and the Task 11 fixture/E2E/docs changes.
+- `5b88762 test: verify phase 4a production timeline` — Task 11 fixture, E2E, setup, docs, regression fixture, and release report.
 
-Worktree verification was clean except the intended Task 11 files before commit. Final status and release commit hash are recorded in the follow-up report commit/history. Overall status: implementation and local unit/build verification complete; authenticated E2E remains blocked by the absent Supabase Auth/database service and credentials.
+Worktree verification after `5b88762` is clean. Overall status: implementation and local unit/build verification complete; authenticated E2E remains blocked by the absent Supabase Auth/database service and credentials.
 
 ## Concerns
 
