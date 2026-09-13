@@ -17,6 +17,10 @@ import { orderItems } from "@/modules/orders/db/schema";
 import { createPlanningCommandService } from "@/modules/planning/application/planning-commands";
 import { createPlanningQueryService } from "@/modules/planning/application/planning-queries";
 import {
+  productionTemplateActivities,
+  productionTemplates,
+} from "@/modules/production/db/schema";
+import {
   products,
   recipeIngredients,
   recipes,
@@ -35,6 +39,8 @@ const SECOND_PRODUCT = {
   orderItemId: "53000000-0000-4000-8000-000000000007",
 } as const;
 const OTHER_ITEM_ID = "53000000-0000-4000-8000-000000000008";
+const SECOND_TEMPLATE_ID = "53000000-0000-4000-8000-000000000009";
+const SECOND_ACTIVITY_ID = "53000000-0000-4000-8000-00000000000a";
 
 type LoggedQuery = Readonly<{
   sql: string;
@@ -90,6 +96,25 @@ async function seedPlanWithRepeatedFlour(
     quantity: 3,
     unitPriceSatang: 8_000,
     position: 1,
+  });
+  await db.insert(productionTemplates).values({
+    id: SECOND_TEMPLATE_ID,
+    ownerId: OWNER_ID,
+    name: "เทมเพลตขนมปังนม",
+    scope: "PRODUCT",
+    productId: SECOND_PRODUCT.productId,
+    active: true,
+  });
+  await db.insert(productionTemplateActivities).values({
+    id: SECOND_ACTIVITY_ID,
+    ownerId: OWNER_ID,
+    productionTemplateId: SECOND_TEMPLATE_ID,
+    name: "เตรียมขนมปังนม",
+    offsetDaysFromDelivery: -1,
+    defaultTime: "05:00",
+    estimatedDurationMinutes: 30,
+    sequence: 1,
+    active: true,
   });
 
   const clock = { now: () => new Date(LOCKED_AT) };

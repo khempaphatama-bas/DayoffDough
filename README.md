@@ -25,16 +25,25 @@
 - บันทึกการซื้อได้หลายครั้งทั้งแบบซื้อบางส่วน ซื้อครบ และซื้อเกิน โดยยอดที่ซื้อทั้งหมดเข้าสมุดสต๊อก
 - เก็บ PURCHASE movement และราคาซื้อจริงแต่ละครั้งไว้ในประวัติราคา
 - ประวัติการนับสต๊อกและการซื้อของแต่ละ generation ยังคงอ่านได้หลังปลดล็อกและ re-lock
+- Production Template ระดับรอบและระดับสินค้า พร้อมกิจกรรมที่กำหนดวัน–เวลาย้อนจากวันส่ง
+- Production Timeline ของแต่ละ generation พร้อมแก้ไขงาน สถานะ และงานที่เพิ่มเอง
 - Readiness dashboard และ responsive navigation สำหรับมือถือ/เดสก์ท็อป
 
 ออเดอร์ที่ยกเลิกจะยังอยู่ในประวัติ แต่ไม่ถูกนับในยอดของรอบหรือความต้องการผลิต
 
 เส้นทางหลักของรอบคือ `DRAFT → OPEN → LOCKED → IN_PRODUCTION → COMPLETED` โดยสั่ง lock พร้อมสร้าง snapshot ได้เฉพาะรอบ `OPEN` เท่านั้น การปลดล็อกทำได้จาก `LOCKED` หรือ `IN_PRODUCTION` และจะคืนรอบเป็น `OPEN` เพื่อวางแผนใหม่ ส่วน `COMPLETED` และ `CANCELLED` เป็นสถานะปลายทางและปลดล็อกไม่ได้ (`DRAFT`, `OPEN`, `LOCKED` และ `IN_PRODUCTION` ยังเลือกยกเลิกรอบได้ตาม transition ที่ระบบอนุญาต)
 
+## Production Templates และ Timeline
+
+จัดการ Template ที่ `/production/templates` และเปิดดูงานของรอบที่ `/cycles/:id/production` ได้ทั้งบนเดสก์ท็อปและมือถือ Template มี scope ระดับทั้งรอบหรือระดับสินค้า และใช้ active/archive semantics เพื่อรักษาประวัติเดิม
+
+ก่อน lock รอบ สินค้าทุกตัวในแผนต้องมี Product Template ที่เปิดใช้งานและมี active activity อย่างน้อยหนึ่งรายการ ส่วน Cycle Template เป็นตัวเลือก เมื่อ lock สำเร็จระบบจะสร้าง Planning Snapshot และ Cycle Task Generation พร้อมกันใน transaction เดียวกัน งานแต่ละรายการจะเก็บชื่อและข้อมูลต้นทาง รวมถึงวัน–เวลาและจำนวน batch ที่ snapshot ไว้
+
+การปลดล็อกจะทำให้ generation เดิมเป็นประวัติอ่านอย่างเดียว การ re-lock จะสร้าง generation ใหม่จาก Template และแผนล่าสุดโดยไม่คัดลอกการแก้ไขหรืองาน manual จากรุ่นเดิม งาน generated แก้ไขได้เฉพาะ current generation ขณะรอบเป็น `LOCKED` หรือ `IN_PRODUCTION`; งาน manual สถานะ `PENDING` เท่านั้นที่ลบได้แบบ soft delete และ `SKIPPED` ต้องมีเหตุผล
+
 ## สิ่งที่ยังอยู่ใน Phase ถัดไป
 
 - การหักสต๊อกจากการใช้จริงระหว่างผลิต รวมถึง movement จากการใช้ ปรับยอด หรือสูญเสีย
-- production tasks และ timeline รายวัน
 - final cost หลังผลิตจริง และรายงานกำไร
 
 ## Runtime
@@ -98,6 +107,14 @@ Phase 3B ใช้ migration `0011_phase_3b_inventory_shopping` โดยเพ�
 - `cycle_shopping_items` — จำนวนที่ขาด จำนวนแพ็กแนะนำ และราคาประมาณ ณ ตอนยืนยันสต๊อก
 - `cycle_purchase_entries` — การซื้อแต่ละครั้ง ปริมาณรวม ราคาจริง ร้านค้า และการอ้างอิง PURCHASE movement/ประวัติราคา
 
+Phase 4A ใช้ migration `0012_phase_4a_production_timeline` โดยเพิ่มตาราง Production Template, Activity, Task Generation และ Cycle Task พร้อม RLS, owner-scoped foreign keys, immutable generation guards และ lifecycle checks
+
+เมื่อตั้งค่า Supabase แล้ว ให้ใช้ migrations ทั้งหมดตามลำดับด้วยคำสั่งนี้ (รวม migration `0012`):
+
+```bash
+pnpm db:migrate
+```
+
 ตารางทุกชุดเปิด Row Level Security และไม่มี anonymous Data API policy แอปตรวจ `owner_id` ซ้ำใน application service และ Server Action ทุก mutation
 
 ## พัฒนา
@@ -116,6 +133,7 @@ pnpm lint
 pnpm typecheck
 pnpm test:run
 pnpm build
+pnpm test:e2e
 ```
 
 Playwright รองรับสองโหมด:

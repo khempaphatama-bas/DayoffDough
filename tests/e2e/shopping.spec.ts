@@ -9,6 +9,7 @@ import {
   createOrder,
   createPackagingRule,
   createProduct,
+  createProductionTemplate,
   createRecipeVersion,
   loginAsOwner,
   recordCyclePurchase,
@@ -122,6 +123,18 @@ test("owner counts stock, records over-purchase, and keeps generation history", 
     laborMinutes: "30",
     utilityCostBaht: "20",
     wastePercent: "10",
+  });
+  await createProductionTemplate(page, {
+    name: `Production ${productName}`,
+    scope: "PRODUCT",
+    productName,
+    activities: [{
+      name: "เตรียมและอบ",
+      offsetDaysFromDelivery: "-1",
+      defaultTime: "05:00",
+      estimatedDurationMinutes: "60",
+    }],
+    activate: true,
   });
   await createDeliveryMethod(page, {
     name: deliveryMethodName,

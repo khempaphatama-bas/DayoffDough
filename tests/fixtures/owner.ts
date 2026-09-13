@@ -37,7 +37,7 @@ async function tryClickVisibleLink(page: Page, name: string): Promise<boolean> {
 async function clickVisibleLink(page: Page, name: string): Promise<void> {
   if (await tryClickVisibleLink(page, name)) return;
 
-  if (["ลูกค้า", "สินค้าและสูตร", "การจัดส่ง", "ตั้งค่าร้าน"].includes(name)) {
+  if (["ลูกค้า", "สินค้าและสูตร", "การจัดส่ง", "ตั้งค่าร้าน", "เทมเพลตการผลิต"].includes(name)) {
     if (!(await tryClickVisibleLink(page, "เพิ่มเติม"))) {
       throw new Error(`Visible link not found: เพิ่มเติม`);
     }
@@ -62,6 +62,84 @@ async function selectOptionContaining(
   const label = (await option.textContent())?.trim();
   if (!label) throw new Error(`Visible option not found: ${visibleName}`);
   await select.selectOption({ label });
+}
+
+export async function createProductionTemplate(
+  page: Page,
+  input: Readonly<{
+    name: string;
+    scope: "CYCLE" | "PRODUCT";
+    productName?: string;
+    activities: ReadonlyArray<Readonly<{
+      name: string;
+      offsetDaysFromDelivery: string;
+      defaultTime: string;
+      estimatedDurationMinutes: string;
+    }>>;
+    activate: boolean;
+  }>,
+): Promise<void> {
+  if (input.activities.length === 0) {
+    throw new Error("Production templates need at least one activity");
+  }
+  await page.goto("/production/templates/new");
+  await expect(
+    page.getByRole("heading", { name: "สร้างเทมเพลตการผลิต", exact: true }),
+  ).toBeVisible({ timeout: SERVER_ACTION_TIMEOUT });
+  await page.getByLabel("ชื่อเทมเพลต").fill(input.name);
+  await page.getByLabel("ใช้กับ").selectOption(input.scope);
+  if (input.scope === "PRODUCT") {
+    if (!input.productName) throw new Error("Product templates need a product name");
+    await selectOptionContaining(page.getByLabel("สินค้า"), input.productName);
+  }
+
+  for (let index = 0; index < input.activities.length; index += 1) {
+    if (index > 0) {
+      await page.getByRole("button", { name: "เพิ่มกิจกรรม", exact: true }).click();
+    }
+    const activity = input.activities[index]!;
+    const activityForm = page.getByRole("article").nth(index);
+    await activityForm.getByLabel(`ชื่อกิจกรรม ${index + 1}`, { exact: true }).fill(
+      activity.name,
+    );
+    await activityForm
+      .getByRole("spinbutton", { name: /^ก่อนวันส่ง \(วัน\)/ })
+      .fill(activity.offsetDaysFromDelivery);
+    await activityForm.getByLabel("เวลาเริ่ม", { exact: true }).fill(
+      activity.defaultTime,
+    );
+    await activityForm
+      .getByLabel(`ระยะเวลา (นาที) ${index + 1}`, { exact: true })
+      .fill(activity.estimatedDurationMinutes);
+  }
+  await page.getByRole("button", { name: "บันทึกเทมเพลต", exact: true }).click();
+  await expect(page).toHaveURL(/\/production\/templates\/[0-9a-f-]+$/, {
+    timeout: SERVER_ACTION_TIMEOUT,
+  });
+  await expect(page.getByRole("heading", { name: input.name, exact: true })).toBeVisible();
+
+  if (!input.activate) return;
+  await page.goto("/production/templates");
+  const template = page.getByRole("article").filter({ hasText: input.name });
+  const activateButton = template.getByRole("button", {
+    name: `เปิดใช้เทมเพลต ${input.name}`,
+    exact: true,
+  });
+  const activationResponse = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      new URL(response.url()).pathname === "/production/templates",
+    { timeout: SERVER_ACTION_TIMEOUT },
+  );
+  await activateButton.click();
+  const response = await activationResponse;
+  expect(response.ok()).toBe(true);
+  await expect(page).toHaveURL(/\/production\/templates$/, {
+    timeout: SERVER_ACTION_TIMEOUT,
+  });
+  await expect(
+    page.getByRole("article").filter({ hasText: input.name }),
+  ).toContainText("กำลังใช้งาน", { timeout: SERVER_ACTION_TIMEOUT });
 }
 
 export async function loginAsOwner(page: Page): Promise<void> {

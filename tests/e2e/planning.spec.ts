@@ -9,6 +9,7 @@ import {
   createOrder,
   createPackagingRule,
   createProduct,
+  createProductionTemplate,
   createRecipeVersion,
   loginAsOwner,
 } from "../fixtures/owner";
@@ -63,6 +64,18 @@ test("owner locks, unlocks, and re-locks immutable planning generations", async 
     wastePercent: "10",
   };
   await createRecipeVersion(page, productName, recipeInput);
+  await createProductionTemplate(page, {
+    name: `Production ${productName}`,
+    scope: "PRODUCT",
+    productName,
+    activities: [{
+      name: "เตรียมและอบ",
+      offsetDaysFromDelivery: "-1",
+      defaultTime: "05:00",
+      estimatedDurationMinutes: "60",
+    }],
+    activate: true,
+  });
 
   await createDeliveryMethod(page, {
     name: deliveryMethodName,
