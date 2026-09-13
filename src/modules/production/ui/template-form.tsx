@@ -44,13 +44,16 @@ export function TemplateForm({
 
   useEffect(() => {
     if (state.status !== "ERROR" || Object.keys(state.values).length === 0) return;
-    if (state.values.name !== undefined) setName(state.values.name);
-    if (state.values.scope === "CYCLE" || state.values.scope === "PRODUCT") setScope(state.values.scope);
-    if (state.values.productId !== undefined) setProductId(state.values.productId);
-    try {
-      const saved = JSON.parse(state.values.activities ?? "") as ProductionTemplateActivityInput[];
-      if (Array.isArray(saved)) setActivities(normalise(saved.map((activity, index) => activityFrom(activity, activity.id ?? activities[index]?.clientKey ?? `activity-${index}`))));
-    } catch { /* keep the values the owner was already editing */ }
+    const timer = window.setTimeout(() => {
+      if (state.values.name !== undefined) setName(state.values.name);
+      if (state.values.scope === "CYCLE" || state.values.scope === "PRODUCT") setScope(state.values.scope);
+      if (state.values.productId !== undefined) setProductId(state.values.productId);
+      try {
+        const saved = JSON.parse(state.values.activities ?? "") as ProductionTemplateActivityInput[];
+        if (Array.isArray(saved)) setActivities((current) => normalise(saved.map((activity, index) => activityFrom(activity, activity.id ?? current[index]?.clientKey ?? `activity-${index}`))));
+      } catch { /* keep the values the owner was already editing */ }
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [state]);
 
   function updateActivity(index: number, values: Partial<ProductionTemplateActivityInput>) {
