@@ -90,7 +90,10 @@ export async function createProductionTemplate(
   await page.getByLabel("ใช้กับ").selectOption(input.scope);
   if (input.scope === "PRODUCT") {
     if (!input.productName) throw new Error("Product templates need a product name");
-    await selectOptionContaining(page.getByLabel("สินค้า"), input.productName);
+    await selectOptionContaining(
+      page.getByLabel("สินค้า", { exact: true }),
+      input.productName,
+    );
   }
 
   for (let index = 0; index < input.activities.length; index += 1) {

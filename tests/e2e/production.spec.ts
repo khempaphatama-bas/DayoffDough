@@ -44,11 +44,13 @@ test("owner runs the complete production timeline lifecycle", async ({ page }, t
   const flourName = `แป้งผลิต ${runId}`;
   const boxName = `กล่องผลิต ${runId}`;
   const productName = `ขนมผลิต ${runId}`;
+  const alternateProductName = `ขนมสำรอง ${runId}`;
   const deliveryMethodName = `จัดส่งผลิต ${runId}`;
   const customerName = `ลูกค้าผลิต ${runId}`;
   const cycleName = `รอบผลิตไทม์ไลน์ ${runId}`;
   const editedTitle = `อบแก้ไขแล้ว ${runId}`;
-  const manualTitle = `งานเพิ่มเอง ${runId}`;
+  const retainedManualTitle = `งานคงไว้รุ่นเก่า ${runId}`;
+  const deletedManualTitle = `งานลบทิ้ง ${runId}`;
 
   await loginAsOwner(page);
   await configureShopSettings(page);
@@ -68,6 +70,10 @@ test("owner runs the complete production timeline lifecycle", async ({ page }, t
   });
   await addInventoryPrice(page, boxName, { packPriceBaht: "50" });
   await createProduct(page, { name: productName, sellingPriceBaht: "220" });
+  await createProduct(page, {
+    name: alternateProductName,
+    sellingPriceBaht: "180",
+  });
   await createRecipeVersion(page, productName, {
     versionCode: `v1-${runId}`,
     yieldQuantity: "6",
@@ -152,13 +158,18 @@ test("owner runs the complete production timeline lifecycle", async ({ page }, t
   await expect(page.getByRole("heading", { name: "Production Timeline" })).toBeVisible();
   await expect(page.getByRole("main")).toContainText(`เตรียมแป้ง ${runId}`);
   await expect(page.getByRole("main")).toContainText(`อบขนม ${runId}`);
+  await expect(
+    page.getByRole("article", { name: new RegExp(`ตรวจรอบ ${runId}`) }),
+  ).toContainText("งานระดับรอบ");
   await expect(page.getByRole("main")).toContainText("2 แบตช์");
 
   const generatedTask = page.getByRole("article", { name: new RegExp(`เตรียมแป้ง ${runId}`) });
   await generatedTask.getByRole("button", { name: "แก้ไขงาน" }).click();
   const generatedForm = page.locator("form").filter({ hasText: "ชื่องาน" }).first();
   await generatedForm.getByLabel("ชื่องาน").fill(editedTitle);
-  await generatedForm.getByLabel("สินค้า").selectOption({ label: productName });
+  await generatedForm.getByLabel("สินค้า", { exact: true }).selectOption({
+    label: alternateProductName,
+  });
   await generatedForm.getByLabel("จำนวนแบตช์").fill("1.5");
   await generatedForm.getByLabel("เวลาที่กำหนด").fill("2030-04-10T07:30");
   await generatedForm.getByLabel("ระยะเวลา (นาที)").fill("50");
@@ -167,8 +178,24 @@ test("owner runs the complete production timeline lifecycle", async ({ page }, t
   await generatedForm.getByLabel("สถานะ").selectOption("DONE");
   await submitCurrentPageAction(page, generatedForm, "บันทึกงาน");
   await page.goto(`${cycleUrl}/production`);
-  await expect(page.getByRole("article", { name: new RegExp(editedTitle) })).toContainText("ทำเสร็จแล้ว");
-  await expect(page.getByRole("article", { name: new RegExp(editedTitle) })).toContainText("ปรับตามเตาใหม่");
+  const editedTask = page.getByRole("article", { name: new RegExp(editedTitle) });
+  await expect(editedTask).toContainText(alternateProductName);
+  await expect(editedTask).toContainText("1.5 แบตช์");
+  await expect(editedTask).toContainText("07:30");
+  await expect(editedTask).toContainText("50 นาที");
+  await expect(editedTask).toContainText("ทำเสร็จแล้ว");
+  await expect(editedTask).toContainText("ปรับตามเตาใหม่");
+  await editedTask.getByRole("button", { name: "แก้ไขงาน" }).click();
+  const editedVerificationForm = page.locator("form").filter({ hasText: "ชื่องาน" }).first();
+  await expect(editedVerificationForm.getByLabel("ชื่องาน")).toHaveValue(editedTitle);
+  await expect(editedVerificationForm.getByLabel("สินค้า", { exact: true }).locator("option:checked")).toHaveText(alternateProductName);
+  await expect(editedVerificationForm.getByLabel("จำนวนแบตช์")).toHaveValue("1.5");
+  await expect(editedVerificationForm.getByLabel("เวลาที่กำหนด")).toHaveValue("2030-04-10T07:30");
+  await expect(editedVerificationForm.getByLabel("ระยะเวลา (นาที)")).toHaveValue("50");
+  await expect(editedVerificationForm.getByLabel("ลำดับ")).toHaveValue("2");
+  await expect(editedVerificationForm.getByLabel("สถานะ")).toHaveValue("DONE");
+  await expect(editedVerificationForm.getByLabel("หมายเหตุ")).toHaveValue("ปรับตามเตาใหม่");
+  await editedVerificationForm.getByRole("button", { name: "ยกเลิก" }).click();
 
   const skippedTask = page.getByRole("article", { name: new RegExp(`อบขนม ${runId}`) });
   await skippedTask.getByRole("button", { name: "แก้ไขงาน" }).click();
@@ -184,21 +211,32 @@ test("owner runs the complete production timeline lifecycle", async ({ page }, t
   await expect(page.getByRole("main")).toContainText("เหตุผลที่ข้าม: เปลี่ยนสูตรแล้ว");
 
   await page.getByRole("button", { name: "เพิ่มงานเอง" }).click();
-  const manualForm = page.getByRole("main").locator("form").last();
-  await manualForm.getByLabel("ชื่องาน").fill(manualTitle);
-  await manualForm.getByLabel("เวลาที่กำหนด").fill("2030-04-09T06:00");
-  await manualForm.getByLabel("ระยะเวลา (นาที)").fill("15");
-  await manualForm.getByLabel("หมายเหตุ").fill("ลบได้ก่อนเริ่ม");
-  await submitCurrentPageAction(page, manualForm, "สร้างงาน");
+  const retainedManualForm = page.getByRole("main").locator("form").last();
+  await retainedManualForm.getByLabel("ชื่องาน").fill(retainedManualTitle);
+  await retainedManualForm.getByLabel("เวลาที่กำหนด").fill("2030-04-09T06:00");
+  await retainedManualForm.getByLabel("ระยะเวลา (นาที)").fill("15");
+  await retainedManualForm.getByLabel("หมายเหตุ").fill("เก็บไว้ตรวจการไม่คัดลอก");
+  await submitCurrentPageAction(page, retainedManualForm, "สร้างงาน");
   await page.goto(`${cycleUrl}/production`);
-  const manualTask = page.getByRole("article", { name: new RegExp(manualTitle) });
-  await expect(manualTask).toBeVisible();
-  await expect(manualTask.getByRole("button", { name: "ลบงาน" })).toBeVisible();
+  const retainedManualTask = page.getByRole("article", { name: new RegExp(retainedManualTitle) });
+  await expect(retainedManualTask).toBeVisible();
+
+  await page.getByRole("button", { name: "เพิ่มงานเอง" }).click();
+  const deletedManualForm = page.getByRole("main").locator("form").last();
+  await deletedManualForm.getByLabel("ชื่องาน").fill(deletedManualTitle);
+  await deletedManualForm.getByLabel("เวลาที่กำหนด").fill("2030-04-09T06:30");
+  await deletedManualForm.getByLabel("ระยะเวลา (นาที)").fill("15");
+  await deletedManualForm.getByLabel("หมายเหตุ").fill("ลบได้ก่อนเริ่ม");
+  await submitCurrentPageAction(page, deletedManualForm, "สร้างงาน");
+  await page.goto(`${cycleUrl}/production`);
+  const deletedManualTask = page.getByRole("article", { name: new RegExp(deletedManualTitle) });
+  await expect(deletedManualTask).toBeVisible();
+  await expect(deletedManualTask.getByRole("button", { name: "ลบงาน" })).toBeVisible();
   const deleteResponse = currentPageAction(page);
-  await manualTask.getByRole("button", { name: "ลบงาน" }).click();
+  await deletedManualTask.getByRole("button", { name: "ลบงาน" }).click();
   expect((await deleteResponse).ok()).toBe(true);
   await page.goto(`${cycleUrl}/production`);
-  await expect(page.getByRole("article", { name: new RegExp(manualTitle) })).toHaveCount(0);
+  await expect(page.getByRole("article", { name: new RegExp(deletedManualTitle) })).toHaveCount(0);
 
   await page.goto(cycleUrl);
   await page.getByRole("link", { name: "ดูแผนการผลิต" }).press("Enter");
@@ -215,12 +253,16 @@ test("owner runs the complete production timeline lifecycle", async ({ page }, t
   await expect(page.getByRole("heading", { name: /รุ่น 2/ })).toBeVisible();
   await expect(page.getByRole("main")).toContainText(`เตรียมแป้ง ${runId}`);
   await expect(page.getByRole("main")).not.toContainText(editedTitle);
-  await expect(page.getByRole("main")).not.toContainText(manualTitle);
+  await expect(page.getByRole("main")).not.toContainText(retainedManualTitle);
+  await expect(page.getByRole("main")).not.toContainText(deletedManualTitle);
   const historyLink = page.getByRole("link", { name: "รุ่น 1 · แทนที่แล้ว" });
   await expect(historyLink).toBeVisible();
   await historyLink.press("Enter");
   await expect(page.getByRole("heading", { name: /รุ่น 1/ })).toBeVisible();
   await expect(page.getByText("อ่านอย่างเดียว")).toBeVisible();
+  await expect(page.getByRole("main")).toContainText(editedTitle);
+  await expect(page.getByRole("main")).toContainText("ปรับตามเตาใหม่");
+  await expect(page.getByRole("main")).toContainText("เหตุผลที่ข้าม: เปลี่ยนสูตรแล้ว");
   await expect(page.getByRole("button", { name: "แก้ไขงาน" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "เพิ่มงานเอง" })).toHaveCount(0);
 });

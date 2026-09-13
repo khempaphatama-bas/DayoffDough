@@ -10,8 +10,8 @@
 
 ## TDD RED/GREEN evidence
 
-- RED: before the helper was implemented, typecheck reported the missing `createProductionTemplate` export and Page/Locator helper mismatches in the new scenario. The first mandated Playwright run also exposed the environment’s inability to bind the webserver (`listen EPERM 0.0.0.0:3000`); an escalated run then reached the app but lacked Supabase environment values.
-- GREEN: `pnpm typecheck` passed after the helper/scenario aligned. The focused Phase 4A regression run passed 17 files / 185 tests. The helper uses accessible role/label selectors, current-page POST response waits, and active-badge confirmation.
+- RED: after the controller exposed the configured environment and applied migration 0012, authenticated production E2E reached the app and failed on both phone and desktop because `getByLabel("สินค้า")` matched both the scope select and Product select. Review also reproduced four vacuous proof gaps: deleting the only manual task before re-lock, not checking generation-1 content, not asserting persisted edit fields/product, and omitting the Cycle Template task assertion.
+- GREEN/local: changed Product Template lookup to an exact accessible label, added explicit replacement-dialog confirmation, retained one manual task while deleting a separate one, changed and re-read the product plus every editable field, asserted Cycle Template output, and asserted generation-1 title/notes/skip reason. `pnpm typecheck` passed and the focused Phase 4A regression run passed 17 files / 185 tests.
 
 ## Verification commands and results
 
@@ -24,17 +24,18 @@ All commands used the bundled Node PATH:
 | `pnpm exec vitest run --pool=forks --maxWorkers=1 --reporter=verbose` | PASS, 87 files / 820 tests; this is the clean full-suite command after diagnosing PGlite parallel contention |
 | `pnpm test:run` | Attempted twice after implementation; each run encountered a different PGlite parallel-contended failure and then stalled. The exact focused failures passed, and the safe single-worker full command above passed all tests. No tests were skipped or assertions weakened. |
 | Phase 4A focused Vitest command (17 files) | PASS, 17 files / 185 tests |
-| `pnpm test:e2e tests/e2e/production.spec.ts` | BLOCKED, 2 projects failed at owner login (`/login`) because no local Supabase Auth/service is available |
-| `pnpm test:e2e tests/e2e/production.spec.ts tests/e2e/planning.spec.ts tests/e2e/shopping.spec.ts` | BLOCKED, 6 owner tests failed at the same login boundary |
-| `pnpm test:e2e` | 2 public-auth tests passed; 10 owner tests (phone and desktop) failed deterministically in `loginAsOwner` while remaining on `/login`; no authenticated flow could start |
+| `pnpm db:migrate` | PASS per controller evidence; migration `0012_phase_4a_production_timeline` applied to the configured Supabase database before the authenticated RED run |
+| `pnpm test:e2e tests/e2e/production.spec.ts` (authenticated pre-fix run) | RED on both phone and desktop at the ambiguous `getByLabel("สินค้า")` selector in `tests/fixtures/owner.ts`; this is the confirmed application-test finding fixed in this round |
+| `pnpm test:e2e tests/e2e/production.spec.ts` (post-fix attempt) | BLOCKED after the configured service went offline; the run reached a cycle page, then planning navigation stalled. Subsequent loopback checks returned connection refused for ports 54321 and 54322, and the approval guard rejected remote authenticated mutation against the symlinked `.env.local` target |
+| planning + shopping targeted E2E and full `pnpm test:e2e` | NOT rerun post-fix because the authenticated Supabase target was unavailable; no safe local replacement exists |
 | `pnpm build` | PASS, Next.js 16.3.2 webpack build; route output includes `/production/templates`, `/production/templates/[id]`, `/production/templates/new`, and `/cycles/[id]/production` |
 | `git diff --check` | PASS |
 
-The E2E runs used loopback placeholder endpoints and credentials only; this proves the failure is the missing service/session, not a remote mutation. The local service check did not expose Supabase Auth on the configured endpoint, and no project credentials were available to complete authenticated E2E safely.
+The pre-fix E2E run used the already-authorized configured environment and proved authentication/schema startup before exposing the selector RED. The post-fix run could not complete after the service disappeared; no remote retry or mutation was attempted once the target could not be verified.
 
 ## Migration inspection
 
-`rg -n 'ENABLE ROW LEVEL SECURITY|CREATE TRIGGER|ON DELETE RESTRICT|task generation snapshot mismatch|task generation is read-only' drizzle/0012_phase_4a_production_timeline.sql` confirmed four RLS statements (lines 19, 59, 80, 94), both trigger families and stable error markers (lines 138, 144, 190, 197, 206, 214, 220), and the history foreign keys with `ON DELETE RESTRICT` (lines 95–102; case-insensitive search).
+`rg -ni 'ENABLE ROW LEVEL SECURITY|CREATE TRIGGER|ON DELETE RESTRICT|task generation snapshot mismatch|task generation is read-only' drizzle/0012_phase_4a_production_timeline.sql` confirmed four RLS statements (lines 19, 59, 80, 94), both trigger families and stable error markers (lines 138, 144, 190, 197, 206, 214, 220), and all history foreign keys with lowercase `ON DELETE restrict` (lines 95–102).
 
 ## Acceptance criteria mapping (1–10)
 
@@ -55,9 +56,9 @@ The E2E runs used loopback placeholder endpoints and credentials only; this prov
 - `5b88762 test: verify phase 4a production timeline` — Task 11 fixture, E2E, setup, docs, regression fixture, and release report.
 - `91e31db test: confirm production template activation in e2e` — confirms the replacement-activation dialog when present.
 
-Worktree verification after `91e31db` is clean. Overall status: implementation and local unit/build verification complete; authenticated E2E remains blocked by the absent Supabase Auth/database service and credentials.
+`next-env.d.ts` was restored to the tracked `.next/types` references after Next dev/build generation. Final status is clean after the report commit below. Overall status: fix-round implementation and local unit/build verification complete; authenticated E2E remains blocked by the currently unavailable configured Supabase service after the pre-fix selector RED was isolated.
 
 ## Concerns
 
 - The mandated default Vitest mode is not a reliable release command in this environment because PGlite workers contend for the shared local resource; the unmodified full test set passes cleanly with one fork worker.
-- Authenticated E2E requires a real local Supabase stack (or explicitly provided test credentials). No external service was mutated.
+- Authenticated E2E requires the configured Supabase stack to be online; the last safe checks showed both loopback database/API ports unavailable, and remote mutation retry was rejected because the symlinked target could not be verified.
