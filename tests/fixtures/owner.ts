@@ -90,8 +90,9 @@ export async function createProductionTemplate(
   await page.getByLabel("ใช้กับ").selectOption(input.scope);
   if (input.scope === "PRODUCT") {
     if (!input.productName) throw new Error("Product templates need a product name");
-    await selectOptionContaining(
-      page.getByLabel("สินค้า", { exact: true }),
+    const productSelect = page.getByLabel("สินค้า", { exact: true });
+    await productSelect.selectOption({ label: input.productName });
+    await expect(productSelect.locator("option:checked")).toHaveText(
       input.productName,
     );
   }

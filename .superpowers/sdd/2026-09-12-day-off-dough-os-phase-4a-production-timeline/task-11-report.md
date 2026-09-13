@@ -12,8 +12,10 @@
 
 - RED: after the controller exposed the configured environment and applied migration 0012, authenticated production E2E reached the app and failed on both phone and desktop because `getByLabel("สินค้า")` matched both the scope select and Product select. Review also reproduced four vacuous proof gaps: deleting the only manual task before re-lock, not checking generation-1 content, not asserting persisted edit fields/product, and omitting the Cycle Template task assertion.
 - GREEN/local: changed Product Template lookup to an exact accessible label, added explicit replacement-dialog confirmation, retained one manual task while deleting a separate one, changed and re-read the product plus every editable field, asserted Cycle Template output, and asserted generation-1 title/notes/skip reason. `pnpm typecheck` passed and the focused Phase 4A regression run passed 17 files / 185 tests.
-- Fix round 2 RED: the authenticated controller run reached `/production/templates/new` after creating and activating a product, but the newly created product was absent from the server-rendered Product combobox. The product was persisted and active; the root cause was the Product Action not invalidating the new-template read. A regression test failed on the missing `revalidatePath("/production/templates/new")` call.
-- Fix round 2 GREEN: `createProductAction` now invalidates `/production/templates/new`; `createProduct` explicitly waits for the `/products` POST and verifies the product after a fresh `/products` navigation. The focused suite passes 18 files / 186 tests.
+- Fix round 2 RED: the controller initially reported the newly created product as absent from the template combobox and the cache-hygiene regression failed on the missing `revalidatePath("/production/templates/new")` call. The product was subsequently verified in Supabase as owned and active.
+- Fix round 2 GREEN: `createProductAction` now invalidates `/production/templates/new`; `createProduct` explicitly waits for the `/products` POST and verifies the product after a fresh `/products` navigation. This is valid cache hygiene, but it was not the eventual cause of the helper timeout.
+- Fix round 3 RED: controller evidence showed the expected product option was present in the Playwright snapshot; the timeout occurred while `select.getByRole("option").filter({ hasText }).first().textContent()` scanned the large native select. No helper-level test exists beyond the authenticated Playwright scenario, so the failure was isolated from snapshot and persistence evidence.
+- Fix round 3 GREEN: the Product Template helper now calls direct `selectOption({ label: input.productName })` on the exact Product combobox and asserts the selected option. No sleeps or broad locator weakening were added.
 
 ## Verification commands and results
 
@@ -30,11 +32,12 @@ All commands used the bundled Node PATH:
 | `pnpm db:migrate` | PASS per controller evidence; migration `0012_phase_4a_production_timeline` applied to the configured Supabase database before the authenticated RED run |
 | `pnpm test:e2e tests/e2e/production.spec.ts` (authenticated pre-fix run) | RED on both phone and desktop at the ambiguous `getByLabel("สินค้า")` selector in `tests/fixtures/owner.ts`; this is the confirmed application-test finding fixed in this round |
 | `pnpm test:e2e tests/e2e/production.spec.ts` (fix-round-2 post-fix attempt) | BLOCKED after the configured service went offline; loopback checks returned connection refused for ports 54321 and 54322, DNS resolution for the configured Supabase host failed, and the approval guard rejected remote authenticated mutation against the symlinked `.env.local` target |
-| planning + shopping targeted E2E and full `pnpm test:e2e` | NOT rerun post-fix because the authenticated Supabase target was unavailable; no safe local replacement exists |
+| `pnpm test:e2e tests/e2e/production.spec.ts` (fix-round-3) | Pending controller rerun after this commit; the local environment cannot reach the configured authenticated Supabase target |
+| planning + shopping targeted E2E and full `pnpm test:e2e` | Pending controller production GREEN; no safe local replacement exists |
 | `pnpm build` | PASS, Next.js 16.3.2 webpack build; route output includes `/production/templates`, `/production/templates/[id]`, `/production/templates/new`, and `/cycles/[id]/production` |
 | `git diff --check` | PASS |
 
-The pre-fix E2E run used the already-authorized configured environment and proved authentication/schema startup before exposing the selector RED. The post-fix run could not complete after the service disappeared; no remote retry or mutation was attempted once the target could not be verified.
+The pre-fix E2E run used the already-authorized configured environment and proved authentication/schema startup before exposing the selector RED. Later controller inspection proved the product existed, was active/owned, and was present in the browser snapshot; the remaining failure was the helper’s expensive native-option scan. The controller will run the direct-selector fix against the configured service after commit.
 
 ## Migration inspection
 
@@ -61,7 +64,7 @@ The pre-fix E2E run used the already-authorized configured environment and prove
 - `186d5eb test: harden phase 4a e2e evidence` — fix-round selector/assertion corrections and updated migration/E2E evidence.
 - `b53ad25 fix: invalidate production template product options` — fix-round-2 cache invalidation, helper synchronization, regression test, and report.
 
-`next-env.d.ts` was restored to the tracked `.next/types` references after Next dev/build generation. Final status is clean after the final report commit. Overall status: fix-round-2 implementation and local unit/build verification complete; authenticated E2E remains blocked by the currently unavailable configured Supabase service after the stale-product RED was isolated and fixed.
+`next-env.d.ts` was restored to the tracked `.next/types` references after Next dev/build generation. Overall status: fix-round-3 selector implementation and local/static verification complete; authenticated E2E awaits the controller rerun because the configured Supabase service is unavailable from this environment.
 
 ## Concerns
 
