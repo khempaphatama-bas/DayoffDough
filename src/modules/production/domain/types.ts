@@ -85,3 +85,79 @@ export type CycleTaskGenerationSummary = Readonly<{
   timezone: string;
   createdAt: Date;
 }>;
+
+export type CycleProductionHeader = Readonly<{
+  cycleId: string;
+  cycleNumber: number;
+  cycleName: string;
+  cycleStatus:
+    | "DRAFT"
+    | "OPEN"
+    | "LOCKED"
+    | "IN_PRODUCTION"
+    | "COMPLETED"
+    | "CANCELLED";
+}>;
+
+export type ProductionGenerationSummary = Readonly<{
+  planningSnapshotId: string;
+  generation: number;
+  planningStatus: "ACTIVE" | "SUPERSEDED";
+  hasTimeline: boolean;
+  lockedAt: Date;
+  unlockedAt: Date | null;
+  unlockReason: string | null;
+}>;
+
+export type CycleTaskGenerationView = CycleTaskGenerationSummary &
+  Readonly<{
+    planningStatus: "ACTIVE" | "SUPERSEDED";
+  }>;
+
+export type ProductOption = Readonly<{ id: string; name: string }>;
+
+export type CycleTaskView = Readonly<{
+  id: string;
+  taskGenerationId: string;
+  origin: "TEMPLATE" | "MANUAL";
+  sourceTemplateName: string | null;
+  sourceActivityName: string | null;
+  title: string;
+  productId: string | null;
+  productName: string | null;
+  batchCount: string | null;
+  scheduledAt: Date;
+  estimatedDurationMinutes: number;
+  notes: string | null;
+  sequence: number;
+  status: CycleTaskStatus;
+  skipReason: string | null;
+}>;
+
+export type CycleProductionView =
+  | Readonly<{
+      kind: "CURRENT";
+      cycle: CycleProductionHeader;
+      generation: CycleTaskGenerationView;
+      generations: readonly ProductionGenerationSummary[];
+      tasks: readonly CycleTaskView[];
+      products: readonly ProductOption[];
+      writable: true;
+    }>
+  | Readonly<{
+      kind: "HISTORY";
+      cycle: CycleProductionHeader;
+      generation: CycleTaskGenerationView;
+      generations: readonly ProductionGenerationSummary[];
+      tasks: readonly CycleTaskView[];
+      products: readonly ProductOption[];
+      writable: false;
+    }>
+  | Readonly<{
+      kind: "NO_GENERATION";
+      cycle: CycleProductionHeader;
+      selectedPlanningGeneration: number | null;
+      generations: readonly ProductionGenerationSummary[];
+      reason: "NO_PLAN" | "LEGACY_SNAPSHOT";
+      writable: false;
+    }>;
