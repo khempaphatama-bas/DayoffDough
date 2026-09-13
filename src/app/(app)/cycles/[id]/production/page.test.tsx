@@ -13,7 +13,7 @@ import ProductionPage from "./page";
 
 const CYCLE_ID = "72000000-0000-4000-8000-000000000001";
 const OWNER_ID = "72000000-0000-4000-8000-000000000009";
-const VIEW = { kind: "CURRENT", writable: true, cycle: { cycleId: CYCLE_ID, cycleNumber: 1, cycleName: "รอบส่ง", cycleStatus: "LOCKED" }, generation: { id: "72000000-0000-4000-8000-000000000002", cycleId: CYCLE_ID, planningSnapshotId: "72000000-0000-4000-8000-000000000003", generation: 1, primaryDeliveryDate: "2026-09-12", timezone: "Asia/Bangkok", createdAt: new Date(), planningStatus: "ACTIVE" }, generations: [], tasks: [], products: [] } as unknown as CycleProductionView;
+const VIEW = { kind: "CURRENT", writable: true, cycle: { cycleId: CYCLE_ID, cycleNumber: 1, cycleName: "รอบส่ง", cycleStatus: "LOCKED" }, generation: { id: "72000000-0000-4000-8000-000000000002", cycleId: CYCLE_ID, planningSnapshotId: "72000000-0000-4000-8000-000000000003", generation: 1, primaryDeliveryDate: "2026-09-12", timezone: "Asia/Bangkok", createdAt: new Date(), planningStatus: "ACTIVE" }, generations: [], tasks: [], products: [] } as unknown as Extract<CycleProductionView, { kind: "CURRENT" }>;
 
 describe("ProductionPage", () => {
   beforeEach(() => {
@@ -27,6 +27,7 @@ describe("ProductionPage", () => {
     render(await ProductionPage({ params: Promise.resolve({ id: CYCLE_ID }), searchParams: Promise.resolve({}) }));
     expect(screen.getByTestId("timeline")).toHaveTextContent("CURRENT");
     expect(mocks.get).toHaveBeenCalledWith(OWNER_ID, CYCLE_ID, undefined);
+    expect(screen.getByText("วันส่งหลัก: 2026-09-12")).toBeInTheDocument();
   });
 
   it("loads an explicit positive history generation", async () => {
@@ -45,5 +46,14 @@ describe("ProductionPage", () => {
     render(await ProductionPage({ params: Promise.resolve({ id: CYCLE_ID }) }));
     expect(screen.getByText("รอบนี้ยังไม่มีแผน Production Timeline")).toBeInTheDocument();
     expect(screen.queryByText("ปลดล็อก/ล็อกแผนใหม่ได้จากหน้าแผนการผลิต")).not.toBeInTheDocument();
+  });
+
+  it("guides both locked and in-production cycles toward unlock/re-lock", async () => {
+    for (const cycleStatus of ["LOCKED", "IN_PRODUCTION"] as const) {
+      mocks.get.mockResolvedValueOnce({ ...VIEW, cycle: { ...VIEW.cycle, cycleStatus }, generation: { ...VIEW.generation, planningStatus: "ACTIVE" } });
+      const result = await ProductionPage({ params: Promise.resolve({ id: CYCLE_ID }) });
+      render(result);
+      expect(screen.getAllByText("ปลดล็อกเพื่อสร้างรุ่นใหม่ได้จากหน้าแผนการผลิต").length).toBeGreaterThan(0);
+    }
   });
 });

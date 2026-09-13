@@ -68,7 +68,7 @@ function QuickStatusButton({ task, status, cycleId, generationId, onSkip }: Read
       <button className="min-h-10 rounded-xl border border-stone-300 px-3 text-sm font-semibold text-stone-800" disabled={pending} type="submit">
         {STATUS_LABELS[status]}
       </button>
-      {state.error ? <span className="sr-only">{state.error}</span> : null}
+      {state.error ? <p className="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-800" role="alert">{state.error}</p> : null}
     </form>
   );
 }
@@ -82,7 +82,7 @@ function DeleteManualTaskButton({ task, cycleId, generationId }: Readonly<{ task
       <input name="taskGenerationId" type="hidden" value={generationId} />
       <input name="taskId" type="hidden" value={task.id} />
       <button className="min-h-10 rounded-xl border border-red-300 px-3 text-sm font-semibold text-red-800" disabled={pending} type="submit">ลบงาน</button>
-      {state.error ? <span className="sr-only">{state.error}</span> : null}
+      {state.error ? <p className="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-800" role="alert">{state.error}</p> : null}
     </form>
   );
 }

@@ -5,12 +5,31 @@ vi.mock("@/app/(app)/cycles/[id]/production/actions", () => ({
   createManualCycleTaskAction: vi.fn(async (_previous: unknown, _data: FormData) => ({ error: null, fieldErrors: {}, values: {}, saved: true })),
   updateCycleTaskAction: vi.fn(async (_previous: unknown, _data: FormData) => ({ error: null, fieldErrors: {}, values: {}, saved: true })),
 }));
-import { CycleTaskForm } from "./cycle-task-form";
+import { bangkokLocalToIso, CycleTaskForm } from "./cycle-task-form";
 
 const cycleId = "72000000-0000-4000-8000-000000000001";
 const generationId = "72000000-0000-4000-8000-000000000002";
 
 describe("CycleTaskForm", () => {
+  it.each(["2026-02-30T10:00", "2026-01-01T24:00", "2026-01-01T10:60", "2026-13-01T10:00"])("rejects impossible Bangkok wall-clock value %s instead of normalizing it", (value) => {
+    expect(bangkokLocalToIso(value)).toBeNull();
+  });
+
+  it("retains an invalid submitted schedule as an error instead of throwing while rendering", () => {
+    expect(() => render(<CycleTaskForm mode="create" cycleId={cycleId} taskGenerationId={generationId} products={[]} action={async () => ({ error: "invalid", fieldErrors: { scheduledAt: "invalid" }, values: { scheduledAt: "not-a-date" }, saved: false })} />)).not.toThrow();
+  });
+
+  it("renders product, batch, duration, and sequence errors next to their fields", async () => {
+    const action = vi.fn(async () => ({ error: "invalid", fieldErrors: { productId: "product error", batchCount: "batch error", estimatedDurationMinutes: "duration error", sequence: "sequence error" }, values: {}, saved: false }));
+    const user = userEvent.setup();
+    render(<CycleTaskForm mode="edit" cycleId={cycleId} taskGenerationId={generationId} products={[]} task={{ id: "72000000-0000-4000-8000-000000000003", taskGenerationId: generationId, origin: "TEMPLATE", sourceTemplateName: "หลัก", sourceActivityName: "อบ", title: "อบ", productId: null, productName: null, batchCount: null, scheduledAt: new Date("2026-09-10T17:30:00.000Z"), estimatedDurationMinutes: 45, notes: null, sequence: 1, status: "PENDING", skipReason: null }} action={action} />);
+    await user.click(screen.getByRole("button", { name: "บันทึกงาน" }));
+    expect(await screen.findByText("product error")).toBeVisible();
+    expect(screen.getByText("batch error")).toBeVisible();
+    expect(screen.getByText("duration error")).toBeVisible();
+    expect(screen.getByText("sequence error")).toBeVisible();
+  });
+
   it("uses Bangkok local datetime inputs for an existing task", () => {
     render(<CycleTaskForm mode="edit" cycleId={cycleId} taskGenerationId={generationId} task={{
       id: "72000000-0000-4000-8000-000000000003", taskGenerationId: generationId, origin: "TEMPLATE", sourceTemplateName: "หลัก", sourceActivityName: "อบ", title: "อบ", productId: null, productName: null, batchCount: null, scheduledAt: new Date("2026-09-10T17:30:00.000Z"), estimatedDurationMinutes: 45, notes: null, sequence: 1, status: "PENDING", skipReason: null,

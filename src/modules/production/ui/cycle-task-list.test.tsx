@@ -1,9 +1,9 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
-import { vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+const actionMocks = vi.hoisted(() => ({ delete: vi.fn(async (_previous: unknown, _data: FormData) => ({ error: null as string | null, fieldErrors: {} as Record<string, string>, values: {} as Record<string, string>, saved: true })), update: vi.fn(async (_previous: unknown, _data: FormData) => ({ error: null as string | null, fieldErrors: {} as Record<string, string>, values: {} as Record<string, string>, saved: true })) }));
 vi.mock("@/app/(app)/cycles/[id]/production/actions", () => ({
-  deleteManualCycleTaskAction: vi.fn(async (_previous: unknown, _data: FormData) => ({ error: null, fieldErrors: {}, values: {}, saved: true })),
-  updateCycleTaskAction: vi.fn(async (_previous: unknown, _data: FormData) => ({ error: null, fieldErrors: {}, values: {}, saved: true })),
+  deleteManualCycleTaskAction: actionMocks.delete,
+  updateCycleTaskAction: actionMocks.update,
 }));
 import type { CycleProductionView, CycleTaskView } from "@/modules/production/domain/types";
 import { CycleTaskList } from "./cycle-task-list";
@@ -93,9 +93,21 @@ describe("CycleTaskList", () => {
 
   it("allows deleting only a pending manual card", () => {
     const manual: CycleTaskView = { ...currentView.tasks[0]!, id: "72000000-0000-4000-8000-000000000012", origin: "MANUAL", sourceTemplateName: null, sourceActivityName: null };
-    const generated: CycleTaskView = { ...manual, id: "72000000-0000-4000-8000-000000000013", origin: "TEMPLATE" };
+    const generated: CycleTaskView = { ...manual, id: "72000000-0000-0000-0000-000000000013", origin: "TEMPLATE", sourceTemplateName: "generated", sourceActivityName: "generated" };
     render(<CycleTaskList view={{ ...currentView, tasks: [manual, generated] }} />);
     expect(screen.getByRole("button", { name: "ลบงาน" })).toBeVisible();
     expect(screen.getAllByRole("article")[1]).not.toHaveTextContent("ลบงาน");
+  });
+
+  it("shows quick status and delete failures visibly", async () => {
+    actionMocks.update.mockResolvedValueOnce({ error: "สถานะล้มเหลว", fieldErrors: {}, values: {}, saved: false });
+    actionMocks.delete.mockResolvedValueOnce({ error: "ลบไม่สำเร็จ", fieldErrors: {}, values: {}, saved: false });
+    const user = (await import("@testing-library/user-event")).default.setup();
+    const manual: CycleTaskView = { ...currentView.tasks[0]!, id: "72000000-0000-0000-0000-000000000012", origin: "MANUAL", sourceTemplateName: null, sourceActivityName: null };
+    render(<CycleTaskList view={{ ...currentView, tasks: [manual] }} />);
+    await user.click(screen.getByRole("button", { name: "ทำเสร็จแล้ว" }));
+    expect(await screen.findByText("สถานะล้มเหลว")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "ลบงาน" }));
+    expect(await screen.findByText("ลบไม่สำเร็จ")).toBeVisible();
   });
 });

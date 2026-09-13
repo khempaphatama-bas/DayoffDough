@@ -43,8 +43,9 @@ export default async function ProductionPage({ params, searchParams }: Readonly<
         <Link className="inline-flex min-h-11 items-center text-sm font-semibold text-amber-800" href={`/cycles/${view.cycle.cycleId}`}>← {view.cycle.cycleName}</Link>
         <p className="mt-4 text-sm font-bold text-amber-800">รอบ #{view.cycle.cycleNumber}</p>
         <h1 className="mt-1 text-3xl font-bold tracking-tight text-stone-900">Production Timeline</h1>
+        {view.kind !== "NO_GENERATION" ? <p className="mt-2 text-sm font-semibold text-stone-700">วันส่งหลัก: {view.generation.primaryDeliveryDate}</p> : null}
       </header>
-      {view.kind === "NO_GENERATION" ? <NoGeneration view={view} /> : <><CycleTaskList view={view} /><ProductionGenerationLinks view={view} />{view.generation.planningStatus === "ACTIVE" && view.cycle.cycleStatus === "LOCKED" ? <p className="text-sm text-stone-600">ปลดล็อกเพื่อสร้างรุ่นใหม่ได้จากหน้าแผนการผลิต</p> : null}</>}
+      {view.kind === "NO_GENERATION" ? <NoGeneration view={view} /> : <><CycleTaskList view={view} /><ProductionGenerationLinks view={view} />{view.generation.planningStatus === "ACTIVE" && (view.cycle.cycleStatus === "LOCKED" || view.cycle.cycleStatus === "IN_PRODUCTION") ? <p className="text-sm text-stone-600">ปลดล็อกเพื่อสร้างรุ่นใหม่ได้จากหน้าแผนการผลิต</p> : null}</>}
     </main>
   );
 }

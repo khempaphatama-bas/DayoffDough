@@ -31,3 +31,25 @@ The required focused command initially could not start because the shell had no 
 - Query-side deterministic ordering and immutable snapshot names remain in Task 7.
 - No timezone dependency was added; Bangkok is the sole supported timezone.
 - Full-suite confidence is limited by the unrelated shopping-loader stall and repository lint baseline error noted above.
+
+## Fix round 1
+
+### RED evidence
+
+Added regression tests for each review finding. The focused suite failed with four datetime normalization assertions (invalid values were normalized), missing primary-delivery header text, and missing visible field-error feedback. The first run also exposed a duplicate `vi` test import, which was corrected before the production RED run.
+
+### GREEN evidence
+
+- Focused Task 9 suite: `23 passed`.
+- Task 7–8 regressions plus Task 9: `58 passed` across six files.
+- `pnpm typecheck`: passed.
+- Changed-file ESLint: passed with warnings only (unused parameters in test doubles); no changed-file errors.
+- `git diff --check`: passed.
+
+### Fixes
+
+- Strictly validate Bangkok date, month/day, hour, and minute components before UTC conversion; invalid retained dates now render safely.
+- Show product, batch, duration, and sequence field errors adjacent to controls.
+- Show visible quick-status and delete failure alerts.
+- Render primary delivery date in the generated timeline header.
+- Show unlock/re-lock guidance for both `LOCKED` and `IN_PRODUCTION` generated views.

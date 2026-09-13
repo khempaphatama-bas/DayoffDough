@@ -33,6 +33,7 @@ function uuid(): string {
 
 export function formatBangkokDateTime(value: Date | null | undefined): string {
   if (!value) return "";
+  if (Number.isNaN(value.getTime())) return "";
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Bangkok",
     year: "numeric",
@@ -49,11 +50,21 @@ export function formatBangkokDateTime(value: Date | null | undefined): string {
 }
 
 /** Convert a Bangkok wall-clock value to the canonical UTC instant expected by Task 8. */
-export function bangkokLocalToIso(value: string): string {
+export function bangkokLocalToIso(value: string): string | null {
   const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(value);
-  if (!match) return value;
-  const [, year, month, day, hour, minute] = match;
-  return new Date(Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour) - 7, Number(minute))).toISOString();
+  if (!match) return null;
+  const [, yearText, monthText, dayText, hourText, minuteText] = match;
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  if (year < 1 || year > 9999 || month < 1 || month > 12 || hour > 23 || minute > 59) return null;
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  if (day < 1 || day > daysInMonth) return null;
+  const instant = new Date(Date.UTC(year, month - 1, day, hour, minute));
+  instant.setUTCHours(instant.getUTCHours() - 7);
+  return instant.toISOString();
 }
 
 function asString(values: Readonly<Record<string, string>>, key: string, fallback: string): string {
@@ -109,7 +120,8 @@ export function CycleTaskForm({
     event.preventDefault();
     const formData = new FormData(event.currentTarget);
     const local = String(formData.get("scheduledAt") ?? "");
-    formData.set("scheduledAt", bangkokLocalToIso(local));
+    const utc = bangkokLocalToIso(local);
+    if (utc) formData.set("scheduledAt", utc);
     startTransition(() => formAction(formData));
   }
 
@@ -130,19 +142,23 @@ export function CycleTaskForm({
           <option value="">งานระดับรอบ (ไม่ผูกสินค้า)</option>
           {products.map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}
         </select>
+        <Errors error={state.fieldErrors.productId} />
       </label>
       <div className="grid gap-4 sm:grid-cols-3">
         <label className="grid gap-2 text-sm font-semibold text-stone-700">
           จำนวนแบตช์
           <input className="min-h-11 rounded-xl border border-stone-300 px-4 text-base font-normal" defaultValue={batchCount} min="0.000001" name="batchCount" step="0.000001" type="number" />
+          <Errors error={state.fieldErrors.batchCount} />
         </label>
         <label className="grid gap-2 text-sm font-semibold text-stone-700">
           ระยะเวลา (นาที)
           <input className="min-h-11 rounded-xl border border-stone-300 px-4 text-base font-normal" defaultValue={duration} min="1" name="estimatedDurationMinutes" required type="number" />
+          <Errors error={state.fieldErrors.estimatedDurationMinutes} />
         </label>
         <label className="grid gap-2 text-sm font-semibold text-stone-700">
           ลำดับ
           <input className="min-h-11 rounded-xl border border-stone-300 px-4 text-base font-normal" defaultValue={sequence} min="1" name="sequence" required type="number" />
+          <Errors error={state.fieldErrors.sequence} />
         </label>
       </div>
       <label className="grid gap-2 text-sm font-semibold text-stone-700">
