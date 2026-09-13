@@ -95,3 +95,55 @@ The full Vitest suite remains resource-starved when many PGlite databases run co
 Implementation commit:
 
 `9fd746a feat: generate cycle tasks during planning lock`
+
+## Fix round 1
+
+### Findings verified
+
+- Repeated-lock coverage previously counted planning rows only; it did not count `cycle_task_generations` or `cycle_tasks`.
+- The writer accepted an empty draft set regardless of whether planned products or an active Cycle Template required tasks.
+- The existing injected failure happened before the writer, so it did not prove rollback after production rows had been inserted.
+
+### RED
+
+Added tests before the implementation guard:
+
+- repeated lock now counts one task generation and one generated task in addition to planning rows;
+- an empty generation with no planned products and no active Cycle Template is allowed;
+- an empty generation with a planned product but no matching task template is rejected before generation insertion;
+- a writer wrapper inserts the generation/tasks, then throws, and the test counts all planning and production tables plus cycle `OPEN`/null pointer state.
+
+Focused command before the guard:
+
+```sh
+/Users/aekkapom/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node node_modules/vitest/vitest.mjs run src/modules/production/application/task-generation-writer.test.ts src/modules/planning/application/planning-commands.test.ts
+```
+
+Result: `1 failed`, `26 passed`; the invalid-empty test resolved with a generation instead of throwing `Task generation has no tasks`. The idempotency and post-production rollback tests passed, proving the assertions exercise existing behavior rather than mocks.
+
+### GREEN
+
+Moved draft expansion before generation insertion and rejected zero drafts when product plans exist or an active Cycle Template is supplied. The valid empty case remains a generation with zero tasks. The production writer seam remains internal and the later-failure wrapper demonstrates transaction rollback after both generation and task inserts.
+
+Focused command after the guard:
+
+```sh
+/Users/aekkapom/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node node_modules/vitest/vitest.mjs run src/modules/production/application/task-generation-writer.test.ts src/modules/planning/application/planning-commands.test.ts
+```
+
+Result: `2 passed` test files, `27 passed` tests.
+
+Regression command:
+
+```sh
+/Users/aekkapom/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node node_modules/vitest/vitest.mjs run src/modules/production/domain src/modules/production/db/schema.test.ts src/modules/production/db/schema.integrity.test.ts
+```
+
+Result: `4 passed` test files, `55 passed` tests.
+
+Typecheck, lint, and `git diff --check` all passed.
+
+### Fix-round commits
+
+- `1d548d3 fix: harden atomic task generation`
+- Report update follows in the documentation commit.
