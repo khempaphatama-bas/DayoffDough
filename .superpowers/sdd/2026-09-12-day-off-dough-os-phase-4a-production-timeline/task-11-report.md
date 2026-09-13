@@ -59,9 +59,9 @@ The pre-fix E2E run used the already-authorized configured environment and prove
 - `5b88762 test: verify phase 4a production timeline` — Task 11 fixture, E2E, setup, docs, regression fixture, and release report.
 - `91e31db test: confirm production template activation in e2e` — confirms the replacement-activation dialog when present.
 - `186d5eb test: harden phase 4a e2e evidence` — fix-round selector/assertion corrections and updated migration/E2E evidence.
-- Fix-round-2 code/report commits are recorded below after staging this report.
+- `b53ad25 fix: invalidate production template product options` — fix-round-2 cache invalidation, helper synchronization, regression test, and report.
 
-`next-env.d.ts` was restored to the tracked `.next/types` references after Next dev/build generation. Overall status: fix-round-2 implementation and local unit/build verification complete; authenticated E2E remains blocked by the currently unavailable configured Supabase service after the stale-product RED was isolated and fixed.
+`next-env.d.ts` was restored to the tracked `.next/types` references after Next dev/build generation. Final status is clean after the final report commit. Overall status: fix-round-2 implementation and local unit/build verification complete; authenticated E2E remains blocked by the currently unavailable configured Supabase service after the stale-product RED was isolated and fixed.
 
 ## Concerns
 
