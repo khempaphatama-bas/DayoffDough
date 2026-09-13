@@ -55,8 +55,9 @@ The pre-fix E2E run used the already-authorized configured environment and prove
 - `1578ce2 fix: avoid synchronous template form state updates` — release-blocking lint fix.
 - `5b88762 test: verify phase 4a production timeline` — Task 11 fixture, E2E, setup, docs, regression fixture, and release report.
 - `91e31db test: confirm production template activation in e2e` — confirms the replacement-activation dialog when present.
+- `186d5eb test: harden phase 4a e2e evidence` — fix-round selector/assertion corrections and updated migration/E2E evidence.
 
-`next-env.d.ts` was restored to the tracked `.next/types` references after Next dev/build generation. Final status is clean after the report commit below. Overall status: fix-round implementation and local unit/build verification complete; authenticated E2E remains blocked by the currently unavailable configured Supabase service after the pre-fix selector RED was isolated.
+`next-env.d.ts` was restored to the tracked `.next/types` references after Next dev/build generation. Final status is clean after the final report commit. Overall status: fix-round implementation and local unit/build verification complete; authenticated E2E remains blocked by the currently unavailable configured Supabase service after the pre-fix selector RED was isolated.
 
 ## Concerns
 
