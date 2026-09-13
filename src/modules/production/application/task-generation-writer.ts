@@ -30,6 +30,20 @@ export const persistCycleTaskGeneration: PersistCycleTaskGeneration = async (
   ownerId,
   input,
 ) => {
+  const drafts = buildCycleTaskDrafts({
+    primaryDeliveryDate: input.primaryDeliveryDate,
+    timezone: input.timezone,
+    templates: input.templates,
+    products: input.productPlans,
+  });
+  if (
+    drafts.length === 0 &&
+    (input.productPlans.length > 0 ||
+      input.templates.some((template) => template.scope === "CYCLE"))
+  ) {
+    throw new Error("Task generation has no tasks");
+  }
+
   const [generation] = await tx
     .insert(cycleTaskGenerations)
     .values({
@@ -45,12 +59,6 @@ export const persistCycleTaskGeneration: PersistCycleTaskGeneration = async (
     throw new Error("Task generation insert returned no row");
   }
 
-  const drafts = buildCycleTaskDrafts({
-    primaryDeliveryDate: input.primaryDeliveryDate,
-    timezone: input.timezone,
-    templates: input.templates,
-    products: input.productPlans,
-  });
   if (drafts.length > 0) {
     await tx.insert(cycleTasks).values(
       drafts.map((draft) => ({

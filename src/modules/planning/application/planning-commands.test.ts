@@ -33,6 +33,7 @@ import {
   productionTemplateActivities,
   productionTemplates,
 } from "@/modules/production/db/schema";
+import { persistCycleTaskGeneration } from "@/modules/production/application/task-generation-writer";
 import {
   createPlanningCommandService,
   PlanningBlockedError,
@@ -1187,8 +1188,10 @@ describe("planning command service", () => {
       context.db.select({ value: count() }).from(cycleOrderSnapshots),
       context.db.select({ value: count() }).from(cycleMaterialRequirements),
       context.db.select({ value: count() }).from(cycleCostSnapshots),
+      context.db.select({ value: count() }).from(cycleTaskGenerations),
+      context.db.select({ value: count() }).from(cycleTasks),
     ]);
-    expect(counts.map(([row]) => row!.value)).toEqual([1, 2, 1, 1]);
+    expect(counts.map(([row]) => row!.value)).toEqual([1, 2, 1, 1, 1, 1]);
   });
 
   it("scopes the same lock request id independently per owner without cross-owner disclosure", async () => {
@@ -1412,6 +1415,60 @@ describe("planning command service", () => {
       status: "OPEN",
       activePlanningSnapshotId: null,
       lockedAt: null,
+    });
+  });
+
+  it("rolls back production rows when a later lock step fails", async () => {
+    const scenario = await seedPlanningScenario(context.db);
+    const clock = { now: () => new Date(LOCKED_AT) };
+    const preview = await createPlanningQueryService(context.db, clock).preview(
+      OWNER_ID,
+      scenario.cycleId,
+    );
+    const failing = createPlanningCommandService(context.db, clock, {
+      persistCycleTaskGeneration: async (tx, ownerId, input) => {
+        await persistCycleTaskGeneration(tx, ownerId, input);
+        throw new Error("forced after production generation");
+      },
+    });
+
+    await expect(
+      failing.lock(OWNER_ID, {
+        cycleId: scenario.cycleId,
+        inputFingerprint: preview.inputFingerprint,
+        lockRequestId: "78787878-7878-4787-8787-787878787878",
+        overrides: [],
+      }),
+    ).rejects.toThrow("forced after production generation");
+
+    const counts = await Promise.all([
+      context.db.select({ value: count() }).from(cyclePlanningSnapshots),
+      context.db.select({ value: count() }).from(cyclePlanningWarnings),
+      context.db.select({ value: count() }).from(cycleOrderSnapshots),
+      context.db.select({ value: count() }).from(cycleOrderItemSnapshots),
+      context.db.select({ value: count() }).from(cycleRecipePlans),
+      context.db.select({ value: count() }).from(cycleProductPlans),
+      context.db.select({ value: count() }).from(cycleInventoryPriceSnapshots),
+      context.db.select({ value: count() }).from(cycleMaterialRequirements),
+      context.db.select({ value: count() }).from(cyclePackagingRequirements),
+      context.db.select({ value: count() }).from(cycleProductCostSnapshots),
+      context.db.select({ value: count() }).from(cycleCostSnapshots),
+      context.db.select({ value: count() }).from(cycleTaskGenerations),
+      context.db.select({ value: count() }).from(cycleTasks),
+    ]);
+    expect(counts.map(([row]) => row!.value)).toEqual(
+      Array.from({ length: 13 }, () => 0),
+    );
+    const [cycle] = await context.db
+      .select({
+        status: bakeCycles.status,
+        activePlanningSnapshotId: bakeCycles.activePlanningSnapshotId,
+      })
+      .from(bakeCycles)
+      .where(eq(bakeCycles.id, scenario.cycleId));
+    expect(cycle).toEqual({
+      status: "OPEN",
+      activePlanningSnapshotId: null,
     });
   });
 

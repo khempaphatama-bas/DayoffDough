@@ -178,4 +178,89 @@ describe("persistCycleTaskGeneration", () => {
     expect(tasks[0]!.id).not.toBe(tasks[1]!.id);
     expect((await context.db.select().from(bakeCycles).where(eq(bakeCycles.id, scenario.cycleId)))[0]!.status).toBe("OPEN");
   });
+
+  it("allows an empty generation when there are no planned products or cycle template", async () => {
+    const scenario = await seedPlanningScenario(context.db);
+    const snapshotId = "60000000-0000-4000-8000-000000000013";
+    await context.db.insert(cyclePlanningSnapshots).values({
+      id: snapshotId,
+      ownerId: OWNER_ID,
+      bakeCycleId: scenario.cycleId,
+      generation: 1,
+      status: "ACTIVE",
+      lockRequestId: "60000000-0000-4000-8000-000000000014",
+      inputFingerprint: "b".repeat(64),
+      cycleNumber: 1,
+      cycleName: "รอบว่าง",
+      orderCutoffAt: null,
+      targetProductionDate: "2026-08-29",
+      primaryDeliveryDate: "2026-08-30",
+      laborRateSatangPerHour: 12_000,
+      defaultWasteAllowancePercent: "3.0000",
+      timezone: "Asia/Bangkok",
+      currency: "THB",
+      costComplete: true,
+      lockedAt: new Date("2026-08-29T00:00:00.000Z"),
+    });
+
+    const summary = await context.db.transaction((tx) =>
+      persistCycleTaskGeneration(tx, OWNER_ID, {
+        cycleId: scenario.cycleId,
+        planningSnapshotId: snapshotId,
+        generation: 1,
+        primaryDeliveryDate: "2026-08-30",
+        timezone: "Asia/Bangkok",
+        templates: [],
+        productPlans: [],
+      }),
+    );
+
+    expect(summary).toMatchObject({ planningSnapshotId: snapshotId, generation: 1 });
+    expect(await context.db.select().from(cycleTaskGenerations)).toHaveLength(1);
+    expect(await context.db.select().from(cycleTasks)).toHaveLength(0);
+  });
+
+  it("rejects an empty generation when a planned product has no task template", async () => {
+    const scenario = await seedPlanningScenario(context.db);
+    const snapshotId = "60000000-0000-4000-8000-000000000015";
+    await context.db.insert(cyclePlanningSnapshots).values({
+      id: snapshotId,
+      ownerId: OWNER_ID,
+      bakeCycleId: scenario.cycleId,
+      generation: 1,
+      status: "ACTIVE",
+      lockRequestId: "60000000-0000-4000-8000-000000000016",
+      inputFingerprint: "c".repeat(64),
+      cycleNumber: 1,
+      cycleName: "รอบสินค้าไม่มีงาน",
+      orderCutoffAt: null,
+      targetProductionDate: "2026-08-29",
+      primaryDeliveryDate: "2026-08-30",
+      laborRateSatangPerHour: 12_000,
+      defaultWasteAllowancePercent: "3.0000",
+      timezone: "Asia/Bangkok",
+      currency: "THB",
+      costComplete: true,
+      lockedAt: new Date("2026-08-29T00:00:00.000Z"),
+    });
+
+    await expect(
+      context.db.transaction((tx) =>
+        persistCycleTaskGeneration(tx, OWNER_ID, {
+          cycleId: scenario.cycleId,
+          planningSnapshotId: snapshotId,
+          generation: 1,
+          primaryDeliveryDate: "2026-08-30",
+          timezone: "Asia/Bangkok",
+          templates: [],
+          productPlans: [{
+            productId: scenario.productId,
+            productName: "ฟอคคาเซีย",
+            selectedBatchCount: "2.000000",
+          }],
+        }),
+      ),
+    ).rejects.toThrow("Task generation has no tasks");
+    expect(await context.db.select().from(cycleTaskGenerations)).toHaveLength(0);
+  });
 });
