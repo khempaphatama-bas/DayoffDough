@@ -28,6 +28,12 @@ import {
   cycleRecipePlans,
 } from "@/modules/planning/db/schema";
 import {
+  cycleTaskGenerations,
+  cycleTasks,
+  productionTemplateActivities,
+  productionTemplates,
+} from "@/modules/production/db/schema";
+import {
   createPlanningCommandService,
   PlanningBlockedError,
   PlanningStateError,
@@ -131,6 +137,43 @@ describe("planning command service", () => {
       lockRequestId: "10101010-1010-4010-8010-101010101010",
       overrides: [],
     });
+    await expect(
+      commands.lock(OWNER_ID, {
+        cycleId: scenario.cycleId,
+        inputFingerprint: firstPreview.inputFingerprint,
+        lockRequestId: "10101010-1010-4010-8010-101010101010",
+        overrides: [],
+      }),
+    ).resolves.toEqual(first);
+
+    const [firstTaskGeneration] = await context.db
+      .select()
+      .from(cycleTaskGenerations)
+      .where(eq(cycleTaskGenerations.planningSnapshotId, first.id));
+    const [firstGeneratedTask] = await context.db
+      .select()
+      .from(cycleTasks)
+      .where(eq(cycleTasks.cycleTaskGenerationId, firstTaskGeneration!.id));
+    await context.db
+      .update(cycleTasks)
+      .set({ title: "แก้ไขรุ่นเก่า" })
+      .where(eq(cycleTasks.id, firstGeneratedTask!.id));
+    await context.db.insert(cycleTasks).values({
+      ownerId: OWNER_ID,
+      cycleTaskGenerationId: firstTaskGeneration!.id,
+      origin: "MANUAL",
+      creationRequestId: "13131313-1313-4131-8131-131313131313",
+      title: "งานเฉพาะกิจรุ่นเก่า",
+      productId: null,
+      productName: null,
+      batchCount: null,
+      scheduledAt: new Date("2026-08-29T00:00:00.000Z"),
+      estimatedDurationMinutes: 15,
+      notes: null,
+      sequence: 99,
+      status: "PENDING",
+      skipReason: null,
+    });
     const childrenBefore = await loadPlanningChildren(context.db, first.id);
 
     await expect(
@@ -158,6 +201,32 @@ describe("planning command service", () => {
       childrenBefore,
     );
 
+    const [productTemplate] = await context.db
+      .select()
+      .from(productionTemplates)
+      .where(
+        and(
+          eq(productionTemplates.ownerId, OWNER_ID),
+          eq(productionTemplates.productId, scenario.productId),
+        ),
+      );
+    const [productActivity] = await context.db
+      .select()
+      .from(productionTemplateActivities)
+      .where(
+        and(
+          eq(productionTemplateActivities.ownerId, OWNER_ID),
+          eq(
+            productionTemplateActivities.productionTemplateId,
+            productTemplate!.id,
+          ),
+        ),
+      );
+    await context.db
+      .update(productionTemplateActivities)
+      .set({ name: "กิจกรรมรุ่นใหม่" })
+      .where(eq(productionTemplateActivities.id, productActivity!.id));
+
     const secondPreview = await createPlanningQueryService(context.db, {
       now: () => new Date(RELOCKED_AT),
     }).preview(OWNER_ID, scenario.cycleId);
@@ -169,6 +238,31 @@ describe("planning command service", () => {
     });
 
     expect(second).toMatchObject({ generation: 2, status: "ACTIVE" });
+    const [secondTaskGeneration] = await context.db
+      .select()
+      .from(cycleTaskGenerations)
+      .where(eq(cycleTaskGenerations.planningSnapshotId, second.id));
+    const secondTasks = await context.db
+      .select()
+      .from(cycleTasks)
+      .where(eq(cycleTasks.cycleTaskGenerationId, secondTaskGeneration!.id));
+    expect(secondTasks).toEqual([
+      expect.objectContaining({
+        origin: "TEMPLATE",
+        sourceActivityName: "กิจกรรมรุ่นใหม่",
+        title: "กิจกรรมรุ่นใหม่",
+      }),
+    ]);
+    expect(secondTasks).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          title: "แก้ไขรุ่นเก่า",
+        }),
+        expect.objectContaining({
+          title: "งานเฉพาะกิจรุ่นเก่า",
+        }),
+      ]),
+    );
     await expect(
       createPlanningQueryService(context.db).listGenerations(
         OWNER_ID,
@@ -188,6 +282,78 @@ describe("planning command service", () => {
     expect(await loadPlanningChildren(context.db, first.id)).toEqual(
       childrenBefore,
     );
+  });
+
+  it("creates production tasks in the same transaction as the planning snapshot", async () => {
+    const scenario = await seedPlanningScenario(context.db);
+    const preview = await createPlanningQueryService(context.db, {
+      now: () => new Date(LOCKED_AT),
+    }).preview(OWNER_ID, scenario.cycleId);
+    const commands = createPlanningCommandService(context.db, {
+      now: () => new Date(LOCKED_AT),
+    });
+
+    const locked = await commands.lock(OWNER_ID, {
+      cycleId: scenario.cycleId,
+      inputFingerprint: preview.inputFingerprint,
+      lockRequestId: "61616161-6161-4161-8161-616161616161",
+      overrides: [{
+        productId: scenario.productId,
+        selectedBatchCount: "2.000000",
+        reason: "เพิ่มรอบผลิต",
+      }],
+    });
+    const [generation] = await context.db
+      .select()
+      .from(cycleTaskGenerations)
+      .where(eq(cycleTaskGenerations.planningSnapshotId, locked.id));
+    const tasks = await context.db
+      .select()
+      .from(cycleTasks)
+      .where(eq(cycleTasks.cycleTaskGenerationId, generation!.id));
+
+    expect(generation).toMatchObject({
+      generation: 1,
+      primaryDeliveryDate: "2026-08-30",
+      timezone: "Asia/Bangkok",
+    });
+    expect(tasks).toEqual([
+      expect.objectContaining({
+        productName: "ฟอคคาเซีย",
+        batchCount: "2.000000",
+      }),
+    ]);
+  });
+
+  it("rolls back the planning snapshot and leaves the cycle open when generation fails", async () => {
+    const scenario = await seedPlanningScenario(context.db);
+    const preview = await createPlanningQueryService(context.db, {
+      now: () => new Date(LOCKED_AT),
+    }).preview(OWNER_ID, scenario.cycleId);
+    const failing = createPlanningCommandService(
+      context.db,
+      { now: () => new Date(LOCKED_AT) },
+      {
+        persistCycleTaskGeneration: async () => {
+          throw new Error("injected task failure");
+        },
+      },
+    );
+
+    await expect(
+      failing.lock(OWNER_ID, {
+        cycleId: scenario.cycleId,
+        inputFingerprint: preview.inputFingerprint,
+        lockRequestId: "62626262-6262-4262-8262-626262626262",
+        overrides: [],
+      }),
+    ).rejects.toThrow("injected task failure");
+    expect(await context.db.select().from(cyclePlanningSnapshots)).toHaveLength(0);
+    expect(await context.db.select().from(cycleTaskGenerations)).toHaveLength(0);
+    expect((await context.db.select().from(bakeCycles).where(eq(bakeCycles.id, scenario.cycleId)))[0]).toMatchObject({
+      status: "OPEN",
+      activePlanningSnapshotId: null,
+    });
   });
 
   it("preserves source item lineage across unlock edits and excludes archived lines from generation 2", async () => {

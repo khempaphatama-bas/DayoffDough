@@ -19,6 +19,10 @@ import type {
   PlanningGenerationSummary,
 } from "./planning-queries";
 import { persistPlanningSnapshot } from "./snapshot-writer";
+import {
+  persistCycleTaskGeneration,
+  type PersistCycleTaskGeneration,
+} from "@/modules/production/application/task-generation-writer";
 
 export type { LockCycleInput } from "@/modules/planning/domain/lock-form";
 
@@ -43,10 +47,17 @@ export class PlanningStateError extends Error {
   }
 }
 
+export type PlanningCommandDependencies = Readonly<{
+  persistCycleTaskGeneration?: PersistCycleTaskGeneration;
+}>;
+
 export function createPlanningCommandService(
   db: DatabaseClient,
   clock: PlanningClock = { now: () => new Date() },
+  dependencies: PlanningCommandDependencies = {},
 ) {
+  const writeCycleTaskGeneration =
+    dependencies.persistCycleTaskGeneration ?? persistCycleTaskGeneration;
   return {
     async unlock(
       ownerId: string,
@@ -236,6 +247,19 @@ export function createPlanningCommandService(
             generation,
             lockedAt,
           );
+          await writeCycleTaskGeneration(tx, verifiedOwnerId, {
+            cycleId: cycle.id,
+            planningSnapshotId: planningSnapshot.id,
+            generation,
+            primaryDeliveryDate: authoritative.cycle.primaryDeliveryDate!,
+            timezone: source.settings.timezone,
+            templates: source.productionTemplates,
+            productPlans: authoritative.productPlans.map((product) => ({
+              productId: product.productId,
+              productName: product.productName,
+              selectedBatchCount: product.selectedBatchCount,
+            })),
+          });
           const [updated] = await tx
             .update(bakeCycles)
             .set({
