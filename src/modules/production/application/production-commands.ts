@@ -1,3 +1,4 @@
+import Decimal from "decimal.js";
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { lockOwnedBakeCycle, lockOwnedCycleTask } from "@/lib/db/row-locks";
@@ -140,6 +141,10 @@ function sameInstant(left: Date, right: Date): boolean {
   return left.getTime() === right.getTime();
 }
 
+function canonicalNumeric(value: string | null): string | null {
+  return value === null ? null : new Decimal(value).toString();
+}
+
 function sameManualPayload(
   existing: typeof cycleTasks.$inferSelect,
   input: CreateManualTaskInput,
@@ -148,7 +153,7 @@ function sameManualPayload(
     existing.cycleTaskGenerationId === input.taskGenerationId &&
     existing.title === input.title &&
     existing.productId === input.productId &&
-    (existing.batchCount?.toString() ?? null) === input.batchCount &&
+    canonicalNumeric(existing.batchCount?.toString() ?? null) === canonicalNumeric(input.batchCount) &&
     sameInstant(existing.scheduledAt, input.scheduledAt) &&
     existing.estimatedDurationMinutes === input.estimatedDurationMinutes &&
     existing.notes === input.notes &&

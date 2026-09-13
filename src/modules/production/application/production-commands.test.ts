@@ -155,6 +155,14 @@ describe("production task command service", () => {
     expect(rows).toHaveLength(1);
   });
 
+  it("returns the existing manual task when an identical request uses a normal integer batch count", async () => {
+    const value = await fixture();
+    const commands = createProductionCommandService(context.db);
+    const input = manualInput(value, { batchCount: "1" });
+    const first = await commands.createManualTask(OWNER_ID, input);
+    await expect(commands.createManualTask(OWNER_ID, input)).resolves.toEqual(first);
+  });
+
   it("creates a manual task with null source lineage", async () => {
     const value = await fixture();
     const task = await createProductionCommandService(context.db).createManualTask(OWNER_ID, manualInput(value));
@@ -256,8 +264,25 @@ describe("production task command service", () => {
     const value = await fixture();
     const commands = createProductionCommandService(context.db);
     const input = updateInput(value);
-    await expect(commands.updateTask(OTHER_OWNER_ID, input)).rejects.toBeInstanceOf(ProductionStateError);
-    await expect(commands.updateTask(OWNER_ID, { ...input, taskId: "ffffffff-ffff-4fff-bfff-ffffffffffff" })).rejects.toBeInstanceOf(ProductionStateError);
+    const outcomes: Array<Readonly<{ kind: string; message: string }>> = [];
+    for (const operation of [
+      () => commands.updateTask(OTHER_OWNER_ID, input),
+      () => commands.updateTask(OWNER_ID, { ...input, taskId: "ffffffff-ffff-4fff-bfff-ffffffffffff" }),
+    ]) {
+      try {
+        await operation();
+      } catch (error) {
+        expect(error).toBeInstanceOf(ProductionStateError);
+        outcomes.push({
+          kind: (error as ProductionStateError).kind,
+          message: (error as ProductionStateError).message,
+        });
+      }
+    }
+    expect(outcomes).toEqual([
+      { kind: "TASK_NOT_FOUND", message: "Production task not found" },
+      { kind: "TASK_NOT_FOUND", message: "Production task not found" },
+    ]);
   });
 
   it("locks the owned cycle before the task row", async () => {
