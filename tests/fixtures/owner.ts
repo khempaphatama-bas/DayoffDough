@@ -221,10 +221,21 @@ export async function createProduct(
   await page.getByLabel("ชื่อสินค้า").fill(input.name);
   await page.getByLabel("หน่วยขาย").selectOption("piece");
   await page.getByLabel("ราคาขาย").fill(input.sellingPriceBaht);
+  const saveResponse = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      new URL(response.url()).pathname === "/products",
+    { timeout: SERVER_ACTION_TIMEOUT },
+  );
   await page.getByRole("button", { name: "บันทึกสินค้า" }).click();
+  expect((await saveResponse).ok()).toBe(true);
   await expect(page.getByRole("main")).toContainText("บันทึกสินค้าแล้ว", {
     timeout: SERVER_ACTION_TIMEOUT,
   });
+  await page.goto("/products");
+  await expect(
+    page.getByRole("link", { name: input.name, exact: true }),
+  ).toBeVisible({ timeout: SERVER_ACTION_TIMEOUT });
 }
 
 export async function createRecipeVersion(

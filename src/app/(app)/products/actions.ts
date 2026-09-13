@@ -53,6 +53,7 @@ export async function createProductAction(
       notes: parsed.data.notes,
     });
     revalidatePath("/products");
+    revalidatePath("/production/templates/new");
     revalidatePath("/dashboard");
     return { error: null, saved: true };
   } catch {
