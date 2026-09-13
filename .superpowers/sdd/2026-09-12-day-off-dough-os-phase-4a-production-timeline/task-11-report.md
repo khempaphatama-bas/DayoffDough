@@ -63,8 +63,9 @@ The pre-fix E2E run used the already-authorized configured environment and prove
 - `91e31db test: confirm production template activation in e2e` — confirms the replacement-activation dialog when present.
 - `186d5eb test: harden phase 4a e2e evidence` — fix-round selector/assertion corrections and updated migration/E2E evidence.
 - `b53ad25 fix: invalidate production template product options` — fix-round-2 cache invalidation, helper synchronization, regression test, and report.
+- `39b4995 fix: select production product option directly` — fix-round-3 direct native-select synchronization and corrected E2E root-cause evidence.
 
-`next-env.d.ts` was restored to the tracked `.next/types` references after Next dev/build generation. Overall status: fix-round-3 selector implementation and local/static verification complete; authenticated E2E awaits the controller rerun because the configured Supabase service is unavailable from this environment.
+`next-env.d.ts` was restored to the tracked `.next/types` references after Next dev/build generation. Final status is clean after the final report commit. Overall status: fix-round-3 selector implementation and local/static verification complete; authenticated E2E awaits the controller rerun because the configured Supabase service is unavailable from this environment.
 
 ## Concerns
 
