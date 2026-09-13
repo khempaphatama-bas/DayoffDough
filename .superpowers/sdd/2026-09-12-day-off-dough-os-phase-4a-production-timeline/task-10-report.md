@@ -29,4 +29,4 @@ Implemented only the Task 10 application-navigation and unit-test changes. No E2
 - Existing template-wide planning invalidation `revalidatePath("/cycles/[id]/planning", "page")` was preserved unchanged.
 - Server auth, owner derivation, route Promise contracts, and all binding constraints remain untouched.
 
-Implementation commit: pending
+Implementation commit: `336eeab`
