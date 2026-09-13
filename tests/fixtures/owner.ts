@@ -132,6 +132,12 @@ export async function createProductionTemplate(
     { timeout: SERVER_ACTION_TIMEOUT },
   );
   await activateButton.click();
+  const confirmation = page.getByRole("dialog", {
+    name: "ยืนยันการเปลี่ยนเทมเพลตที่ใช้งาน",
+  });
+  if (await confirmation.isVisible()) {
+    await confirmation.getByRole("button", { name: "ยืนยันการเปิดใช้", exact: true }).click();
+  }
   const response = await activationResponse;
   expect(response.ok()).toBe(true);
   await expect(page).toHaveURL(/\/production\/templates$/, {
