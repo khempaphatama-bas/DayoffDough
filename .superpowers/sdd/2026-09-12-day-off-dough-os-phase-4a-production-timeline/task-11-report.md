@@ -53,8 +53,9 @@ The E2E runs used loopback placeholder endpoints and credentials only; this prov
 
 - `1578ce2 fix: avoid synchronous template form state updates` — release-blocking lint fix.
 - `5b88762 test: verify phase 4a production timeline` — Task 11 fixture, E2E, setup, docs, regression fixture, and release report.
+- `91e31db test: confirm production template activation in e2e` — confirms the replacement-activation dialog when present.
 
-Worktree verification after `5b88762` is clean. Overall status: implementation and local unit/build verification complete; authenticated E2E remains blocked by the absent Supabase Auth/database service and credentials.
+Worktree verification after `91e31db` is clean. Overall status: implementation and local unit/build verification complete; authenticated E2E remains blocked by the absent Supabase Auth/database service and credentials.
 
 ## Concerns
 
