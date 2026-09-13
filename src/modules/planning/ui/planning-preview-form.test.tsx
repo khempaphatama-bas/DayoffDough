@@ -191,6 +191,26 @@ describe("PlanningPreviewForm", () => {
 
   afterEach(() => vi.restoreAllMocks());
 
+  it("renders a production-template link for each missing template blocker", () => {
+    render(
+      <PlanningPreviewForm
+        preview={{
+          ...previewWithoutBlockers(),
+          blockers: [{
+            code: "MISSING_PRODUCT_TEMPLATE",
+            scope: "PRODUCT",
+            sourceEntityId: PRODUCT_ID,
+            message: "สินค้ายังไม่มีเทมเพลตการผลิตที่พร้อมใช้",
+            context: { productName: "ฟอคคาเซีย", templateHref: "/production/templates" },
+          }],
+        }}
+      />,
+    );
+
+    const link = screen.getByRole("link", { name: "จัดการเทมเพลต ฟอคคาเซีย" });
+    expect(link).toHaveAttribute("href", "/production/templates");
+  });
+
   it("announces blockers and warnings, shows incomplete known cost, and disables locking", () => {
     render(<PlanningPreviewForm preview={BASE_PREVIEW} />);
 

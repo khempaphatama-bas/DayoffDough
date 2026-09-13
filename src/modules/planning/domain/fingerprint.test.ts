@@ -2,9 +2,12 @@ import { describe, expect, it } from "vitest";
 import { buildPlanningPreview } from "./build-preview";
 import { createPlanningFingerprint } from "./fingerprint";
 import type { PlanningSourceData } from "./types";
+import type { ProductionTemplateSource } from "@/modules/production/domain/types";
 
 const PRODUCT_A_ID = "11111111-1111-4111-8111-111111111111";
 const PRODUCT_B_ID = "22222222-2222-4222-8222-222222222222";
+const TEMPLATE_ID = "23232323-2323-4232-8232-232323232323";
+const ACTIVITY_ID = "24242424-2424-4242-8242-242424242424";
 
 function sourceFixture(): PlanningSourceData {
   return {
@@ -172,10 +175,75 @@ function sourceFixture(): PlanningSourceData {
         },
       },
     ],
+    productionTemplates: [
+      {
+        id: TEMPLATE_ID,
+        name: "เทมเพลต A",
+        scope: "PRODUCT",
+        productId: PRODUCT_A_ID,
+        active: true,
+        activities: [
+          {
+            id: ACTIVITY_ID,
+            name: "อบ",
+            offsetDaysFromDelivery: 1,
+            defaultTime: "05:00",
+            estimatedDurationMinutes: 30,
+            sequence: 1,
+            notes: null,
+          },
+        ],
+      } satisfies ProductionTemplateSource,
+    ],
   };
 }
 
 describe("planning source fingerprint", () => {
+  it("changes when an active activity time changes", () => {
+    const source = sourceFixture();
+    const template = source.productionTemplates[0]!;
+    const changed: PlanningSourceData = {
+      ...source,
+      productionTemplates: [{
+        ...template,
+        activities: [{ ...template.activities[0]!, defaultTime: "05:30" }],
+      }],
+    };
+
+    expect(createPlanningFingerprint(changed)).not.toBe(
+      createPlanningFingerprint(source),
+    );
+  });
+
+  it("keeps the fingerprint stable when templates and activities are reordered", () => {
+    const source = sourceFixture();
+    const template = source.productionTemplates[0]!;
+    const extraActivity = {
+      ...template.activities[0]!,
+      id: "25252525-2525-4252-8252-252525252525",
+      sequence: 2,
+      name: "บรรจุ",
+    };
+    const enriched: PlanningSourceData = {
+      ...source,
+      productionTemplates: [{ ...template, activities: [template.activities[0]!, extraActivity] }, {
+        ...template,
+        id: "26262626-2626-4262-8262-262626262626",
+        productId: PRODUCT_B_ID,
+      }],
+    };
+    const reordered: PlanningSourceData = {
+      ...enriched,
+      productionTemplates: enriched.productionTemplates
+        .slice()
+        .reverse()
+        .map((candidate) => ({ ...candidate, activities: candidate.activities.slice().reverse() })),
+    };
+
+    expect(createPlanningFingerprint(reordered)).toBe(
+      createPlanningFingerprint(enriched),
+    );
+  });
   it("is stable across entity ordering and changes for a relevant value", () => {
     const source = sourceFixture();
     const first = createPlanningFingerprint(source);

@@ -19,6 +19,10 @@ import { bakeCycles, bakeCycleStatus } from "@/modules/cycles/db/schema";
 import { createPlanningCommandService } from "@/modules/planning/application/planning-commands";
 import { createPlanningQueryService } from "@/modules/planning/application/planning-queries";
 import { shopSettings } from "@/modules/settings/db/schema";
+import {
+  productionTemplateActivities,
+  productionTemplates,
+} from "@/modules/production/db/schema";
 import type { DatabaseClient } from "@/lib/db/types";
 import { OWNER_ID } from "./owner";
 
@@ -53,6 +57,8 @@ const IDS = {
   latestIngredientPrice: "20000000-0000-4000-8000-000000000002",
   futureIngredientPrice: "20000000-0000-4000-8000-000000000003",
   packagingPrice: "20000000-0000-4000-8000-000000000004",
+  productionTemplate: "20000000-0000-4000-8000-000000000005",
+  productionActivity: "20000000-0000-4000-8000-000000000006",
 } as const;
 
 const SECONDARY_IDS = {
@@ -77,6 +83,8 @@ const SECONDARY_IDS = {
   latestIngredientPrice: "40000000-0000-4000-8000-000000000002",
   futureIngredientPrice: "40000000-0000-4000-8000-000000000003",
   packagingPrice: "40000000-0000-4000-8000-000000000004",
+  productionTemplate: "40000000-0000-4000-8000-000000000005",
+  productionActivity: "40000000-0000-4000-8000-000000000006",
 } satisfies Record<keyof typeof IDS, string>;
 
 type CycleStatus = (typeof bakeCycleStatus)[number];
@@ -233,6 +241,30 @@ export async function seedPlanningScenario(
     .update(products)
     .set({ activeRecipeVersionId: ids.recipeVersion })
     .where(eq(products.id, ids.product));
+  await db.insert(productionTemplates).values({
+    id: ids.productionTemplate,
+    ownerId,
+    name: "เทมเพลตฟอคคาเซียหลัก",
+    scope: "PRODUCT",
+    productId: ids.product,
+    active: true,
+    createdAt: new Date("2026-08-01T00:00:00.000Z"),
+    updatedAt: new Date("2026-08-01T00:00:00.000Z"),
+  });
+  await db.insert(productionTemplateActivities).values({
+    id: ids.productionActivity,
+    ownerId,
+    productionTemplateId: ids.productionTemplate,
+    name: "เตรียมและอบ",
+    offsetDaysFromDelivery: 1,
+    defaultTime: "05:00",
+    estimatedDurationMinutes: 30,
+    sequence: 1,
+    notes: "กิจกรรมจาก fixture",
+    active: true,
+    createdAt: new Date("2026-08-01T00:00:00.000Z"),
+    updatedAt: new Date("2026-08-01T00:00:00.000Z"),
+  });
 
   await db.insert(deliveryMethods).values({
     id: ids.deliveryMethod,

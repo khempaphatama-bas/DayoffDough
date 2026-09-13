@@ -34,6 +34,10 @@ import {
   recipes,
   recipeVersions,
 } from "@/modules/products/db/schema";
+import {
+  productionTemplateActivities,
+  productionTemplates,
+} from "@/modules/production/db/schema";
 import { shopSettings } from "@/modules/settings/db/schema";
 import { loadPlanningSource } from "./load-source";
 import { createPlanningCommandService } from "./planning-commands";
@@ -246,6 +250,54 @@ describe("planning query service", () => {
         productId: scenario.productId,
         orderedQuantity: "10",
       }),
+    ]);
+  });
+
+  it("loads only owned active production templates and active activities for ordered products", async () => {
+    const scenario = await seedPlanningScenario(context.db);
+    const inactiveActivityId = "70000000-0000-4000-8000-000000000012";
+    const inactiveTemplateId = "70000000-0000-4000-8000-000000000013";
+    await context.db.insert(productionTemplates).values({
+      id: inactiveTemplateId,
+      ownerId: OWNER_ID,
+      name: "เทมเพลตเก็บแล้ว",
+      scope: "PRODUCT",
+      productId: scenario.productId,
+      active: false,
+    });
+    await context.db.insert(productionTemplateActivities).values([
+      {
+        id: inactiveActivityId,
+        ownerId: OWNER_ID,
+        productionTemplateId: "20000000-0000-4000-8000-000000000005",
+        name: "กิจกรรมเก่า",
+        offsetDaysFromDelivery: 1,
+        defaultTime: "06:00",
+        estimatedDurationMinutes: 30,
+        sequence: 2,
+        active: false,
+      },
+    ]);
+
+    const source = await loadPlanningSource(context.db, OWNER_ID, scenario.cycleId, AS_OF);
+
+    expect(source.productionTemplates).toEqual([
+      {
+        id: "20000000-0000-4000-8000-000000000005",
+        name: "เทมเพลตฟอคคาเซียหลัก",
+        scope: "PRODUCT",
+        productId: scenario.productId,
+        active: true,
+        activities: [{
+          id: "20000000-0000-4000-8000-000000000006",
+          name: "เตรียมและอบ",
+          offsetDaysFromDelivery: 1,
+          defaultTime: "05:00",
+          estimatedDurationMinutes: 30,
+          sequence: 1,
+          notes: "กิจกรรมจาก fixture",
+        }],
+      },
     ]);
   });
 
@@ -604,6 +656,8 @@ describe("planning query service", () => {
       "recipes",
       "recipe_ingredients",
       "product_packaging_rules",
+      "production_templates",
+      "production_template_activities",
       "inventory_items",
       "inventory_prices",
     ];

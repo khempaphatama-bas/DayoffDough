@@ -110,6 +110,39 @@ function relevantSource(source: PlanningSourceData): Omit<PlanningSourceData, "c
     requiredInventoryItemIds.add(rule.inventoryItemId);
   }
 
+  const productionTemplates = source.productionTemplates
+    .filter(
+      (template) =>
+        template.scope === "CYCLE" ||
+        (template.productId !== null && orderedProductIds.has(template.productId)),
+    )
+    .map((template) => ({
+      id: template.id,
+      name: template.name,
+      scope: template.scope,
+      productId: template.productId,
+      active: template.active,
+      activities: template.activities
+        .map((activity) => ({
+          id: activity.id,
+          name: activity.name,
+          offsetDaysFromDelivery: activity.offsetDaysFromDelivery,
+          defaultTime: activity.defaultTime,
+          estimatedDurationMinutes: activity.estimatedDurationMinutes,
+          sequence: activity.sequence,
+          notes: activity.notes,
+        }))
+        .sort(
+          (left, right) =>
+            left.sequence - right.sequence || left.id.localeCompare(right.id),
+        ),
+    }))
+    .sort((left, right) => {
+      const leftKey = `${left.scope}:${left.productId ?? ""}:${left.id}`;
+      const rightKey = `${right.scope}:${right.productId ?? ""}:${right.id}`;
+      return leftKey.localeCompare(rightKey);
+    });
+
   return {
     cycle: source.cycle,
     settings: source.settings,
@@ -119,6 +152,7 @@ function relevantSource(source: PlanningSourceData): Omit<PlanningSourceData, "c
     inventoryItems: source.inventoryItems.filter((item) =>
       requiredInventoryItemIds.has(item.id),
     ),
+    productionTemplates,
   };
 }
 

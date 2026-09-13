@@ -4,6 +4,7 @@ import {
   type BatchOverride,
   type PlanningSourceData,
 } from "./types";
+import type { ProductionTemplateSource } from "@/modules/production/domain/types";
 
 const CYCLE_ID = "11111111-1111-4111-8111-111111111111";
 const ORDER_A_ID = "22222222-2222-4222-8222-222222222222";
@@ -25,6 +26,8 @@ const ITEM_C_ID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee4";
 const PRODUCT_UNIT_RULE_ID = "ffffffff-ffff-4fff-8fff-fffffffffff1";
 const PRODUCT_ORDER_RULE_ID = "ffffffff-ffff-4fff-8fff-fffffffffff2";
 const DELIVERY_RULE_ID = "ffffffff-ffff-4fff-8fff-fffffffffff3";
+const TEMPLATE_ID = "12121212-1212-4212-8212-121212121213";
+const ACTIVITY_ID = "13131313-1313-4313-8313-131313131314";
 
 const EXPECTED_ISSUE_MESSAGES = {
   CYCLE_NOT_OPEN: "รอบผลิตต้องอยู่ในสถานะเปิดก่อนล็อก",
@@ -246,6 +249,26 @@ function makeSource(): PlanningSourceData {
         },
       },
     ],
+    productionTemplates: [
+      {
+        id: TEMPLATE_ID,
+        name: "เทมเพลตฟอคคาเซีย",
+        scope: "PRODUCT",
+        productId: FOCACCIA_ID,
+        active: true,
+        activities: [
+          {
+            id: ACTIVITY_ID,
+            name: "เตรียมแป้ง",
+            offsetDaysFromDelivery: 1,
+            defaultTime: "05:00",
+            estimatedDurationMinutes: 30,
+            sequence: 1,
+            notes: null,
+          },
+        ],
+      } satisfies ProductionTemplateSource,
+    ],
   };
 }
 
@@ -271,6 +294,51 @@ function issueCodes(preview: ReturnType<typeof buildPlanningPreview>) {
 }
 
 describe("planning preview orchestration", () => {
+  it("blocks every planned product without a ready Product Template", () => {
+    const preview = buildPlanningPreview({ ...makeSource(), productionTemplates: [] }, []);
+
+    expect(preview.blockers).toContainEqual(expect.objectContaining({
+      code: "MISSING_PRODUCT_TEMPLATE",
+      scope: "PRODUCT",
+      sourceEntityId: FOCACCIA_ID,
+      context: expect.objectContaining({
+        productName: "Focaccia",
+        templateHref: "/production/templates",
+      }),
+    }));
+  });
+
+  it("blocks an active Product Template with no active activities", () => {
+    const source = makeSource();
+    const template = source.productionTemplates[0]!;
+    const preview = buildPlanningPreview({
+      ...source,
+      productionTemplates: [{ ...template, activities: [] }],
+    });
+
+    expect(preview.blockers.filter((issue) => issue.code === "MISSING_PRODUCT_TEMPLATE"))
+      .toHaveLength(1);
+  });
+
+  it("does not block an optional Cycle Template", () => {
+    const source = makeSource();
+    const productTemplate = source.productionTemplates[0]!;
+    const cycleTemplate: ProductionTemplateSource = {
+      ...productTemplate,
+      id: "14141414-1414-4414-8414-141414141415",
+      scope: "CYCLE",
+      productId: null,
+    };
+
+    const preview = buildPlanningPreview({
+      ...source,
+      productionTemplates: [productTemplate, cycleTemplate],
+    });
+
+    expect(preview.blockers.filter((issue) => issue.code === "MISSING_PRODUCT_TEMPLATE"))
+      .toEqual([]);
+  });
+
   it("applies an override before all downstream requirement and cost calculations", () => {
     const defaultPreview = buildPlanningPreview(makeSource());
     expect(defaultPreview.productPlans[0]?.suggestedBatchCount).toBe(2);
@@ -528,6 +596,27 @@ describe("planning preview orchestration", () => {
           inventoryItemId: UNIT_PACKAGE_ID,
           consumptionBasis: "PER_PRODUCT_UNIT",
           quantityInBaseUnit: "1",
+        },
+      ],
+      productionTemplates: [
+        ...source.productionTemplates,
+        {
+          id: "16161616-1616-4616-8616-161616161617",
+          name: "เทมเพลตสินค้า 2",
+          scope: "PRODUCT",
+          productId: secondProductId,
+          active: true,
+          activities: [
+            {
+              id: "17171717-1717-4717-8717-171717171718",
+              name: "อบ",
+              offsetDaysFromDelivery: 1,
+              defaultTime: "05:00",
+              estimatedDurationMinutes: 20,
+              sequence: 1,
+              notes: null,
+            },
+          ],
         },
       ],
     };

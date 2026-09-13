@@ -1,6 +1,7 @@
 "use client";
 
 import Decimal from "decimal.js";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useActionState, useEffect, useState, type FormEvent } from "react";
 import {
@@ -76,7 +77,21 @@ function IssueList({
       <ul className="mt-2 list-disc space-y-1 pl-5 text-sm leading-6">
         {issues.map((issue, index) => (
           <li key={`${issue.code}-${issue.sourceEntityId ?? "cycle"}-${index}`}>
-            {issue.message}
+            {issue.code === "MISSING_PRODUCT_TEMPLATE" &&
+            typeof issue.context.productName === "string" &&
+            typeof issue.context.templateHref === "string" ? (
+              <>
+                <span>{issue.message} ({issue.context.productName})</span>{" "}
+                <Link
+                  className="font-semibold underline"
+                  href={issue.context.templateHref}
+                >
+                  จัดการเทมเพลต {issue.context.productName}
+                </Link>
+              </>
+            ) : (
+              issue.message
+            )}
           </li>
         ))}
       </ul>

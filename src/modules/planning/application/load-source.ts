@@ -20,6 +20,10 @@ import {
   recipes,
   recipeVersions,
 } from "@/modules/products/db/schema";
+import {
+  productionTemplateActivities,
+  productionTemplates,
+} from "@/modules/production/db/schema";
 import { shopSettings } from "@/modules/settings/db/schema";
 import type { UnitCode } from "@/modules/units/domain/units";
 
@@ -157,6 +161,58 @@ export async function loadPlanningSource(
             ),
           )
           .orderBy(asc(products.id));
+  const templateScopeCondition = or(
+    eq(productionTemplates.scope, "CYCLE"),
+    orderedProductIds.length === 0
+      ? undefined
+      : and(
+          eq(productionTemplates.scope, "PRODUCT"),
+          inArray(productionTemplates.productId, orderedProductIds),
+        ),
+  );
+  const productionTemplateRows = await reader
+    .select()
+    .from(productionTemplates)
+    .where(
+      and(
+        eq(productionTemplates.ownerId, verifiedOwnerId),
+        eq(productionTemplates.active, true),
+        templateScopeCondition,
+      ),
+    )
+    .orderBy(asc(productionTemplates.id));
+  const productionTemplateIds = productionTemplateRows.map((template) => template.id);
+  const productionTemplateActivityRows = productionTemplateIds.length === 0
+    ? []
+    : await reader
+        .select()
+        .from(productionTemplateActivities)
+        .where(
+          and(
+            eq(productionTemplateActivities.ownerId, verifiedOwnerId),
+            inArray(
+              productionTemplateActivities.productionTemplateId,
+              productionTemplateIds,
+            ),
+            eq(productionTemplateActivities.active, true),
+          ),
+        )
+        .orderBy(
+          asc(productionTemplateActivities.productionTemplateId),
+          asc(productionTemplateActivities.sequence),
+          asc(productionTemplateActivities.id),
+        );
+  const productionActivitiesByTemplateId = new Map<
+    string,
+    typeof productionTemplateActivityRows
+  >();
+  for (const activity of productionTemplateActivityRows) {
+    const activities = productionActivitiesByTemplateId.get(
+      activity.productionTemplateId,
+    );
+    if (activities) activities.push(activity);
+    else productionActivitiesByTemplateId.set(activity.productionTemplateId, [activity]);
+  }
   const activeRecipeVersionIds = uniqueIds(
     productRows.flatMap((product) =>
       product.activeRecipeVersionId === null
@@ -470,5 +526,23 @@ export async function loadPlanningSource(
           : null,
       };
     }),
+    productionTemplates: productionTemplateRows.map((template) => ({
+      id: template.id,
+      name: template.name,
+      scope: template.scope,
+      productId: template.productId,
+      active: true,
+      activities: (productionActivitiesByTemplateId.get(template.id) ?? []).map(
+        (activity) => ({
+          id: activity.id,
+          name: activity.name,
+          offsetDaysFromDelivery: activity.offsetDaysFromDelivery,
+          defaultTime: activity.defaultTime.slice(0, 5),
+          estimatedDurationMinutes: activity.estimatedDurationMinutes,
+          sequence: activity.sequence,
+          notes: activity.notes,
+        }),
+      ),
+    })),
   };
 }

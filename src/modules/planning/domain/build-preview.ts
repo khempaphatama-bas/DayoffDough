@@ -415,6 +415,22 @@ export function buildPlanningPreview(
       );
     }
 
+    const readyProductTemplates = source.productionTemplates.filter(
+      (template) =>
+        template.active &&
+        template.scope === "PRODUCT" &&
+        template.productId === product.id &&
+        template.activities.length > 0,
+    );
+    if (readyProductTemplates.length !== 1) {
+      blockers.push(
+        planningIssue("MISSING_PRODUCT_TEMPLATE", "PRODUCT", product.id, {
+          productName: product.name,
+          templateHref: "/production/templates",
+        }),
+      );
+    }
+
     const waste = resolveWasteAllowance(
       recipe.wasteAllowancePercent,
       source.settings.defaultWasteAllowancePercent,

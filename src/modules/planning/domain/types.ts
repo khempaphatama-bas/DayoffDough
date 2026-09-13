@@ -1,4 +1,5 @@
 import type { UnitCode } from "@/modules/units/domain/units";
+import type { ProductionTemplateSource } from "@/modules/production/domain/types";
 
 export type BatchPlanInput = Readonly<{
   orderedQuantity: string;
@@ -206,6 +207,7 @@ export type PlanningSourceData = Readonly<{
   products: ReadonlyArray<PlanningSourceProduct>;
   packagingRules: ReadonlyArray<PlanningSourcePackagingRule>;
   inventoryItems: ReadonlyArray<PlanningSourceInventoryItem>;
+  productionTemplates: ReadonlyArray<ProductionTemplateSource>;
 }>;
 
 export const PLANNING_ISSUE_MESSAGES = {
@@ -225,6 +227,7 @@ export const PLANNING_ISSUE_MESSAGES = {
   MISSING_DELIVERY_LOCATION: "ออเดอร์ยังไม่มีสถานที่จัดส่ง",
   DELIVERY_DATE_MISMATCH: "วันส่งของออเดอร์ไม่ตรงกับวันส่งหลักของรอบ",
   PLANNED_SHORTFALL: "แผนนี้ผลิตได้น้อยกว่ายอดสั่ง",
+  MISSING_PRODUCT_TEMPLATE: "สินค้ายังไม่มีเทมเพลตการผลิตที่พร้อมใช้",
 } as const;
 
 export type PlanningIssue = Readonly<{
