@@ -3,6 +3,7 @@ import type { DatabaseClient } from "@/lib/db/types";
 import { bakeCycles } from "@/modules/cycles/db/schema";
 import { inventoryItems } from "@/modules/inventory/db/schema";
 import { orders } from "@/modules/orders/db/schema";
+import { cycleTasks } from "@/modules/production/db/schema";
 
 type LockingReader = Pick<DatabaseClient, "select">;
 
@@ -73,4 +74,25 @@ export async function lockOwnedOrder(
     .limit(1)
     .for("update");
   return order;
+}
+
+export async function lockOwnedCycleTask(
+  reader: LockingReader,
+  ownerId: string,
+  taskGenerationId: string,
+  taskId: string,
+) {
+  const [task] = await reader
+    .select()
+    .from(cycleTasks)
+    .where(
+      and(
+        eq(cycleTasks.ownerId, ownerId),
+        eq(cycleTasks.cycleTaskGenerationId, taskGenerationId),
+        eq(cycleTasks.id, taskId),
+      ),
+    )
+    .limit(1)
+    .for("update");
+  return task;
 }
