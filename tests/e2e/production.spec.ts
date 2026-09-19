@@ -155,7 +155,9 @@ test("owner runs the complete production timeline lifecycle", async ({ page }, t
   await expect(page.getByRole("button", { name: "ยืนยันล็อกรอบ" })).toBeEnabled();
   await submitCurrentPageAction(page, page, "ยืนยันล็อกรอบ");
   await page.goto(`${cycleUrl}/production`);
-  await expect(page.getByRole("heading", { name: "Production Timeline" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Production Timeline", exact: true }),
+  ).toBeVisible();
   await expect(page.getByRole("main")).toContainText(`เตรียมแป้ง ${runId}`);
   await expect(page.getByRole("main")).toContainText(`อบขนม ${runId}`);
   await expect(
