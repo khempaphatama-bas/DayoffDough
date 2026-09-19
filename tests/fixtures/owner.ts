@@ -91,7 +91,22 @@ export async function createProductionTemplate(
   if (input.scope === "PRODUCT") {
     if (!input.productName) throw new Error("Product templates need a product name");
     const productSelect = page.getByLabel("สินค้า", { exact: true });
-    await productSelect.selectOption({ label: input.productName });
+    const productValue = await productSelect.evaluate((element, productName) => {
+      if (!(element instanceof HTMLSelectElement)) {
+        throw new Error("Product combobox is not a select element");
+      }
+      const matches = Array.from(element.options).filter(
+        (option) => option.textContent?.trim() === productName,
+      );
+      if (matches.length !== 1) {
+        throw new Error(
+          `Expected exactly one Product option named "${productName}", found ${matches.length}`,
+        );
+      }
+      return matches[0]!.value;
+    }, input.productName);
+    await productSelect.selectOption({ value: productValue });
+    await expect(productSelect).toHaveValue(productValue);
     await expect(productSelect.locator("option:checked")).toHaveText(
       input.productName,
     );
