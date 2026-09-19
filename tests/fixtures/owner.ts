@@ -90,7 +90,11 @@ export async function createProductionTemplate(
   await page.getByLabel("ใช้กับ").selectOption(input.scope);
   if (input.scope === "PRODUCT") {
     if (!input.productName) throw new Error("Product templates need a product name");
-    const productSelect = page.getByLabel("สินค้า", { exact: true });
+    const productSelect = page.locator(
+      'main form select[name="productId"]',
+    );
+    await expect(productSelect).toHaveCount(1);
+    await expect(productSelect).toBeVisible({ timeout: SERVER_ACTION_TIMEOUT });
     const productValue = await productSelect.evaluate((element, productName) => {
       if (!(element instanceof HTMLSelectElement)) {
         throw new Error("Product combobox is not a select element");
@@ -98,7 +102,10 @@ export async function createProductionTemplate(
       const matches = Array.from(element.options).filter(
         (option) => option.textContent?.trim() === productName,
       );
-      if (matches.length !== 1) {
+      if (matches.length === 0) {
+        throw new Error(`Product option not found: "${productName}"`);
+      }
+      if (matches.length > 1) {
         throw new Error(
           `Expected exactly one Product option named "${productName}", found ${matches.length}`,
         );
@@ -107,9 +114,10 @@ export async function createProductionTemplate(
     }, input.productName);
     await productSelect.selectOption({ value: productValue });
     await expect(productSelect).toHaveValue(productValue);
-    await expect(productSelect.locator("option:checked")).toHaveText(
-      input.productName,
-    );
+    const checkedProductOption = productSelect.locator("option:checked");
+    await expect(checkedProductOption).toHaveCount(1);
+    await expect(checkedProductOption).toHaveAttribute("value", productValue);
+    await expect(checkedProductOption).toHaveText(input.productName);
   }
 
   for (let index = 0; index < input.activities.length; index += 1) {
