@@ -77,6 +77,29 @@ describe("CycleTaskList", () => {
     expect(screen.getByText("บริยอช · 1.5 แบตช์")).toBeVisible();
   });
 
+  it("keeps literal years 0001 and 0099 when reconstructing Bangkok day headings", () => {
+    render(<CycleTaskList view={{
+      ...currentView,
+      tasks: [
+        {
+          ...currentView.tasks[0]!,
+          id: "72000000-0000-4000-8000-000000000014",
+          title: "งานปีหนึ่ง",
+          scheduledAt: new Date("0001-01-01T03:00:00.000Z"),
+        },
+        {
+          ...currentView.tasks[1]!,
+          id: "72000000-0000-4000-8000-000000000015",
+          title: "งานปีเก้าสิบเก้า",
+          scheduledAt: new Date("0099-12-31T03:00:00.000Z"),
+        },
+      ],
+    }} />);
+
+    expect(screen.getByRole("heading", { name: "3 มกราคม 544" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "2 มกราคม 643" })).toBeVisible();
+  });
+
   it("renders history without mutation controls", () => {
     render(<CycleTaskList view={{ ...currentView, kind: "HISTORY", writable: false, generation: { ...currentView.generation, planningStatus: "SUPERSEDED" } }} />);
     expect(screen.queryByRole("button", { name: "แก้ไขงาน" })).not.toBeInTheDocument();

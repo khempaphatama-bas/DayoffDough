@@ -79,6 +79,8 @@ describe("CycleTaskForm", () => {
     await user.type(screen.getByLabelText("ระยะเวลา (นาที)"), "30");
     fireEvent.change(screen.getByLabelText("เวลาที่กำหนด"), { target: { value: "2026-09-11T10:00" } });
     await user.click(screen.getByRole("button", { name: "สร้างงาน" }));
+    expect(await screen.findByText("กรุณาตรวจสอบข้อมูลงาน")).toBeVisible();
+    await waitFor(() => expect(screen.getByRole("button", { name: "สร้างงาน" })).toBeEnabled());
     expect(screen.getByTestId("creation-request-id")).toHaveValue(requestId);
     await user.click(screen.getByRole("button", { name: "สร้างงาน" }));
     await waitFor(() => expect(screen.getByTestId("creation-request-id")).not.toHaveValue(requestId));
@@ -97,6 +99,8 @@ describe("CycleTaskForm", () => {
     await user.type(screen.getByLabelText("ระยะเวลา (นาที)"), "30");
     fireEvent.change(screen.getByLabelText("เวลาที่กำหนด"), { target: { value: "2026-09-11T10:00" } });
     await user.click(screen.getByRole("button", { name: "สร้างงาน" }));
+    expect(await screen.findByText("กรุณาตรวจสอบข้อมูลงาน")).toBeVisible();
+    await waitFor(() => expect(screen.getByRole("button", { name: "สร้างงาน" })).toBeEnabled());
     await user.click(screen.getByRole("button", { name: "สร้างงาน" }));
     await waitFor(() => expect(requestIds).toHaveLength(2));
     const secondRequestId = requestIds[1];

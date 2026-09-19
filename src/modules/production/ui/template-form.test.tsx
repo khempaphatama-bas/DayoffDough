@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { ProductionTemplateDetail } from "@/modules/production/application/template-service";
@@ -93,5 +93,23 @@ describe("TemplateForm", () => {
 
     expect(await screen.findByText("จำนวนวันต้องเป็นจำนวนเต็ม")).toBeVisible();
     expect(screen.getByText("กรุณาระบุเวลาให้ถูกต้อง")).toBeVisible();
+  });
+
+  it("reserves phone space and pins its save action above the mobile navigation", () => {
+    render(<TemplateForm products={PRODUCTS} initialTemplate={DRAFT} action={vi.fn()} />);
+
+    const saveAction = screen.getByTestId("template-save-action");
+    expect(screen.getByRole("button", { name: "บันทึกเทมเพลต" }).closest("form")).toHaveClass("pb-24", "md:pb-0");
+    expect(saveAction).toHaveClass(
+      "sticky",
+      "bottom-20",
+      "z-20",
+      "md:static",
+      "md:mx-0",
+      "md:border-0",
+      "md:bg-transparent",
+      "md:p-0",
+    );
+    expect(within(saveAction).getByRole("button", { name: "บันทึกเทมเพลต" })).toBeEnabled();
   });
 });

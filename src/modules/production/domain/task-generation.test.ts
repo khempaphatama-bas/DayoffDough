@@ -84,6 +84,20 @@ describe("scheduleTaskAt", () => {
   });
 
   it.each([
+    ["0001-01-01", 0, "10:00", "0001-01-01T03:00:00.000Z"],
+    ["0099-12-31", 1, "08:30", "0100-01-01T01:30:00.000Z"],
+  ])("keeps the literal low delivery year %s while validating and scheduling offsets", (primaryDeliveryDate, offsetDaysFromDelivery, defaultTime, expected) => {
+    expect(
+      scheduleTaskAt({
+        primaryDeliveryDate,
+        offsetDaysFromDelivery,
+        defaultTime,
+        timezone: "Asia/Bangkok",
+      }).toISOString(),
+    ).toBe(expected);
+  });
+
+  it.each([
     ["invalid date", { primaryDeliveryDate: "2026-02-29" }],
     ["non-canonical date", { primaryDeliveryDate: "2026-9-12" }],
     ["invalid time", { defaultTime: "24:00" }],

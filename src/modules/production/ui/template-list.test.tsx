@@ -41,6 +41,15 @@ describe("TemplateList", () => {
     expect(activate).toHaveBeenCalledWith(TEMPLATE_ID, true);
   });
 
+  it("stacks the replacement confirmation above the shell chrome", async () => {
+    const user = userEvent.setup();
+    render(<TemplateList view={VIEW} onSetActive={vi.fn()} onDuplicate={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "เปิดใช้เทมเพลต ฟอคคาเซียชุดใหม่" }));
+
+    expect(screen.getByRole("dialog", { name: "ยืนยันการเปลี่ยนเทมเพลตที่ใช้งาน" })).toHaveClass("z-40");
+  });
+
   it("groups cycle and product templates and highlights products without a ready template", () => {
     render(<TemplateList view={VIEW} onSetActive={vi.fn()} onDuplicate={vi.fn()} />);
 

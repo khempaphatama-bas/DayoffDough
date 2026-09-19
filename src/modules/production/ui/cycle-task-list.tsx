@@ -8,6 +8,7 @@ import {
   updateCycleTaskAction,
   type ProductionActionState,
 } from "@/app/(app)/cycles/[id]/production/actions";
+import { createUtcCalendarDate } from "@/modules/production/domain/task-generation";
 import type { CycleProductionView, CycleTaskView } from "@/modules/production/domain/types";
 import { CycleTaskForm } from "./cycle-task-form";
 
@@ -25,7 +26,7 @@ function localDateKey(date: Date): string {
 
 function localDateLabel(key: string): string {
   const [year, month, day] = key.split("-").map(Number);
-  return new Intl.DateTimeFormat("th-TH", { timeZone: "Asia/Bangkok", day: "numeric", month: "long", year: "numeric" }).format(new Date(Date.UTC(year!, month! - 1, day!, 5)));
+  return new Intl.DateTimeFormat("th-TH", { timeZone: "Asia/Bangkok", day: "numeric", month: "long", year: "numeric" }).format(createUtcCalendarDate(year!, month! - 1, day!, 5));
 }
 
 function formatTime(date: Date): string {

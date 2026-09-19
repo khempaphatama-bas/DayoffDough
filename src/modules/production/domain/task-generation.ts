@@ -23,6 +23,19 @@ export type BuildCycleTaskDraftsInput = Readonly<{
   products: ReadonlyArray<TaskGenerationProduct>;
 }>;
 
+export function createUtcCalendarDate(
+  year: number,
+  monthIndex: number,
+  day: number,
+  hour = 0,
+  minute = 0,
+): Date {
+  const date = new Date(0);
+  date.setUTCFullYear(year, monthIndex, day);
+  date.setUTCHours(hour, minute, 0, 0);
+  return date;
+}
+
 function parseDeliveryDate(value: string) {
   const match = datePattern.exec(value);
   if (!match) throw new Error("primaryDeliveryDate must use YYYY-MM-DD");
@@ -30,7 +43,7 @@ function parseDeliveryDate(value: string) {
   const year = Number(match[1]);
   const month = Number(match[2]);
   const day = Number(match[3]);
-  const date = new Date(Date.UTC(year, month - 1, day));
+  const date = createUtcCalendarDate(year, month - 1, day);
   if (
     date.getUTCFullYear() !== year ||
     date.getUTCMonth() !== month - 1 ||
@@ -58,13 +71,13 @@ export function scheduleTaskAt(input: ScheduleTaskAtInput): Date {
   const { year, month, day } = parseDeliveryDate(input.primaryDeliveryDate);
   const { hour, minute } = parseTime(input.defaultTime);
   return new Date(
-    Date.UTC(
+    createUtcCalendarDate(
       year,
       month - 1,
       day + input.offsetDaysFromDelivery,
       hour,
       minute,
-    ) - BANGKOK_OFFSET_MILLISECONDS,
+    ).getTime() - BANGKOK_OFFSET_MILLISECONDS,
   );
 }
 

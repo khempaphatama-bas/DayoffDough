@@ -79,7 +79,7 @@ export function TemplateForm({
     startTransition(() => formAction(data));
   }
 
-  return <form className="grid gap-5" onSubmit={submit}>
+  return <form className="grid gap-5 pb-24 md:pb-0" onSubmit={submit}>
     {initialTemplate ? <input name="templateId" type="hidden" value={initialTemplate.id} /> : null}
     <section className="grid gap-4 rounded-3xl border border-stone-200 bg-white p-5 shadow-sm md:grid-cols-2">
       <label className="grid gap-2 text-sm font-semibold text-stone-700 md:col-span-2">ชื่อเทมเพลต<input className="min-h-11 rounded-xl border border-stone-300 px-4 text-base font-normal" name="name" onChange={(event) => setName(event.target.value)} required value={name} />{state.fieldErrors.name ? <span className="text-sm text-red-700">{state.fieldErrors.name}</span> : null}</label>
@@ -93,6 +93,8 @@ export function TemplateForm({
         <label className="grid gap-2 text-sm font-semibold text-stone-700">หมายเหตุ<input className="min-h-11 rounded-xl border border-stone-300 px-4 text-base font-normal" onChange={(event) => updateActivity(index, { notes: event.target.value || null })} value={activity.notes ?? ""} /></label>
       </article>)}</section>
     {state.message ? <p className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-800" role="alert">{state.message}</p> : null}
-    <button className="min-h-11 rounded-xl bg-amber-800 px-5 font-semibold text-white disabled:opacity-60" disabled={pending} type="submit">{pending ? "กำลังบันทึก…" : "บันทึกเทมเพลต"}</button>
+    <div className="sticky bottom-20 z-20 -mx-5 border-t border-stone-200 bg-stone-50/95 p-4 backdrop-blur md:static md:mx-0 md:border-0 md:bg-transparent md:p-0" data-testid="template-save-action">
+      <button className="min-h-11 w-full rounded-xl bg-amber-800 px-5 font-semibold text-white disabled:opacity-60" disabled={pending} type="submit">{pending ? "กำลังบันทึก…" : "บันทึกเทมเพลต"}</button>
+    </div>
   </form>;
 }

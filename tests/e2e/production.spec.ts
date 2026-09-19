@@ -261,6 +261,7 @@ test("owner runs the complete production timeline lifecycle", async ({ page }, t
   await expect(page.getByRole("heading", { name: /รุ่น 1/ })).toBeVisible();
   await expect(page.getByText("อ่านอย่างเดียว")).toBeVisible();
   await expect(page.getByRole("main")).toContainText(editedTitle);
+  await expect(page.getByRole("main")).toContainText(retainedManualTitle);
   await expect(page.getByRole("main")).toContainText("ปรับตามเตาใหม่");
   await expect(page.getByRole("main")).toContainText("เหตุผลที่ข้าม: เปลี่ยนสูตรแล้ว");
   await expect(page.getByRole("button", { name: "แก้ไขงาน" })).toHaveCount(0);
