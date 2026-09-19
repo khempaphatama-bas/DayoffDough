@@ -36,6 +36,48 @@ async function submitCurrentPageAction(
   expect((await response).ok()).toBe(true);
 }
 
+async function getProductSelect(container: Locator): Promise<Locator> {
+  const productSelect = container.locator('select[name="productId"]');
+  await expect(productSelect).toHaveCount(1);
+  await expect(productSelect).toBeVisible({ timeout: SERVER_ACTION_TIMEOUT });
+  return productSelect;
+}
+
+async function getExactOptionValue(
+  select: Locator,
+  visibleName: string,
+): Promise<string> {
+  return select.evaluate((element, optionName) => {
+    if (!(element instanceof HTMLSelectElement)) {
+      throw new Error("Product combobox is not a select element");
+    }
+    const matches = Array.from(element.options).filter(
+      (option) => option.textContent?.trim() === optionName,
+    );
+    if (matches.length === 0) {
+      throw new Error(`Product option not found: "${optionName}"`);
+    }
+    if (matches.length > 1) {
+      throw new Error(
+        `Expected exactly one Product option named "${optionName}", found ${matches.length}`,
+      );
+    }
+    return matches[0]!.value;
+  }, visibleName);
+}
+
+async function expectExactSelectedOption(
+  select: Locator,
+  optionValue: string,
+  visibleName: string,
+): Promise<void> {
+  await expect(select).toHaveValue(optionValue);
+  const checkedOption = select.locator("option:checked");
+  await expect(checkedOption).toHaveCount(1);
+  await expect(checkedOption).toHaveAttribute("value", optionValue);
+  await expect(checkedOption).toHaveText(visibleName);
+}
+
 test("owner runs the complete production timeline lifecycle", async ({ page }, testInfo) => {
   test.setTimeout(480_000);
   page.setDefaultTimeout(SERVER_ACTION_TIMEOUT);
@@ -169,9 +211,17 @@ test("owner runs the complete production timeline lifecycle", async ({ page }, t
   await generatedTask.getByRole("button", { name: "แก้ไขงาน" }).click();
   const generatedForm = page.locator("form").filter({ hasText: "ชื่องาน" }).first();
   await generatedForm.getByLabel("ชื่องาน").fill(editedTitle);
-  await generatedForm.getByLabel("สินค้า", { exact: true }).selectOption({
-    label: alternateProductName,
-  });
+  const generatedProductSelect = await getProductSelect(generatedForm);
+  const alternateProductValue = await getExactOptionValue(
+    generatedProductSelect,
+    alternateProductName,
+  );
+  await generatedProductSelect.selectOption({ value: alternateProductValue });
+  await expectExactSelectedOption(
+    generatedProductSelect,
+    alternateProductValue,
+    alternateProductName,
+  );
   await generatedForm.getByLabel("จำนวนแบตช์").fill("1.5");
   await generatedForm.getByLabel("เวลาที่กำหนด").fill("2030-04-10T07:30");
   await generatedForm.getByLabel("ระยะเวลา (นาที)").fill("50");
@@ -190,7 +240,17 @@ test("owner runs the complete production timeline lifecycle", async ({ page }, t
   await editedTask.getByRole("button", { name: "แก้ไขงาน" }).click();
   const editedVerificationForm = page.locator("form").filter({ hasText: "ชื่องาน" }).first();
   await expect(editedVerificationForm.getByLabel("ชื่องาน")).toHaveValue(editedTitle);
-  await expect(editedVerificationForm.getByLabel("สินค้า", { exact: true }).locator("option:checked")).toHaveText(alternateProductName);
+  const persistedProductSelect = await getProductSelect(editedVerificationForm);
+  const persistedAlternateProductValue = await getExactOptionValue(
+    persistedProductSelect,
+    alternateProductName,
+  );
+  expect(persistedAlternateProductValue).toBe(alternateProductValue);
+  await expectExactSelectedOption(
+    persistedProductSelect,
+    alternateProductValue,
+    alternateProductName,
+  );
   await expect(editedVerificationForm.getByLabel("จำนวนแบตช์")).toHaveValue("1.5");
   await expect(editedVerificationForm.getByLabel("เวลาที่กำหนด")).toHaveValue("2030-04-10T07:30");
   await expect(editedVerificationForm.getByLabel("ระยะเวลา (นาที)")).toHaveValue("50");
