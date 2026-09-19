@@ -16,6 +16,8 @@
 - Fix round 2 GREEN: `createProductAction` now invalidates `/production/templates/new`; `createProduct` explicitly waits for the `/products` POST and verifies the product after a fresh `/products` navigation. This is valid cache hygiene, but it was not the eventual cause of the helper timeout.
 - Fix round 3 RED: controller evidence showed the expected product option was present in the Playwright snapshot; the timeout occurred while `select.getByRole("option").filter({ hasText }).first().textContent()` scanned the large native select. No helper-level test exists beyond the authenticated Playwright scenario, so the failure was isolated from snapshot and persistence evidence.
 - Fix round 3 GREEN: the Product Template helper now calls direct `selectOption({ label: input.productName })` on the exact Product combobox and asserts the selected option. No sleeps or broad locator weakening were added.
+- Fix round 4 RED: the authenticated controller rerun again reached `/production/templates/new`; Supabase and the Playwright error snapshot both contained the exact expected active product, but `selectOption({ label: input.productName })` timed out on the large native select. This proves the remaining failure is Playwright label resolution at the helper boundary rather than persistence, cache invalidation, or selector ambiguity.
+- Fix round 4 implementation/static GREEN: the unchanged `createProductionTemplate` API now evaluates the exact Product combobox once, scans `HTMLSelectElement.options` for trimmed text equality, and fails explicitly unless exactly one option matches. It then selects by the discovered value and asserts the exact selected value and label. A separate helper unit test was not added because exercising this Playwright/DOM boundary locally would require exporting a test-only seam or mocking the behavior under test; the authenticated production scenario remains the behavioral RED/covering test for the controller rerun.
 
 ## Verification commands and results
 
@@ -33,11 +35,16 @@ All commands used the bundled Node PATH:
 | `pnpm test:e2e tests/e2e/production.spec.ts` (authenticated pre-fix run) | RED on both phone and desktop at the ambiguous `getByLabel("สินค้า")` selector in `tests/fixtures/owner.ts`; this is the confirmed application-test finding fixed in this round |
 | `pnpm test:e2e tests/e2e/production.spec.ts` (fix-round-2 post-fix attempt) | BLOCKED after the configured service went offline; loopback checks returned connection refused for ports 54321 and 54322, DNS resolution for the configured Supabase host failed, and the approval guard rejected remote authenticated mutation against the symlinked `.env.local` target |
 | `pnpm test:e2e tests/e2e/production.spec.ts` (fix-round-3) | Pending controller rerun after this commit; the local environment cannot reach the configured authenticated Supabase target |
+| `pnpm exec eslint tests/fixtures/owner.ts` (fix-round-4) | PASS |
+| `pnpm typecheck` (fix-round-4) | PASS |
+| `pnpm test:run 'src/app/(app)/products/actions.test.ts'` (fix-round-4) | PASS, 1 file / 1 test; preserves the production-template cache invalidation regression |
+| `pnpm test:e2e tests/e2e/production.spec.ts --list` (fix-round-4) | PASS, both phone and desktop production scenarios discovered |
+| `pnpm test:e2e tests/e2e/production.spec.ts` (fix-round-4) | Pending controller authenticated rerun; this environment is intentionally limited to static/focused verification |
 | planning + shopping targeted E2E and full `pnpm test:e2e` | Pending controller production GREEN; no safe local replacement exists |
 | `pnpm build` | PASS, Next.js 16.3.2 webpack build; route output includes `/production/templates`, `/production/templates/[id]`, `/production/templates/new`, and `/cycles/[id]/production` |
 | `git diff --check` | PASS |
 
-The pre-fix E2E run used the already-authorized configured environment and proved authentication/schema startup before exposing the selector RED. Later controller inspection proved the product existed, was active/owned, and was present in the browser snapshot; the remaining failure was the helper’s expensive native-option scan. The controller will run the direct-selector fix against the configured service after commit.
+The pre-fix E2E run used the already-authorized configured environment and proved authentication/schema startup before exposing the selector RED. Later controller inspection proved the product existed, was active/owned, and was present in the browser snapshot. Fix round 4 further isolated label-based `selectOption` as the remaining timeout boundary. The controller will run the exact DOM-option/value-selection fix against the configured service after commit.
 
 ## Migration inspection
 
@@ -64,8 +71,9 @@ The pre-fix E2E run used the already-authorized configured environment and prove
 - `186d5eb test: harden phase 4a e2e evidence` — fix-round selector/assertion corrections and updated migration/E2E evidence.
 - `b53ad25 fix: invalidate production template product options` — fix-round-2 cache invalidation, helper synchronization, regression test, and report.
 - `39b4995 fix: select production product option directly` — fix-round-3 direct native-select synchronization and corrected E2E root-cause evidence.
+- `bb5f43e fix: resolve exact production product option` — fix-round-4 unique exact-text DOM lookup, value-based selection, and exact selected label/value assertions.
 
-`next-env.d.ts` was restored to the tracked `.next/types` references after Next dev/build generation. Final status is clean after the final report commit. Overall status: fix-round-3 selector implementation and local/static verification complete; authenticated E2E awaits the controller rerun because the configured Supabase service is unavailable from this environment.
+`next-env.d.ts` remains at the tracked `.next/types` references. Overall status: fix-round-4 helper implementation and local static/focused verification complete; authenticated production E2E awaits the controller rerun.
 
 ## Concerns
 
