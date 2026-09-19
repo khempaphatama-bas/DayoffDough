@@ -18,6 +18,8 @@
 - Fix round 3 GREEN: the Product Template helper now calls direct `selectOption({ label: input.productName })` on the exact Product combobox and asserts the selected option. No sleeps or broad locator weakening were added.
 - Fix round 4 RED: the authenticated controller rerun again reached `/production/templates/new`; Supabase and the Playwright error snapshot both contained the exact expected active product, but `selectOption({ label: input.productName })` timed out on the large native select. This proves the remaining failure is Playwright label resolution at the helper boundary rather than persistence, cache invalidation, or selector ambiguity.
 - Fix round 4 implementation/static GREEN: the unchanged `createProductionTemplate` API now evaluates the exact Product combobox once, scans `HTMLSelectElement.options` for trimmed text equality, and fails explicitly unless exactly one option matches. It then selects by the discovered value and asserts the exact selected value and label. A separate helper unit test was not added because exercising this Playwright/DOM boundary locally would require exporting a test-only seam or mocking the behavior under test; the authenticated production scenario remains the behavioral RED/covering test for the controller rerun.
+- Fix round 5 RED: controller evidence showed the exact active Product option in both Supabase and every Playwright error snapshot, while role scanning, label-based `selectOption`, and label-locator `evaluate` all timed out when they began from `page.getByLabel("สินค้า", { exact: true })`. The remaining root cause was therefore the expensive accessibility-label locator boundary over the large native select, not option data or matching.
+- Fix round 5 implementation/static GREEN: `createProductionTemplate` now scopes directly to the unique visible `main form select[name="productId"]`, performs one DOM option scan with exact trimmed-text equality and distinct zero/multiple-match errors, selects by the returned value, and asserts the exact checked value and label through CSS locators. The helper signature, cache invalidation regression, exact matching, and existing authenticated behavioral scenario are unchanged; no force, sleep, substring match, or environment-specific identifier was added.
 
 ## Verification commands and results
 
@@ -40,11 +42,19 @@ All commands used the bundled Node PATH:
 | `pnpm test:run 'src/app/(app)/products/actions.test.ts'` (fix-round-4) | PASS, 1 file / 1 test; preserves the production-template cache invalidation regression |
 | `pnpm test:e2e tests/e2e/production.spec.ts --list` (fix-round-4) | PASS, both phone and desktop production scenarios discovered |
 | `pnpm test:e2e tests/e2e/production.spec.ts` (fix-round-4) | Pending controller authenticated rerun; this environment is intentionally limited to static/focused verification |
+| `pnpm exec eslint tests/fixtures/owner.ts` (fix-round-5) | PASS |
+| `pnpm lint` (fix-round-5) | PASS, 0 errors / 16 existing unused-variable warnings |
+| `pnpm typecheck` (fix-round-5) | PASS |
+| `pnpm test:run 'src/app/(app)/products/actions.test.ts'` (fix-round-5) | PASS, 1 file / 1 test; preserves the production-template cache invalidation regression |
+| Explicit 18-file Phase 4A focused Vitest command with one fork worker (fix-round-5) | PASS, 18 files / 173 tests |
+| `pnpm test:e2e tests/e2e/production.spec.ts --list` (fix-round-5) | PASS, both phone and desktop production scenarios discovered |
+| `git diff --check` (fix-round-5) | PASS |
+| `pnpm test:e2e tests/e2e/production.spec.ts` (fix-round-5) | Pending controller authenticated rerun against the configured service |
 | planning + shopping targeted E2E and full `pnpm test:e2e` | Pending controller production GREEN; no safe local replacement exists |
 | `pnpm build` | PASS, Next.js 16.3.2 webpack build; route output includes `/production/templates`, `/production/templates/[id]`, `/production/templates/new`, and `/cycles/[id]/production` |
 | `git diff --check` | PASS |
 
-The pre-fix E2E run used the already-authorized configured environment and proved authentication/schema startup before exposing the selector RED. Later controller inspection proved the product existed, was active/owned, and was present in the browser snapshot. Fix round 4 further isolated label-based `selectOption` as the remaining timeout boundary. The controller will run the exact DOM-option/value-selection fix against the configured service after commit.
+The pre-fix E2E run used the already-authorized configured environment and proved authentication/schema startup before exposing the selector RED. Later controller inspection proved the product existed, was active/owned, and was present in the browser snapshot. Fix round 5 removes the last accessibility-label lookup from the large Product select while retaining exact DOM option/value selection. The controller will run the structural-locator fix against the configured service after commit.
 
 ## Migration inspection
 
@@ -72,8 +82,9 @@ The pre-fix E2E run used the already-authorized configured environment and prove
 - `b53ad25 fix: invalidate production template product options` — fix-round-2 cache invalidation, helper synchronization, regression test, and report.
 - `39b4995 fix: select production product option directly` — fix-round-3 direct native-select synchronization and corrected E2E root-cause evidence.
 - `bb5f43e fix: resolve exact production product option` — fix-round-4 unique exact-text DOM lookup, value-based selection, and exact selected label/value assertions.
+- `db35e0e fix: scope production product selection structurally` — fix-round-5 structural form/select locator, uniqueness/visibility guard, and CSS-only checked-option assertions.
 
-`next-env.d.ts` remains at the tracked `.next/types` references. Overall status: fix-round-4 helper implementation and local static/focused verification complete; authenticated production E2E awaits the controller rerun.
+`next-env.d.ts` remains at the tracked `.next/types` references. Overall status: fix-round-5 helper implementation and local static/focused verification complete; authenticated production E2E awaits the controller rerun.
 
 ## Concerns
 
