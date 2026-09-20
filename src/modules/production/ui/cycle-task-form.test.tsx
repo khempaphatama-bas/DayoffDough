@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 vi.mock("@/app/(app)/cycles/[id]/production/actions", () => ({
@@ -65,6 +65,48 @@ describe("CycleTaskForm", () => {
     expect(screen.queryByLabelText("เหตุผลที่ข้าม")).not.toBeInTheDocument();
     await user.selectOptions(screen.getByLabelText("สถานะ"), "SKIPPED");
     expect(screen.getByLabelText("เหตุผลที่ข้าม")).toBeVisible();
+  });
+
+  it.each([
+    { mode: "create" as const, saveLabel: "สร้างงาน" },
+    { mode: "edit" as const, saveLabel: "บันทึกงาน" },
+  ])("keeps $mode save and cancel actions above the mobile navigation", ({ mode, saveLabel }) => {
+    const task = mode === "edit" ? {
+      id: "72000000-0000-4000-8000-000000000003",
+      taskGenerationId: generationId,
+      origin: "TEMPLATE" as const,
+      sourceTemplateName: "หลัก",
+      sourceActivityName: "อบ",
+      title: "อบ",
+      productId: null,
+      productName: null,
+      batchCount: null,
+      scheduledAt: new Date("2026-09-10T17:30:00.000Z"),
+      estimatedDurationMinutes: 45,
+      notes: null,
+      sequence: 1,
+      status: "PENDING" as const,
+      skipReason: null,
+    } : undefined;
+
+    render(<CycleTaskForm mode={mode} cycleId={cycleId} taskGenerationId={generationId} products={[]} {...(task ? { task } : {})} onCancel={vi.fn()} />);
+
+    const action = screen.getByTestId("cycle-task-action");
+    expect(action.closest("form")).toHaveClass("pb-24", "md:pb-5");
+    expect(action).toHaveClass(
+      "sticky",
+      "bottom-20",
+      "z-20",
+      "border-t",
+      "bg-stone-50/95",
+      "backdrop-blur",
+      "md:static",
+      "md:border-0",
+      "md:bg-transparent",
+      "md:p-0",
+    );
+    expect(within(action).getByRole("button", { name: saveLabel })).toBeEnabled();
+    expect(within(action).getByRole("button", { name: "ยกเลิก" })).toBeEnabled();
   });
 
   it("keeps one manual creation request ID through validation failure and rotates it after success", async () => {

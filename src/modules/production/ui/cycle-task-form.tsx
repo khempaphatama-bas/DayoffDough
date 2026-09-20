@@ -128,7 +128,7 @@ export function CycleTaskForm({
   }
 
   return (
-    <form key={state.error ? JSON.stringify(state.values) : "stable"} className="grid gap-4 rounded-3xl border border-stone-200 bg-white p-5 shadow-sm" onSubmit={submit}>
+    <form key={state.error ? JSON.stringify(state.values) : "stable"} className="grid gap-4 rounded-3xl border border-stone-200 bg-white p-5 pb-24 shadow-sm md:pb-5" onSubmit={submit}>
       <input name="cycleId" type="hidden" value={cycleId} />
       <input name="taskGenerationId" type="hidden" value={taskGenerationId} />
       {mode === "edit" && task ? <input name="taskId" type="hidden" value={task.id} /> : null}
@@ -187,7 +187,7 @@ export function CycleTaskForm({
       </label>
       {state.error ? <p className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-800" role="alert">{state.error}</p> : null}
       {state.saved ? <p aria-live="polite" className="rounded-xl bg-emerald-50 px-4 py-3 text-sm text-emerald-800">บันทึกงานแล้ว</p> : null}
-      <div className="flex flex-wrap gap-3">
+      <div className="sticky bottom-20 z-20 -mx-5 flex flex-wrap gap-3 border-t border-stone-200 bg-stone-50/95 p-4 backdrop-blur md:static md:mx-0 md:border-0 md:bg-transparent md:p-0" data-testid="cycle-task-action">
         <button className="min-h-12 rounded-xl bg-amber-800 px-5 font-bold text-white disabled:opacity-60" disabled={pending} type="submit">{pending ? "กำลังบันทึก…" : mode === "create" ? "สร้างงาน" : "บันทึกงาน"}</button>
         {onCancel ? <button className="min-h-12 rounded-xl border border-stone-400 px-5 font-bold text-stone-800" onClick={onCancel} type="button">ยกเลิก</button> : null}
       </div>
