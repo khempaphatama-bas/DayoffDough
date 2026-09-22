@@ -115,6 +115,7 @@ UI และ Server Action ห้ามเขียน `orders`, `bake_cycles` �
 - วันที่และเวลาเป็นเวลาท้องถิ่น `Asia/Bangkok`; ไม่แปลง time-only เป็น UTC
 - ค่า null หมายถึงยังไม่กำหนดเวลานัดส่ง
 - เวลานัดส่งเป็น production/planning-relevant input ต้องรวมใน planning source, canonical fingerprint และ snapshot writer
+- canonical fingerprint ต้องไม่เพิ่ม key ของเวลานัดส่งเมื่อค่าเป็น null เพื่อให้ fingerprint ของข้อมูลเดิมที่ไม่มีเวลายังคงเสถียร; เมื่อมีเวลาจึงรวมค่า normalized `HH:mm` ใน payload
 - เมื่อ Cycle ถูกล็อกแล้ว การแก้เวลานัดส่งต้องใช้ unlock/re-lock เช่นเดียวกับ confirmed delivery date
 - historical Planning Snapshot เดิมคงค่า null และไม่ถูกเขียนย้อนหลัง
 
@@ -137,17 +138,19 @@ Constraints และ indexes:
 - composite owner foreign key `(owner_id, order_item_id)` ไป `order_items(owner_id, id)` และ `ON DELETE RESTRICT`
 - check `packed_quantity >= 0`
 - owner-scoped index สำหรับ join และ command lookup
-- Packing progress ไม่ถูก hard-deleteจาก application; การตั้งกลับเป็นศูนย์คือ correction ที่ audit ได้ผ่าน timestamps และ logs ของระบบ แต่ไม่ใช่ ledger
+- Packing progress ไม่ถูก hard-deleteจาก application; การแก้กลับเป็นศูนย์คือ correction ของค่าปัจจุบัน ไม่ใช่ event ledger
 
 Database guard ต้องตรวจข้ามตารางว่า:
 
 - Order Item ยัง active และเป็นของ owner/order/cycle เดียวกัน
 - `packed_quantity <= order_items.quantity`
 - Cycle เป็น `IN_PRODUCTION`
-- Order เป็น `IN_PRODUCTION | PACKED`
+- Order เป็น `IN_PRODUCTION`; Order ที่ `PACKED` ต้องผ่านคำสั่ง “เปิดแก้ไขการแพ็ก” เพื่อย้อนสถานะก่อน
 - Order ไม่เป็น `DELIVERED | CANCELLED`
 
 Application command ต้องตรวจเงื่อนไขเดิมภายใต้ row lock ก่อนเขียน Database guard เป็นแนวป้องกันสุดท้ายสำหรับ path ที่ไม่ได้ผ่าน command
+
+เพิ่ม database trigger สำหรับ Order fulfillment transition ด้วย เพื่อบังคับ adjacent transitions, packing completeness, Cycle state และ correction exception แม้มีการเขียนตรงผ่าน Data API ส่วน migration backfill ต้องทำก่อนเปิด trigger นี้
 
 ### 6.3 Order และ Payment state
 
@@ -241,7 +244,7 @@ Commands หลัก:
 1. `startCycleOperations(ownerId, cycleId)`
 2. `confirmOrders(ownerId, cycleId, orderIds)`
 3. `startOrders(ownerId, cycleId, orderIds)`
-4. `setPackedQuantity(ownerId, cycleId, orderItemId, packedQuantity, expectedUpdatedAt)`
+4. `setPackedQuantity(ownerId, cycleId, orderItemId, packedQuantity, expectedPackedQuantity)`
 5. `confirmOrderPacked(ownerId, cycleId, orderId)`
 6. `reopenOrderPacking(ownerId, cycleId, orderId)`
 7. `setOrderAmountPaid(ownerId, orderId, targetAmountPaidSatang, expectedAmountPaidSatang)`
@@ -256,6 +259,7 @@ Commands หลัก:
 - batch command สำเร็จทั้งหมดหรือ rollback ทั้งหมด
 - คำสั่งแบบ set ใช้ absolute target จึง retry ค่าเดิมได้โดยไม่เพิ่มซ้ำ
 - Payment ใช้ `expectedAmountPaidSatang`; ถ้าค่าปัจจุบันเท่ากับ target แล้วให้ถือว่า exact retry สำเร็จ ถ้าค่าปัจจุบันไม่เท่ากับ expected หรือ target ให้ตอบ stale conflict
+- Packing ใช้หลักเดียวกันกับ `expectedPackedQuantity`; progress ที่ยังไม่มีแถวอ่านเป็นศูนย์และ command ล็อก Order Item ก่อนสร้างแถวเพื่อป้องกัน concurrent insert
 - State transition exact retry ที่ปลายทางเดิมแล้วคืน success; transition จากสถานะอื่นที่ไม่ใช่ต้นทาง/ปลายทางที่คาดให้ error
 - ทุก mutation ตรวจ owner, Cycle membership, current snapshot/generation และ lifecycle ภายใน transaction
 
@@ -265,6 +269,8 @@ Commands หลัก:
 
 - Generic Cycle status service ห้าม `IN_PRODUCTION -> COMPLETED` โดยตรง; ต้อง delegate ไป completion command
 - Generic Order fulfillment service ห้าม forward jump และต้องใช้ packing guard สำหรับ `PACKED`/`DELIVERED`
+- Database trigger ของ `orders.fulfillment_status` ต้องบังคับ transition matrix เดียวกัน เพื่อไม่ให้ Data API เป็น bypass
+- Database trigger ของ `bake_cycles.status` ต้องตรวจ completion gate เมื่อเปลี่ยนเป็น `COMPLETED`; generic path จึงไม่สามารถหลบ guarded command ได้แม้เขียนตรง
 - Order full-edit path ใน Cycle ที่ locked/production/completed ยังแก้ Payment ได้ แต่แก้ production input หรือเวลานัดส่งไม่ได้
 - Quick Payment และ Order full-edit ใช้กฎยอดไม่เกินเดียวกัน
 - Planning unlock action ใช้ Operations unlock guard ก่อน supersede snapshot
@@ -407,11 +413,12 @@ UI map เป็นข้อความไทยที่บอกสิ่ง�
 Migration ถัดไปต้อง:
 
 1. เพิ่ม `confirmed_delivery_time` แบบ nullable ใน `orders` และ `cycle_order_snapshots`
-2. สร้าง `order_item_packing_progress`, indexes, FK, RLS และ integrity trigger
+2. สร้าง `order_item_packing_progress`, indexes, FK และ RLS โดยยังไม่เปิด operational-state trigger
 3. backfill Packing progress ของ active items ใน Order ที่เป็น `PACKED | DELIVERED` ให้เท่ากับ quantity เพื่อให้ข้อมูลเดิมสอดคล้องกับสถานะ
-4. ไม่ backfill Order ที่ `NEW | CONFIRMED | IN_PRODUCTION | CANCELLED`; query ใช้ `0` เมื่อไม่มี progress row
-5. ไม่แก้ historical Planning Snapshot เดิม; `confirmed_delivery_time` เป็น null
-6. เพิ่ม schema exports และ migration integrity tests
+4. เปิด Packing, Order fulfillment และ Cycle completion integrity triggers หลัง backfill เสร็จ
+5. ไม่ backfill Order ที่ `NEW | CONFIRMED | IN_PRODUCTION | CANCELLED`; query ใช้ `0` เมื่อไม่มี progress row
+6. ไม่แก้ historical Planning Snapshot เดิม; `confirmed_delivery_time` เป็น null
+7. เพิ่ม schema exports และ migration integrity tests
 
 Cycle `COMPLETED` ที่มี Order ยังไม่ `DELIVERED` จาก behavior เดิมไม่ถูกเขียนประวัติย้อนหลัง Operations แสดง read-only พร้อม integrity warning ส่วน completion gate ใหม่ใช้กับการ complete หลัง deploy เท่านั้น
 
