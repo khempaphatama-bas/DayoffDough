@@ -8,6 +8,7 @@ import {
   integer,
   pgEnum,
   pgTable,
+  time,
   timestamp,
   unique,
   uniqueIndex,
@@ -70,6 +71,7 @@ export const orders = pgTable(
     confirmedDeliveryDate: date("confirmed_delivery_date", {
       mode: "string",
     }),
+    confirmedDeliveryTime: time("confirmed_delivery_time"),
     deliveryMethodId: uuid("delivery_method_id"),
     deliveryFeeChargedSatang: integer("delivery_fee_charged_satang")
       .notNull()

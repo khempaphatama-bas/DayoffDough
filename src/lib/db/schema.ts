@@ -47,6 +47,7 @@ export {
   cyclePurchaseEntries,
   cycleShoppingItems,
 } from "@/modules/shopping/db/schema";
+export { orderItemPackingProgress } from "@/modules/operations/db/schema";
 export {
   deliveryFeePayer,
   deliveryFeePayerEnum,
