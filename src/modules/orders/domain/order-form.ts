@@ -12,6 +12,7 @@ export type OrderFormValues = Readonly<{
   sourceChannel: "" | "INSTAGRAM" | "FACEBOOK" | "PHONE" | "OTHER";
   requestedDeliveryDate: string;
   confirmedDeliveryDate: string;
+  confirmedDeliveryTime: string;
   deliveryMethodId: string;
   deliveryFeeChargedBaht: string;
   deliveryCostBaht: string;
@@ -35,6 +36,10 @@ const uuidSchema = z.string().uuid("กรุณาเลือกรายก�
 const POSTGRES_INTEGER_MAX = 2_147_483_647;
 const optionalUuidSchema = z.union([z.literal(""), uuidSchema]);
 const optionalDateSchema = z.union([z.literal(""), z.iso.date()]);
+const optionalLocalTimeSchema = z.union([
+  z.literal(""),
+  z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/, "เวลานัดส่งไม่ถูกต้อง"),
+]);
 const bahtSchema = z
   .string()
   .regex(/^\d+(?:\.\d{1,2})?$/, "กรุณากรอกจำนวนเงินบาทไม่เกิน 2 ตำแหน่ง")
@@ -70,6 +75,7 @@ export const orderFormSchema = z
     sourceChannel: z.enum(["", "INSTAGRAM", "FACEBOOK", "PHONE", "OTHER"]),
     requestedDeliveryDate: optionalDateSchema,
     confirmedDeliveryDate: optionalDateSchema,
+    confirmedDeliveryTime: optionalLocalTimeSchema,
     deliveryMethodId: optionalUuidSchema,
     deliveryFeeChargedBaht: bahtSchema,
     deliveryCostBaht: bahtSchema,
@@ -93,12 +99,18 @@ export const orderFormSchema = z
   .superRefine((values, context) => {
     const discount = bahtSchema.safeParse(values.discountBaht);
     const delivery = bahtSchema.safeParse(values.deliveryFeeChargedBaht);
+    const amountPaid = bahtSchema.safeParse(values.amountPaidBaht);
     const validItems = values.items.every(
       (item) =>
         quantitySchema.safeParse(item.quantity).success &&
         bahtSchema.safeParse(item.unitPriceBaht).success,
     );
-    if (!discount.success || !delivery.success || !validItems) return;
+    if (
+      !discount.success ||
+      !delivery.success ||
+      !amountPaid.success ||
+      !validItems
+    ) return;
 
     const discountSatang = BigInt(parseBahtToSatang(discount.data));
     const deliverySatang = BigInt(parseBahtToSatang(delivery.data));
@@ -114,8 +126,25 @@ export const orderFormSchema = z
         path: ["discountBaht"],
         message: "ส่วนลดต้องไม่เกินยอดสินค้าและค่าส่ง",
       });
+      return;
+    }
+    const grandTotalSatang = subtotalSatang + deliverySatang - discountSatang;
+    if (BigInt(parseBahtToSatang(amountPaid.data)) > grandTotalSatang) {
+      context.addIssue({
+        code: "custom",
+        path: ["amountPaidBaht"],
+        message: "ยอดชำระแล้วต้องไม่เกินยอดสุทธิ",
+      });
     }
   }) satisfies z.ZodType<OrderFormValues>;
+
+export function normalizeConfirmedDeliveryTime(value: string): string {
+  const match = /^(?:([01]\d|2[0-3]):([0-5]\d)|([01]\d|2[0-3]):([0-5]\d):00)$/.exec(
+    value,
+  );
+  if (!match) throw new Error("Invalid confirmed delivery time");
+  return `${match[1] ?? match[3]}:${match[2] ?? match[4]}`;
+}
 
 export function normalizeOrderForm(values: OrderFormValues): OrderInput {
   return {
@@ -126,6 +155,10 @@ export function normalizeOrderForm(values: OrderFormValues): OrderInput {
       values.requestedDeliveryDate === "" ? null : values.requestedDeliveryDate,
     confirmedDeliveryDate:
       values.confirmedDeliveryDate === "" ? null : values.confirmedDeliveryDate,
+    confirmedDeliveryTime:
+      values.confirmedDeliveryTime === ""
+        ? null
+        : normalizeConfirmedDeliveryTime(values.confirmedDeliveryTime),
     deliveryMethodId:
       values.deliveryMethodId === "" ? null : values.deliveryMethodId,
     deliveryFeeChargedSatang: parseBahtToSatang(

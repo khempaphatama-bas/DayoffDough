@@ -103,6 +103,7 @@ export async function persistPlanningSnapshot(
           sourceChannel: order.sourceChannel,
           requestedDeliveryDate: order.requestedDeliveryDate,
           confirmedDeliveryDate: order.confirmedDeliveryDate,
+          confirmedDeliveryTime: order.confirmedDeliveryTime,
           deliveryLocation: order.deliveryLocation,
           deliveryNote: order.deliveryNote,
           specialInstructions: order.specialInstructions,

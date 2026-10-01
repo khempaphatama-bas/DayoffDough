@@ -44,6 +44,7 @@ const VALID_PAYLOAD = {
   sourceChannel: "INSTAGRAM",
   requestedDeliveryDate: "2026-08-30",
   confirmedDeliveryDate: "2026-08-30",
+  confirmedDeliveryTime: "14:30",
   deliveryMethodId: METHOD_ID,
   deliveryFeeChargedBaht: "120",
   deliveryCostBaht: "120",
@@ -169,6 +170,26 @@ describe("saveOrderAction", () => {
       fieldErrors: {
         discountBaht: "ส่วนลดต้องไม่เกินยอดสินค้าและค่าส่ง",
       },
+    });
+    expect(mocks.create).not.toHaveBeenCalled();
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+
+  it("returns a Thai delivery-time error without mutating", async () => {
+    const data = formData();
+    data.set(
+      "payload",
+      JSON.stringify({
+        ...VALID_PAYLOAD,
+        confirmedDeliveryTime: "14:30:01",
+      }),
+    );
+
+    await expect(
+      saveOrderAction({ error: null, fieldErrors: {} }, data),
+    ).resolves.toEqual({
+      error: "กรุณาตรวจสอบข้อมูลออเดอร์",
+      fieldErrors: { confirmedDeliveryTime: "เวลานัดส่งไม่ถูกต้อง" },
     });
     expect(mocks.create).not.toHaveBeenCalled();
     expect(mocks.update).not.toHaveBeenCalled();

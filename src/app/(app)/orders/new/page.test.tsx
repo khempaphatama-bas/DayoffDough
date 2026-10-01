@@ -66,6 +66,7 @@ describe("OrdersNewPage", () => {
 
     expect(screen.getByRole("heading", { name: "สร้างออเดอร์" })).toBeInTheDocument();
     expect(screen.getByLabelText("รอบผลิต")).toHaveValue(SECOND_CYCLE_ID);
+    expect(screen.getByLabelText("เวลานัดส่ง")).toHaveValue("");
     expect(screen.getByLabelText("จำนวน รายการที่ 1")).toHaveValue(1);
     expect(screen.getByLabelText("ราคาต่อหน่วย รายการที่ 1 (บาท)")).toHaveValue("0.00");
   });

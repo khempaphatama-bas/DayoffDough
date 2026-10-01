@@ -37,6 +37,7 @@ function sourceFixture(): PlanningSourceData {
         deliveryRequiresLocation: true,
         requestedDeliveryDate: "2026-08-30",
         confirmedDeliveryDate: null,
+        confirmedDeliveryTime: null,
         deliveryLocation: "กรุงเทพฯ",
         deliveryNote: null,
         specialInstructions: null,
@@ -78,6 +79,7 @@ function sourceFixture(): PlanningSourceData {
         deliveryRequiresLocation: false,
         requestedDeliveryDate: null,
         confirmedDeliveryDate: "2026-08-30",
+        confirmedDeliveryTime: null,
         deliveryLocation: null,
         deliveryNote: null,
         specialInstructions: null,
@@ -199,6 +201,36 @@ function sourceFixture(): PlanningSourceData {
 }
 
 describe("planning source fingerprint", () => {
+  it("keeps the legacy fingerprint when optional delivery time is null", () => {
+    const withNull = sourceFixture();
+    const legacy = {
+      ...withNull,
+      orders: withNull.orders.map((order) => {
+        const legacyOrder: Record<string, unknown> = { ...order };
+        delete legacyOrder.confirmedDeliveryTime;
+        return legacyOrder;
+      }),
+    } as unknown as PlanningSourceData;
+
+    expect(createPlanningFingerprint(withNull)).toBe(
+      createPlanningFingerprint(legacy),
+    );
+  });
+
+  it("changes the fingerprint when the confirmed delivery time changes", () => {
+    const source = sourceFixture();
+    const sourceAt = (confirmedDeliveryTime: string): PlanningSourceData => ({
+      ...source,
+      orders: source.orders.map((order, index) =>
+        index === 0 ? { ...order, confirmedDeliveryTime } : order
+      ),
+    });
+
+    expect(createPlanningFingerprint(sourceAt("09:00"))).not.toBe(
+      createPlanningFingerprint(sourceAt("10:00")),
+    );
+  });
+
   it("changes when an active activity time changes", () => {
     const source = sourceFixture();
     const template = source.productionTemplates[0]!;

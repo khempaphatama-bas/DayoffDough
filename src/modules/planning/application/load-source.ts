@@ -13,6 +13,7 @@ import {
   inventoryPrices,
 } from "@/modules/inventory/db/schema";
 import { orderItems, orders } from "@/modules/orders/db/schema";
+import { normalizeConfirmedDeliveryTime } from "@/modules/orders/domain/order-form";
 import type { PlanningSourceData } from "@/modules/planning/domain/types";
 import {
   products,
@@ -413,6 +414,10 @@ export async function loadPlanningSource(
           deliveryMethod?.requiresDeliveryLocation ?? false,
         requestedDeliveryDate: order.requestedDeliveryDate,
         confirmedDeliveryDate: order.confirmedDeliveryDate,
+        confirmedDeliveryTime:
+          order.confirmedDeliveryTime === null
+            ? null
+            : normalizeConfirmedDeliveryTime(order.confirmedDeliveryTime),
         deliveryLocation: order.deliveryLocation,
         deliveryNote: order.deliveryNote,
         specialInstructions: order.specialInstructions,

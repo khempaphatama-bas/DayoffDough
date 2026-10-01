@@ -95,6 +95,7 @@ function editableOrderInput(
     sourceChannel: detail.sourceChannel,
     requestedDeliveryDate: detail.requestedDeliveryDate,
     confirmedDeliveryDate: detail.confirmedDeliveryDate,
+    confirmedDeliveryTime: detail.confirmedDeliveryTime,
     deliveryMethodId: detail.deliveryMethodId,
     deliveryFeeChargedSatang: detail.deliveryFeeChargedSatang,
     deliveryCostSatang: detail.deliveryCostSatang,

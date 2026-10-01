@@ -60,6 +60,7 @@ const DETAIL: OrderDetail = {
   sourceChannel: "INSTAGRAM",
   requestedDeliveryDate: "2026-08-30",
   confirmedDeliveryDate: "2026-08-30",
+  confirmedDeliveryTime: "14:30",
   deliveryMethodId: METHOD_ID,
   deliveryMethodName: "KEX เก่า",
   deliveryFeeChargedSatang: 12000,
@@ -191,6 +192,8 @@ describe("OrderDetailPage", () => {
     expect(screen.getByLabelText("ลูกค้า")).toHaveValue(CUSTOMER_ID);
     expect(screen.getByLabelText("รอบผลิต")).toHaveValue(CYCLE_ID);
     expect(screen.getByLabelText("วิธีจัดส่ง")).toHaveValue(METHOD_ID);
+    expect(screen.getByLabelText("เวลานัดส่ง")).toHaveValue("14:30");
+    expect(screen.getByLabelText("เวลานัดส่ง")).toBeDisabled();
     expect(screen.getAllByRole("option", { name: /Focaccia เก่า/ })).toHaveLength(2);
     expect(screen.getByLabelText("ราคาต่อหน่วย รายการที่ 1 (บาท)")).toHaveValue("220.50");
     expect(screen.getByLabelText("ต้นทุนจัดส่ง (บาท)")).toHaveValue("115.50");

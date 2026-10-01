@@ -70,6 +70,7 @@ function makeOrder(
     sourceChannel: "INSTAGRAM",
     requestedDeliveryDate: "2026-08-30",
     confirmedDeliveryDate: "2026-08-30",
+    confirmedDeliveryTime: null,
     deliveryMethodId: null,
     deliveryMethodName: null,
     deliveryFeeChargedSatang: 12000,

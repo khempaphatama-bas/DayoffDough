@@ -52,6 +52,7 @@ export default async function OrderDetailPage({
     sourceChannel: order.sourceChannel ?? "",
     requestedDeliveryDate: order.requestedDeliveryDate ?? "",
     confirmedDeliveryDate: order.confirmedDeliveryDate ?? "",
+    confirmedDeliveryTime: order.confirmedDeliveryTime ?? "",
     deliveryMethodId: order.deliveryMethodId ?? "",
     deliveryFeeChargedBaht: formatSatangAsBaht(
       order.deliveryFeeChargedSatang,

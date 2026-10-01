@@ -96,6 +96,7 @@ function orderInput(
     sourceChannel: "INSTAGRAM",
     requestedDeliveryDate: "2026-08-30",
     confirmedDeliveryDate: "2026-08-30",
+    confirmedDeliveryTime: null,
     deliveryMethodId: masters.method.id,
     deliveryFeeChargedSatang: 12000,
     deliveryCostSatang: 12000,
@@ -133,6 +134,7 @@ function orderDetailInput(
     sourceChannel: detail.sourceChannel,
     requestedDeliveryDate: detail.requestedDeliveryDate,
     confirmedDeliveryDate: detail.confirmedDeliveryDate,
+    confirmedDeliveryTime: detail.confirmedDeliveryTime,
     deliveryMethodId: detail.deliveryMethodId,
     deliveryFeeChargedSatang: detail.deliveryFeeChargedSatang,
     deliveryCostSatang: detail.deliveryCostSatang,
@@ -441,6 +443,7 @@ describe("order service", () => {
       ["source channel", { sourceChannel: "PHONE" }],
       ["requested date", { requestedDeliveryDate: "2026-08-31" }],
       ["confirmed date", { confirmedDeliveryDate: "2026-08-31" }],
+      ["confirmed time", { confirmedDeliveryTime: "14:30" }],
       ["delivery method", { deliveryMethodId: alternateMethod!.id }],
       ["delivery location", { deliveryLocation: "เชียงใหม่" }],
       ["delivery note", { deliveryNote: "วางหน้าบ้าน" }],
@@ -518,6 +521,57 @@ describe("order service", () => {
         }),
       ),
     ).resolves.toMatchObject({ amountPaidSatang: 21000 });
+  });
+
+  it.each(["LOCKED", "IN_PRODUCTION", "COMPLETED"] as const)(
+    "freezes delivery time but permits payment-only edits when the cycle is %s",
+    async (cycleStatus) => {
+      const masters = await seedMasters(context.db);
+      const created = await service.create(OWNER_ID, orderInput(masters));
+      await context.db
+        .update(bakeCycles)
+        .set({ status: cycleStatus })
+        .where(eq(bakeCycles.id, masters.cycle.id));
+
+      await expect(
+        service.update(
+          OWNER_ID,
+          created.id,
+          orderDetailInput(created, { confirmedDeliveryTime: "14:30" }),
+        ),
+      ).rejects.toThrow("Cycle production inputs are locked");
+
+      await expect(
+        service.update(
+          OWNER_ID,
+          created.id,
+          orderDetailInput(created, { amountPaidSatang: 21_000 }),
+        ),
+      ).resolves.toMatchObject({
+        confirmedDeliveryTime: null,
+        amountPaidSatang: 21_000,
+      });
+    },
+  );
+
+  it("rejects overpayment on create and update even without the form boundary", async () => {
+    const masters = await seedMasters(context.db);
+
+    await expect(
+      service.create(
+        OWNER_ID,
+        orderInput(masters, { amountPaidSatang: 62_001 }),
+      ),
+    ).rejects.toThrow("Invalid order");
+
+    const created = await service.create(OWNER_ID, orderInput(masters));
+    await expect(
+      service.update(
+        OWNER_ID,
+        created.id,
+        orderDetailInput(created, { amountPaidSatang: 62_001 }),
+      ),
+    ).rejects.toThrow("Invalid order");
   });
 
   it("creates a multi-item order and keeps copied commercial values historical", async () => {

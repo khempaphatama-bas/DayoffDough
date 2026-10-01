@@ -447,6 +447,17 @@ export function OrderForm({
           />
           <FieldError error={state.fieldErrors.confirmedDeliveryDate} />
         </label>
+        <label className="grid gap-2 text-sm font-semibold text-stone-700">
+          เวลานัดส่ง
+          <input
+            className={INPUT_CLASS}
+            disabled={productionFrozen}
+            onChange={(event) => updateValue("confirmedDeliveryTime", event.target.value)}
+            type="time"
+            value={values.confirmedDeliveryTime}
+          />
+          <FieldError error={state.fieldErrors.confirmedDeliveryTime} />
+        </label>
       </section>
 
       <section className="grid gap-4 rounded-3xl border border-stone-200 bg-white p-5 shadow-sm">

@@ -128,6 +128,7 @@ export type PlanningSourceOrder = Readonly<{
   deliveryRequiresLocation: boolean;
   requestedDeliveryDate: string | null;
   confirmedDeliveryDate: string | null;
+  confirmedDeliveryTime: string | null;
   deliveryLocation: string | null;
   deliveryNote: string | null;
   specialInstructions: string | null;

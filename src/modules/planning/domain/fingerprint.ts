@@ -71,7 +71,11 @@ function canonicalize(value: unknown, key?: string): CanonicalValue {
     const result: Record<string, CanonicalValue> = {};
     const source = value as Record<string, unknown>;
     for (const key of Object.keys(source).sort()) {
-      if (key === "calculatedAt" || source[key] === undefined) continue;
+      if (
+        key === "calculatedAt" ||
+        source[key] === undefined ||
+        (key === "confirmedDeliveryTime" && source[key] === null)
+      ) continue;
       result[key] = canonicalize(source[key], key);
     }
     return result;

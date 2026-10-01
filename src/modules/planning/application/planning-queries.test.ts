@@ -222,6 +222,51 @@ describe("planning query service", () => {
     );
   });
 
+  it("round-trips PostgreSQL delivery time through source, preview, snapshot, and generation without UTC conversion", async () => {
+    const scenario = await seedPlanningScenario(context.db);
+    await context.db
+      .update(orders)
+      .set({ confirmedDeliveryTime: "14:30:00" })
+      .where(eq(orders.id, scenario.orderIds[0]!));
+
+    const source = await loadPlanningSource(
+      context.db,
+      OWNER_ID,
+      scenario.cycleId,
+      AS_OF,
+    );
+    expect(
+      source.orders.find((order) => order.id === scenario.orderIds[0])
+        ?.confirmedDeliveryTime,
+    ).toBe("14:30");
+
+    const clock = { now: () => new Date(AS_OF) };
+    const queries = createPlanningQueryService(context.db, clock);
+    const preview = await queries.preview(OWNER_ID, scenario.cycleId);
+    expect(
+      preview.orderSnapshots.find((order) => order.id === scenario.orderIds[0])
+        ?.confirmedDeliveryTime,
+    ).toBe("14:30");
+
+    await createPlanningCommandService(context.db, clock).lock(OWNER_ID, {
+      cycleId: scenario.cycleId,
+      inputFingerprint: preview.inputFingerprint,
+      lockRequestId: "77777777-7777-4777-8777-777777777777",
+      overrides: [],
+    });
+    const [stored] = await context.db
+      .select({ confirmedDeliveryTime: cycleOrderSnapshots.confirmedDeliveryTime })
+      .from(cycleOrderSnapshots)
+      .where(eq(cycleOrderSnapshots.sourceOrderId, scenario.orderIds[0]!));
+    expect(stored?.confirmedDeliveryTime).toBe("14:30:00");
+
+    const generation = await queries.getGeneration(OWNER_ID, scenario.cycleId);
+    expect(
+      generation.orders.find((order) => order.id === scenario.orderIds[0])
+        ?.confirmedDeliveryTime,
+    ).toBe("14:30");
+  });
+
   it("retains cancelled source rows but excludes their quantities from demand", async () => {
     const scenario = await seedPlanningScenario(context.db, {
       orderQuantity: 10,

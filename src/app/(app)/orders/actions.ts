@@ -50,6 +50,7 @@ const THAI_FIELD_ERRORS: Readonly<Record<string, string>> = {
   sourceChannel: "ช่องทางออเดอร์ไม่ถูกต้อง",
   requestedDeliveryDate: "วันส่งที่ลูกค้าขอไม่ถูกต้อง",
   confirmedDeliveryDate: "วันส่งยืนยันไม่ถูกต้อง",
+  confirmedDeliveryTime: "เวลานัดส่งไม่ถูกต้อง",
   deliveryMethodId: "วิธีจัดส่งไม่ถูกต้อง",
   deliveryFeeChargedBaht: "ค่าส่งที่เรียกเก็บไม่ถูกต้อง",
   deliveryCostBaht: "ต้นทุนจัดส่งไม่ถูกต้อง",

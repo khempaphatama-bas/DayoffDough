@@ -33,6 +33,7 @@ export default async function OrdersNewPage({
     sourceChannel: "",
     requestedDeliveryDate: "",
     confirmedDeliveryDate: "",
+    confirmedDeliveryTime: "",
     deliveryMethodId: "",
     deliveryFeeChargedBaht: "0.00",
     deliveryCostBaht: "0.00",

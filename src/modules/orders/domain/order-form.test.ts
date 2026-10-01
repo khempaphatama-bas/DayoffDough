@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   calculateOrderFormTotals,
+  normalizeConfirmedDeliveryTime,
   normalizeOrderForm,
   orderFormSchema,
 } from "./order-form";
@@ -11,6 +12,7 @@ const VALID_FORM = {
   sourceChannel: "INSTAGRAM",
   requestedDeliveryDate: "2026-08-30",
   confirmedDeliveryDate: "2026-08-30",
+  confirmedDeliveryTime: "",
   deliveryMethodId: "00000000-0000-4000-8000-000000000030",
   deliveryFeeChargedBaht: "120",
   deliveryCostBaht: "120",
@@ -46,6 +48,7 @@ describe("order form boundary", () => {
       sourceChannel: "INSTAGRAM",
       requestedDeliveryDate: "2026-08-30",
       confirmedDeliveryDate: "2026-08-30",
+      confirmedDeliveryTime: null,
       deliveryMethodId: VALID_FORM.deliveryMethodId,
       deliveryFeeChargedSatang: 12000,
       deliveryCostSatang: 12000,
@@ -64,6 +67,50 @@ describe("order form boundary", () => {
         },
       ],
     });
+  });
+
+  it("normalizes an optional local delivery time", () => {
+    expect(
+      normalizeOrderForm(
+        orderFormSchema.parse({
+          ...VALID_FORM,
+          confirmedDeliveryTime: "14:30",
+        }),
+      ).confirmedDeliveryTime,
+    ).toBe("14:30");
+    expect(
+      normalizeOrderForm(
+        orderFormSchema.parse({
+          ...VALID_FORM,
+          confirmedDeliveryTime: "",
+        }),
+      ).confirmedDeliveryTime,
+    ).toBeNull();
+  });
+
+  it("normalizes PostgreSQL zero-second times without Date or UTC conversion", () => {
+    expect(normalizeConfirmedDeliveryTime("14:30")).toBe("14:30");
+    expect(normalizeConfirmedDeliveryTime("14:30:00")).toBe("14:30");
+    expect(normalizeConfirmedDeliveryTime("00:05:00")).toBe("00:05");
+    expect(() => normalizeConfirmedDeliveryTime("14:30:01")).toThrow(
+      "Invalid confirmed delivery time",
+    );
+    expect(() => normalizeConfirmedDeliveryTime("24:00")).toThrow(
+      "Invalid confirmed delivery time",
+    );
+  });
+
+  it("rejects amount paid above the computed grand total", () => {
+    const result = orderFormSchema.safeParse({
+      ...VALID_FORM,
+      amountPaidBaht: "999999.00",
+    });
+
+    expect(result.success).toBe(false);
+    if (result.success) throw new Error("Expected overpayment validation to fail");
+    expect(result.error.issues).toContainEqual(
+      expect.objectContaining({ path: ["amountPaidBaht"] }),
+    );
   });
 
   it.each([

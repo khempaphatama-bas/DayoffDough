@@ -30,6 +30,7 @@ import {
   calculateOrderTotals,
   type OrderTotals,
 } from "@/modules/orders/domain/totals";
+import { normalizeConfirmedDeliveryTime } from "@/modules/orders/domain/order-form";
 import {
   aggregateProductionDemand,
   type ProductDemand,
@@ -51,6 +52,7 @@ export type OrderInput = Readonly<{
   sourceChannel: "INSTAGRAM" | "FACEBOOK" | "PHONE" | "OTHER" | null;
   requestedDeliveryDate: string | null;
   confirmedDeliveryDate: string | null;
+  confirmedDeliveryTime: string | null;
   deliveryMethodId: string | null;
   deliveryFeeChargedSatang: number;
   deliveryCostSatang: number;
@@ -116,6 +118,7 @@ export type OrderDetail = Readonly<{
   sourceChannel: (typeof orderSourceChannel)[number] | null;
   requestedDeliveryDate: string | null;
   confirmedDeliveryDate: string | null;
+  confirmedDeliveryTime: string | null;
   deliveryMethodId: string | null;
   deliveryMethodName: string | null;
   deliveryFeeChargedSatang: number;
@@ -195,23 +198,43 @@ const orderItemSchema = z.object({
   unitPriceSatang: moneySchema,
   lineNote: z.string().trim().max(2000).optional(),
 });
-const orderInputSchema = z.object({
-  customerId: uuidSchema,
-  bakeCycleId: uuidSchema,
-  sourceChannel: z.enum(orderSourceChannel).nullable(),
-  requestedDeliveryDate: z.iso.date().nullable(),
-  confirmedDeliveryDate: z.iso.date().nullable(),
-  deliveryMethodId: uuidSchema.nullable(),
-  deliveryFeeChargedSatang: moneySchema,
-  deliveryCostSatang: moneySchema,
-  deliveryFeePayer: z.enum(deliveryFeePayer),
-  discountSatang: moneySchema,
-  amountPaidSatang: moneySchema,
-  deliveryLocation: z.string().trim().max(2000),
-  deliveryNote: z.string().trim().max(2000),
-  specialInstructions: z.string().trim().max(2000),
-  items: z.array(orderItemSchema).min(1),
-});
+const orderInputSchema = z
+  .object({
+    customerId: uuidSchema,
+    bakeCycleId: uuidSchema,
+    sourceChannel: z.enum(orderSourceChannel).nullable(),
+    requestedDeliveryDate: z.iso.date().nullable(),
+    confirmedDeliveryDate: z.iso.date().nullable(),
+    confirmedDeliveryTime: z
+      .string()
+      .regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/)
+      .nullable(),
+    deliveryMethodId: uuidSchema.nullable(),
+    deliveryFeeChargedSatang: moneySchema,
+    deliveryCostSatang: moneySchema,
+    deliveryFeePayer: z.enum(deliveryFeePayer),
+    discountSatang: moneySchema,
+    amountPaidSatang: moneySchema,
+    deliveryLocation: z.string().trim().max(2000),
+    deliveryNote: z.string().trim().max(2000),
+    specialInstructions: z.string().trim().max(2000),
+    items: z.array(orderItemSchema).min(1),
+  })
+  .superRefine((values, context) => {
+    let totals: OrderTotals;
+    try {
+      totals = calculateOrderTotals(values);
+    } catch {
+      return;
+    }
+    if (totals.overpaidSatang > 0) {
+      context.addIssue({
+        code: "custom",
+        path: ["amountPaidSatang"],
+        message: "Amount paid must not exceed grand total",
+      });
+    }
+  });
 const orderFiltersSchema = z.object({
   query: z.string().trim().max(200).optional(),
   bakeCycleId: uuidSchema.optional(),
@@ -295,6 +318,7 @@ function productionInputChanged(
     current.sourceChannel !== next.sourceChannel ||
     current.requestedDeliveryDate !== next.requestedDeliveryDate ||
     current.confirmedDeliveryDate !== next.confirmedDeliveryDate ||
+    current.confirmedDeliveryTime !== next.confirmedDeliveryTime ||
     current.deliveryMethodId !== next.deliveryMethodId ||
     (current.deliveryLocation ?? "") !== next.deliveryLocation ||
     (current.deliveryNote ?? "") !== next.deliveryNote ||
@@ -484,6 +508,10 @@ async function buildOrderDetails(
     const items = itemsByOrderId.get(order.id) ?? [];
     return {
       ...order,
+      confirmedDeliveryTime:
+        order.confirmedDeliveryTime === null
+          ? null
+          : normalizeConfirmedDeliveryTime(order.confirmedDeliveryTime),
       customerName:
         customerNameById.get(order.customerId) ?? "Unknown customer",
       cycleName: cycleNameById.get(order.bakeCycleId) ?? "Unknown cycle",

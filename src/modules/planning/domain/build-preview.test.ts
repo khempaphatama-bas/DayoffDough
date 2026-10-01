@@ -76,6 +76,7 @@ function makeSource(): PlanningSourceData {
         deliveryRequiresLocation: true,
         requestedDeliveryDate: "2026-08-30",
         confirmedDeliveryDate: "2026-08-30",
+        confirmedDeliveryTime: null,
         deliveryLocation: "กรุงเทพฯ",
         deliveryNote: null,
         specialInstructions: null,
@@ -108,6 +109,7 @@ function makeSource(): PlanningSourceData {
         deliveryRequiresLocation: true,
         requestedDeliveryDate: "2026-08-30",
         confirmedDeliveryDate: "2026-08-30",
+        confirmedDeliveryTime: null,
         deliveryLocation: "นนทบุรี",
         deliveryNote: "โทรก่อนส่ง",
         specialInstructions: "ไม่โรยเกลือ",
@@ -441,6 +443,19 @@ describe("planning preview orchestration", () => {
       )?.multiplier,
     ).toBe("2");
     expect(preview.warnings).toEqual([]);
+  });
+
+  it("propagates the canonical confirmed delivery time into order snapshots", () => {
+    const source = makeSource();
+    const timed: PlanningSourceData = {
+      ...source,
+      orders: source.orders.map((order, index) =>
+        index === 0 ? { ...order, confirmedDeliveryTime: "14:30" } : order
+      ),
+    };
+
+    expect(buildPlanningPreview(timed).orderSnapshots[1]?.confirmedDeliveryTime)
+      .toBe("14:30");
   });
 
   it("orders same-product same-code ingredient blockers by immutable context", () => {

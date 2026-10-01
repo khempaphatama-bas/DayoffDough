@@ -16,6 +16,7 @@ import {
   cycleRecipePlans,
 } from "@/modules/planning/db/schema";
 import { buildPlanningPreview } from "@/modules/planning/domain/build-preview";
+import { normalizeConfirmedDeliveryTime } from "@/modules/orders/domain/order-form";
 import type {
   PlanningCycleCost,
   PlanningIssue,
@@ -325,6 +326,10 @@ export function createPlanningQueryService(
         deliveryRequiresLocation: order.deliveryRequiresLocation,
         requestedDeliveryDate: order.requestedDeliveryDate,
         confirmedDeliveryDate: order.confirmedDeliveryDate,
+        confirmedDeliveryTime:
+          order.confirmedDeliveryTime === null
+            ? null
+            : normalizeConfirmedDeliveryTime(order.confirmedDeliveryTime),
         deliveryLocation: order.deliveryLocation,
         deliveryNote: order.deliveryNote,
         specialInstructions: order.specialInstructions,
