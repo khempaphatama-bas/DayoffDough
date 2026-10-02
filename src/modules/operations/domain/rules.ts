@@ -82,8 +82,8 @@ function checkedOutstandingTotal(total: number, balanceSatang: number): number {
 }
 
 export function buildOperationsCompletion(
-  tasks: readonly OperationsTask[],
-  orders: readonly OperationsOrder[],
+  tasks: readonly Pick<OperationsTask, "status">[],
+  orders: readonly Pick<OperationsOrder, "fulfillmentStatus" | "paymentStatus" | "balanceSatang">[],
 ): OperationsCompletion {
   const remainingTaskCount = tasks.filter(
     (task) => task.status !== "DONE" && task.status !== "SKIPPED",
