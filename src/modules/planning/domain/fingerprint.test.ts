@@ -217,6 +217,23 @@ describe("planning source fingerprint", () => {
     );
   });
 
+  it("does not omit other null order fields from the fingerprint", () => {
+    const source = sourceFixture();
+    const withoutDeliveryNote = {
+      ...source,
+      orders: source.orders.map((order, index) => {
+        if (index !== 0) return order;
+        const changed: Record<string, unknown> = { ...order };
+        delete changed.deliveryNote;
+        return changed;
+      }),
+    } as unknown as PlanningSourceData;
+
+    expect(createPlanningFingerprint(withoutDeliveryNote)).not.toBe(
+      createPlanningFingerprint(source),
+    );
+  });
+
   it("changes the fingerprint when the confirmed delivery time changes", () => {
     const source = sourceFixture();
     const sourceAt = (confirmedDeliveryTime: string): PlanningSourceData => ({

@@ -527,7 +527,10 @@ describe("order service", () => {
     "freezes delivery time but permits payment-only edits when the cycle is %s",
     async (cycleStatus) => {
       const masters = await seedMasters(context.db);
-      const created = await service.create(OWNER_ID, orderInput(masters));
+      const created = await service.create(
+        OWNER_ID,
+        orderInput(masters, { confirmedDeliveryTime: "14:30" }),
+      );
       await context.db
         .update(bakeCycles)
         .set({ status: cycleStatus })
@@ -537,7 +540,7 @@ describe("order service", () => {
         service.update(
           OWNER_ID,
           created.id,
-          orderDetailInput(created, { confirmedDeliveryTime: "14:30" }),
+          orderDetailInput(created, { confirmedDeliveryTime: "15:30" }),
         ),
       ).rejects.toThrow("Cycle production inputs are locked");
 
@@ -545,10 +548,13 @@ describe("order service", () => {
         service.update(
           OWNER_ID,
           created.id,
-          orderDetailInput(created, { amountPaidSatang: 21_000 }),
+          orderDetailInput(created, {
+            confirmedDeliveryTime: "14:30",
+            amountPaidSatang: 21_000,
+          }),
         ),
       ).resolves.toMatchObject({
-        confirmedDeliveryTime: null,
+        confirmedDeliveryTime: "14:30",
         amountPaidSatang: 21_000,
       });
     },
