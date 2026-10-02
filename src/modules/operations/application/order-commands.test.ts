@@ -14,7 +14,7 @@ import { createOrderOperationsCommandService } from "./order-commands";
 import { createOperationsQueryService } from "./operations-queries";
 
 const MISSING_ID = "ffffffff-ffff-4fff-bfff-ffffffffffff";
-const NEW_ORDER_ID = "60000000-0000-4000-8000-000000000301";
+const NEW_ORDER_ID = "01000000-0000-4000-8000-000000000301";
 const NEW_ITEM_ID = "60000000-0000-4000-8000-000000000302";
 const OTHER_CYCLE_ID = "60000000-0000-4000-8000-000000000303";
 const OTHER_CYCLE_ORDER_ID = "60000000-0000-4000-8000-000000000304";
@@ -82,16 +82,16 @@ describe("order operations commands", () => {
     const commands = createOrderOperationsCommandService(context.db, CLOCK);
     const input = { cycleId: s.cycleId, orderIds: [s.orderIds[0]!, NEW_ORDER_ID, NEW_ORDER_ID] };
     expect((await commands.confirmOrders(OWNER_ID, input)).map((row) => [row.id, row.fulfillmentStatus]))
-      .toEqual([[s.orderIds[0]!, "CONFIRMED"], [NEW_ORDER_ID, "CONFIRMED"]]);
+      .toEqual([[NEW_ORDER_ID, "CONFIRMED"], [s.orderIds[0]!, "CONFIRMED"]]);
     await commands.confirmOrders(OWNER_ID, input);
     expect(await status(NEW_ORDER_ID)).toBe("CONFIRMED");
   });
 
-  it("rolls back mixed confirmation when a second snapshotted Order is already in production", async () => {
+  it("rolls back mixed confirmation after the valid NEW Order sorts before the invalid Order", async () => {
     const s = await scenarioWithNewOrder();
     const commands = createOrderOperationsCommandService(context.db, CLOCK);
     await expect(commands.confirmOrders(OWNER_ID, {
-      cycleId: s.cycleId, orderIds: [NEW_ORDER_ID, s.orderIds[1]!],
+      cycleId: s.cycleId, orderIds: [s.orderIds[1]!, NEW_ORDER_ID],
     })).rejects.toMatchObject({ kind: "INVALID_ORDER_STATE" });
     expect(await status(NEW_ORDER_ID)).toBe("NEW");
     expect(await status(s.orderIds[1]!)).toBe("IN_PRODUCTION");
