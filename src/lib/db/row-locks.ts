@@ -2,7 +2,8 @@ import { and, eq } from "drizzle-orm";
 import type { DatabaseClient } from "@/lib/db/types";
 import { bakeCycles } from "@/modules/cycles/db/schema";
 import { inventoryItems } from "@/modules/inventory/db/schema";
-import { orders } from "@/modules/orders/db/schema";
+import { orderItems, orders } from "@/modules/orders/db/schema";
+import { orderItemPackingProgress } from "@/modules/operations/db/schema";
 import { cycleTasks } from "@/modules/production/db/schema";
 
 type LockingReader = Pick<DatabaseClient, "select">;
@@ -74,6 +75,54 @@ export async function lockOwnedOrder(
     .limit(1)
     .for("update");
   return order;
+}
+
+export async function lockOwnedOrders(
+  reader: LockingReader,
+  ownerId: string,
+  orderIds: ReadonlyArray<string>,
+) {
+  const rows: Array<typeof orders.$inferSelect> = [];
+  for (const orderId of [...new Set(orderIds)].sort()) {
+    const order = await lockOwnedOrder(reader, ownerId, orderId);
+    if (order) rows.push(order);
+  }
+  return rows;
+}
+
+export async function lockOwnedOrderItem(
+  reader: LockingReader,
+  ownerId: string,
+  itemId: string,
+) {
+  const [item] = await reader.select().from(orderItems)
+    .where(and(eq(orderItems.ownerId, ownerId), eq(orderItems.id, itemId)))
+    .limit(1).for("update");
+  return item;
+}
+
+export async function lockOwnedOrderItems(
+  reader: LockingReader,
+  ownerId: string,
+  itemIds: ReadonlyArray<string>,
+) {
+  const rows: Array<typeof orderItems.$inferSelect> = [];
+  for (const itemId of [...new Set(itemIds)].sort()) {
+    const item = await lockOwnedOrderItem(reader, ownerId, itemId);
+    if (item) rows.push(item);
+  }
+  return rows;
+}
+
+export async function lockOwnedPackingProgress(
+  reader: LockingReader,
+  ownerId: string,
+  itemId: string,
+) {
+  const [progress] = await reader.select().from(orderItemPackingProgress)
+    .where(and(eq(orderItemPackingProgress.ownerId, ownerId), eq(orderItemPackingProgress.orderItemId, itemId)))
+    .limit(1).for("update");
+  return progress;
 }
 
 export async function lockOwnedCycleTask(
