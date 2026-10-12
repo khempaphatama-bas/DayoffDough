@@ -14,6 +14,10 @@ import {
   PlanningStaleError,
 } from "@/modules/planning/application/planning-commands";
 import { createPlanningQueryService } from "@/modules/planning/application/planning-queries";
+import { seedLockedPlanningScenario } from "@tests/fixtures/planning";
+import { createCycleOperationsCommandService } from "@/modules/operations/application/cycle-commands";
+import { createOrderOperationsCommandService } from "@/modules/operations/application/order-commands";
+import { cycleTaskGenerations, cycleTasks } from "@/modules/production/db/schema";
 import { products } from "@/modules/products/db/schema";
 import {
   createOrderService,
@@ -157,6 +161,17 @@ function orderDetailInput(
 describe("order service", () => {
   let context: Awaited<ReturnType<typeof createTestDatabase>>;
   let service: ReturnType<typeof createOrderService>;
+
+  it("confirms a new order only before production and rejects generic forward jumps", async () => {
+    const masters = await seedMasters(context.db);
+    const created = await service.create(OWNER_ID, orderInput(masters));
+    await expect(service.updateFulfillmentStatus(OWNER_ID, created.id, "PACKED"))
+      .rejects.toThrow("Invalid fulfillment transition");
+    await expect(service.confirmBeforeProduction(OWNER_ID, created.id))
+      .resolves.toMatchObject({ fulfillmentStatus: "CONFIRMED" });
+    await expect(service.confirmBeforeProduction(OWNER_ID, created.id))
+      .resolves.toMatchObject({ fulfillmentStatus: "CONFIRMED" });
+  });
 
   beforeEach(async () => {
     context = await createTestDatabase();
@@ -306,7 +321,7 @@ describe("order service", () => {
     "COMPLETED",
     "CANCELLED",
   ] as const)(
-    "freezes production inputs and cancellation while allowing money and forward progress in %s",
+    "freezes production inputs and cancellation while allowing money in %s",
     async (cycleStatus) => {
       const masters = await seedMasters(context.db);
       const created = await service.create(OWNER_ID, orderInput(masters));
@@ -320,10 +335,18 @@ describe("order service", () => {
           primaryDeliveryDate: "2026-09-06",
         })
         .returning();
-      await context.db
-        .update(bakeCycles)
-        .set({ status: cycleStatus })
-        .where(eq(bakeCycles.id, masters.cycle.id));
+      if (cycleStatus === "IN_PRODUCTION" || cycleStatus === "COMPLETED") {
+        const [legacyCycle] = await context.db.insert(bakeCycles).values({
+          ownerId: OWNER_ID, name: `Legacy ${cycleStatus}`, status: cycleStatus,
+          targetProductionDate: "2026-09-05", primaryDeliveryDate: "2026-09-06",
+        }).returning();
+        await context.db.update(orders).set({ bakeCycleId: legacyCycle!.id })
+          .where(eq(orders.id, created.id));
+        masters.cycle = legacyCycle!;
+      } else {
+        await context.db.update(bakeCycles).set({ status: cycleStatus })
+          .where(eq(bakeCycles.id, masters.cycle.id));
+      }
       const beforeRejectedWrites = await service.get(OWNER_ID, created.id);
       const [orderCountBefore] = await context.db
         .select({ value: sql<number>`count(*)` })
@@ -393,12 +416,8 @@ describe("order service", () => {
       await expect(
         service.restorePaymentTracking(OWNER_ID, created.id),
       ).resolves.toMatchObject({ paymentStatus: "PAID", cycleStatus });
-      await expect(
-        service.updateFulfillmentStatus(OWNER_ID, created.id, "PACKED"),
-      ).resolves.toMatchObject({
-        fulfillmentStatus: "PACKED",
-        cycleStatus,
-      });
+      await expect(service.updateFulfillmentStatus(OWNER_ID, created.id, "PACKED"))
+        .rejects.toThrow("Invalid fulfillment transition");
     },
   );
 
@@ -526,15 +545,33 @@ describe("order service", () => {
   it.each(["LOCKED", "IN_PRODUCTION", "COMPLETED"] as const)(
     "freezes delivery time but permits payment-only edits when the cycle is %s",
     async (cycleStatus) => {
-      const masters = await seedMasters(context.db);
-      const created = await service.create(
-        OWNER_ID,
-        orderInput(masters, { confirmedDeliveryTime: "14:30" }),
-      );
-      await context.db
-        .update(bakeCycles)
-        .set({ status: cycleStatus })
-        .where(eq(bakeCycles.id, masters.cycle.id));
+      const scenario = await seedLockedPlanningScenario(context.db);
+      const created = await service.get(OWNER_ID, scenario.orderIds[0]!);
+      if (cycleStatus !== "LOCKED") {
+        const cycles = createCycleOperationsCommandService(context.db);
+        await cycles.startCycle(OWNER_ID, { cycleId: scenario.cycleId });
+        if (cycleStatus === "COMPLETED") {
+          const operations = createOrderOperationsCommandService(context.db);
+          const orderIds = scenario.orderIds.slice(0, 2);
+          await operations.startOrders(OWNER_ID, { cycleId: scenario.cycleId, orderIds });
+          for (const orderId of orderIds) {
+            const [item] = await context.db.select().from(orderItems).where(eq(orderItems.orderId, orderId!));
+            await operations.setPackedQuantity(OWNER_ID, {
+              cycleId: scenario.cycleId, orderItemId: item!.id,
+              packedQuantity: item!.quantity, expectedPackedQuantity: 0,
+            });
+            await operations.confirmOrderPacked(OWNER_ID, { cycleId: scenario.cycleId, orderId: orderId! });
+          }
+          await operations.deliverOrders(OWNER_ID, { cycleId: scenario.cycleId, orderIds });
+          const [generation] = await context.db.select().from(cycleTaskGenerations)
+            .where(eq(cycleTaskGenerations.planningSnapshotId, scenario.planningSnapshotId));
+          await context.db.update(cycleTasks).set({ status: "DONE" })
+            .where(eq(cycleTasks.cycleTaskGenerationId, generation!.id));
+          await cycles.completeCycle(OWNER_ID, {
+            cycleId: scenario.cycleId, expectedTaskGenerationId: generation!.id, confirmation: true,
+          });
+        }
+      }
 
       await expect(
         service.update(
@@ -549,12 +586,12 @@ describe("order service", () => {
           OWNER_ID,
           created.id,
           orderDetailInput(created, {
-            confirmedDeliveryTime: "14:30",
+            confirmedDeliveryTime: created.confirmedDeliveryTime,
             amountPaidSatang: 21_000,
           }),
         ),
       ).resolves.toMatchObject({
-        confirmedDeliveryTime: "14:30",
+        confirmedDeliveryTime: created.confirmedDeliveryTime,
         amountPaidSatang: 21_000,
       });
     },
@@ -1065,11 +1102,7 @@ describe("order service", () => {
         amountPaidSatang: 62000,
       }),
     );
-    await service.updateFulfillmentStatus(
-      OWNER_ID,
-      newer.id,
-      "IN_PRODUCTION",
-    );
+    await service.confirmBeforeProduction(OWNER_ID, newer.id);
     await context.db
       .update(orders)
       .set({ createdAt: new Date("2026-08-20T00:00:00Z") })
@@ -1107,7 +1140,7 @@ describe("order service", () => {
       expect.objectContaining({ id: newer.id }),
     ]);
     expect(
-      await service.list(OWNER_ID, { fulfillmentStatus: "IN_PRODUCTION" }),
+      await service.list(OWNER_ID, { fulfillmentStatus: "CONFIRMED" }),
     ).toEqual([expect.objectContaining({ id: newer.id })]);
     await expect(service.get(OTHER_OWNER_ID, older.id)).rejects.toThrow(
       "Order not found",
@@ -1238,22 +1271,14 @@ describe("order service", () => {
     const restored = await service.restorePaymentTracking(OWNER_ID, created.id);
     expect(restored.paymentStatus).toBe("PAID");
 
-    const producing = await service.updateFulfillmentStatus(
-      OWNER_ID,
-      created.id,
-      "IN_PRODUCTION",
-    );
-    expect(producing.fulfillmentStatus).toBe("IN_PRODUCTION");
+    await expect(service.updateFulfillmentStatus(OWNER_ID, created.id, "IN_PRODUCTION"))
+      .rejects.toThrow("Invalid fulfillment transition");
     const cancelled = await service.cancel(OWNER_ID, created.id);
     expect(cancelled.fulfillmentStatus).toBe("CANCELLED");
     expect(cancelled.items).toHaveLength(2);
 
     await expect(
-      service.updateFulfillmentStatus(
-        OTHER_OWNER_ID,
-        created.id,
-        "DELIVERED",
-      ),
+      service.confirmBeforeProduction(OTHER_OWNER_ID, created.id),
     ).rejects.toThrow("Order not found");
     await expect(
       service.markRefunded(OTHER_OWNER_ID, created.id),
@@ -1263,17 +1288,13 @@ describe("order service", () => {
     ).rejects.toThrow("Order not found");
   });
 
-  it("moves a new order directly to packed and cancels without deleting its items", async () => {
+  it("rejects a direct packing jump and cancels without deleting its items", async () => {
     const masters = await seedMasters(context.db);
     const created = await service.create(OWNER_ID, orderInput(masters));
 
     expect(created.fulfillmentStatus).toBe("NEW");
-    const packed = await service.updateFulfillmentStatus(
-      OWNER_ID,
-      created.id,
-      "PACKED",
-    );
-    expect(packed.fulfillmentStatus).toBe("PACKED");
+    await expect(service.updateFulfillmentStatus(OWNER_ID, created.id, "PACKED"))
+      .rejects.toThrow("Invalid fulfillment transition");
 
     const cancelled = await service.cancel(OWNER_ID, created.id);
     expect(cancelled.fulfillmentStatus).toBe("CANCELLED");
@@ -1290,13 +1311,13 @@ describe("order service", () => {
   it("rejects backward fulfillment transitions without changing the order", async () => {
     const masters = await seedMasters(context.db);
     const created = await service.create(OWNER_ID, orderInput(masters));
-    await service.updateFulfillmentStatus(OWNER_ID, created.id, "PACKED");
+    await service.confirmBeforeProduction(OWNER_ID, created.id);
 
     await expect(
       service.updateFulfillmentStatus(OWNER_ID, created.id, "CONFIRMED"),
     ).rejects.toThrow("Invalid fulfillment transition");
     await expect(service.get(OWNER_ID, created.id)).resolves.toMatchObject({
-      fulfillmentStatus: "PACKED",
+      fulfillmentStatus: "CONFIRMED",
     });
   });
 
@@ -1327,17 +1348,24 @@ describe("order service", () => {
   });
 
   it("allows no transition or cancellation after delivery", async () => {
-    const masters = await seedMasters(context.db);
-    const created = await service.create(OWNER_ID, orderInput(masters));
-    await service.updateFulfillmentStatus(OWNER_ID, created.id, "DELIVERED");
+    const scenario = await seedLockedPlanningScenario(context.db);
+    const orderId = scenario.orderIds[0]!;
+    const operations = createOrderOperationsCommandService(context.db);
+    await createCycleOperationsCommandService(context.db).startCycle(OWNER_ID, { cycleId: scenario.cycleId });
+    await operations.startOrders(OWNER_ID, { cycleId: scenario.cycleId, orderIds: [orderId] });
+    const [item] = await context.db.select().from(orderItems).where(eq(orderItems.orderId, orderId));
+    await operations.setPackedQuantity(OWNER_ID, { cycleId: scenario.cycleId, orderItemId: item!.id,
+      packedQuantity: item!.quantity, expectedPackedQuantity: 0 });
+    await operations.confirmOrderPacked(OWNER_ID, { cycleId: scenario.cycleId, orderId });
+    await operations.deliverOrders(OWNER_ID, { cycleId: scenario.cycleId, orderIds: [orderId] });
 
     await expect(
-      service.updateFulfillmentStatus(OWNER_ID, created.id, "PACKED"),
+      service.updateFulfillmentStatus(OWNER_ID, orderId, "PACKED"),
     ).rejects.toThrow("Invalid fulfillment transition");
-    await expect(service.cancel(OWNER_ID, created.id)).rejects.toThrow(
-      "Invalid fulfillment transition",
+    await expect(service.cancel(OWNER_ID, orderId)).rejects.toThrow(
+      "Cycle production inputs are locked",
     );
-    await expect(service.get(OWNER_ID, created.id)).resolves.toMatchObject({
+    await expect(service.get(OWNER_ID, orderId)).resolves.toMatchObject({
       fulfillmentStatus: "DELIVERED",
     });
   });
@@ -1387,7 +1415,7 @@ describe("order service", () => {
       OWNER_ID,
       orderInput(masters, { amountPaidSatang: 62000 }),
     );
-    await service.updateFulfillmentStatus(OWNER_ID, matching.id, "PACKED");
+    await service.confirmBeforeProduction(OWNER_ID, matching.id);
     await service.create(
       OWNER_ID,
       orderInput(masters, {
@@ -1405,7 +1433,7 @@ describe("order service", () => {
       bakeCycleId: masters.cycle.id,
       customerId: masters.customer.id,
       paymentStatus: "PAID",
-      fulfillmentStatus: "PACKED",
+      fulfillmentStatus: "CONFIRMED",
     });
 
     expect(listed).toEqual([
@@ -1415,7 +1443,7 @@ describe("order service", () => {
         customerId: masters.customer.id,
         bakeCycleId: masters.cycle.id,
         paymentStatus: "PAID",
-        fulfillmentStatus: "PACKED",
+        fulfillmentStatus: "CONFIRMED",
       }),
     ]);
   });
@@ -1510,7 +1538,7 @@ describe("order service", () => {
       }),
     );
     await expectCycleBeforeOrderLock(() =>
-      service.updateFulfillmentStatus(OWNER_ID, created.id, "CONFIRMED"),
+      service.confirmBeforeProduction(OWNER_ID, created.id),
     );
     await expectCycleBeforeOrderLock(() =>
       service.markRefunded(OWNER_ID, created.id),

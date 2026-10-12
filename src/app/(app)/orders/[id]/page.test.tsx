@@ -187,7 +187,7 @@ describe("OrderDetailPage", () => {
     expect(screen.getAllByText("ชำระบางส่วน").length).toBeGreaterThan(0);
     expect(screen.getByText("ยืนยันแล้ว")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "ยกเลิกออเดอร์" })).toBeNull();
-    expect(screen.getByRole("button", { name: "เริ่มผลิต" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "เริ่มผลิต" })).toBeNull();
     expect(screen.getByRole("button", { name: "บันทึกคืนเงิน" })).toBeInTheDocument();
     expect(screen.getByLabelText("ลูกค้า")).toHaveValue(CUSTOMER_ID);
     expect(screen.getByLabelText("รอบผลิต")).toHaveValue(CYCLE_ID);

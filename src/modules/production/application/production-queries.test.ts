@@ -327,7 +327,7 @@ describe("production query service", () => {
     });
     await context.db
       .update(bakeCycles)
-      .set({ status: "COMPLETED" })
+      .set({ status: "CANCELLED" })
       .where(eq(bakeCycles.id, scenario.cycleId));
     const view = await createProductionQueryService(context.db).getCycleProduction(
       OWNER_ID,

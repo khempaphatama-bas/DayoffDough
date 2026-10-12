@@ -24,7 +24,9 @@ export function CycleStatusForm({
     changeCycleStatusAction,
     INITIAL_STATE,
   );
-  const targets = BAKE_CYCLE_STATUS_TRANSITIONS[status];
+  const targets = BAKE_CYCLE_STATUS_TRANSITIONS[status].filter(
+    (target) => target !== "IN_PRODUCTION" && target !== "COMPLETED",
+  );
 
   if (targets.length === 0) {
     return <p className="text-sm text-stone-600">รอบนี้ไม่มีสถานะถัดไป</p>;

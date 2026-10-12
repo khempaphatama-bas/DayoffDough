@@ -16,6 +16,8 @@ import { cycleOrderItemSnapshots, cycleOrderSnapshots, cyclePlanningSnapshots } 
 import { products } from "@/modules/products/db/schema";
 import { cycleTaskGenerations, cycleTasks } from "@/modules/production/db/schema";
 import { createOperationsQueryService } from "./operations-queries";
+import { createCycleOperationsCommandService } from "./cycle-commands";
+import { createOrderOperationsCommandService } from "./order-commands";
 
 const MISSING_CYCLE_ID = "ffffffff-ffff-4fff-bfff-ffffffffffff";
 const CLOCK = { now: () => new Date("2026-08-29T05:00:00.000Z") };
@@ -35,6 +37,21 @@ describe("cycle operations query", () => {
     expect(view.kind).toBe("READY");
     if (view.kind !== "READY") throw new Error("Expected READY");
     return view;
+  }
+
+  async function finishOrders(scenario: Awaited<ReturnType<typeof seedLockedPlanningScenario>>) {
+    const cycles = createCycleOperationsCommandService(context.db);
+    const commands = createOrderOperationsCommandService(context.db);
+    await cycles.startCycle(OWNER_ID, { cycleId: scenario.cycleId });
+    const activeOrderIds = scenario.orderIds.slice(0, 2);
+    await commands.startOrders(OWNER_ID, { cycleId: scenario.cycleId, orderIds: activeOrderIds });
+    for (const orderId of activeOrderIds) {
+      const [item] = await context.db.select().from(orderItems).where(eq(orderItems.orderId, orderId));
+      await commands.setPackedQuantity(OWNER_ID, { cycleId: scenario.cycleId,
+        orderItemId: item!.id, packedQuantity: item!.quantity, expectedPackedQuantity: 0 });
+      await commands.confirmOrderPacked(OWNER_ID, { cycleId: scenario.cycleId, orderId });
+    }
+    await commands.deliverOrders(OWNER_ID, { cycleId: scenario.cycleId, orderIds: activeOrderIds });
   }
 
   it("uses the current generation, frozen membership and names, and live state", async () => {
@@ -81,8 +98,10 @@ describe("cycle operations query", () => {
 
   it("coalesces missing packing progress to zero and reads a present row", async () => {
     const scenario = await seedLockedPlanningScenario(context.db);
-    await context.db.update(bakeCycles).set({ status: "IN_PRODUCTION" })
-      .where(eq(bakeCycles.id, scenario.cycleId));
+    await createCycleOperationsCommandService(context.db).startCycle(OWNER_ID, { cycleId: scenario.cycleId });
+    await createOrderOperationsCommandService(context.db).startOrders(OWNER_ID, {
+      cycleId: scenario.cycleId, orderIds: [scenario.orderIds[1]!],
+    });
     const [item] = await context.db.select().from(orderItems)
       .where(eq(orderItems.orderId, scenario.orderIds[1]!));
     await context.db.insert(orderItemPackingProgress).values({
@@ -152,8 +171,11 @@ describe("cycle operations query", () => {
 
   it("rejects a non-cancelled live order omitted from active snapshot", async () => {
     const scenario = await seedLockedPlanningScenario(context.db);
-    await context.db.update(orders).set({ fulfillmentStatus: "CONFIRMED" })
-      .where(eq(orders.id, scenario.orderIds[2]!));
+    const [firstOrder] = await context.db.select().from(orders)
+      .where(eq(orders.id, scenario.orderIds[0]!));
+    await context.db.insert(orders).values({ ...firstOrder!,
+      id: "60000000-0000-4000-8000-000000000199", fulfillmentStatus: "NEW",
+    });
     await expect(createOperationsQueryService(context.db, CLOCK)
       .getCycleOperations(OWNER_ID, scenario.cycleId))
       .rejects.toMatchObject({ kind: "STALE_DATA" });
@@ -211,8 +233,13 @@ describe("cycle operations query", () => {
     let view = await readyView(first.cycleId);
     expect(view.cycleOptions.map(({ id }) => id)).toEqual([secondId, first.cycleId]);
 
-    await context.db.update(bakeCycles).set({ status: "COMPLETED" })
-      .where(eq(bakeCycles.id, first.cycleId));
+    await finishOrders(first);
+    await context.db.update(cycleTasks).set({ status: "DONE" });
+    const [generation] = await context.db.select().from(cycleTaskGenerations)
+      .where(eq(cycleTaskGenerations.planningSnapshotId, first.planningSnapshotId));
+    await createCycleOperationsCommandService(context.db).completeCycle(OWNER_ID, {
+      cycleId: first.cycleId, expectedTaskGenerationId: generation!.id, confirmation: true,
+    });
     view = await readyView(first.cycleId);
     expect(view.cycle.status).toBe("COMPLETED");
     expect(view.cycleOptions.map(({ id }) => id)).toEqual([secondId, first.cycleId]);
@@ -257,9 +284,8 @@ describe("cycle operations query", () => {
   it("returns completion-ready despite partial payment and includes its warning totals", async () => {
     const scenario = await seedLockedPlanningScenario(context.db);
     await context.db.update(cycleTasks).set({ status: "DONE" });
-    await context.db.update(orders).set({ fulfillmentStatus: "DELIVERED" })
-      .where(eq(orders.id, scenario.orderIds[0]!));
-    await context.db.update(orders).set({ fulfillmentStatus: "DELIVERED", paymentStatus: "PARTIAL", amountPaidSatang: 1000 })
+    await finishOrders(scenario);
+    await context.db.update(orders).set({ paymentStatus: "PARTIAL", amountPaidSatang: 1000 })
       .where(eq(orders.id, scenario.orderIds[1]!));
     const view = await readyView(scenario.cycleId);
     expect(view.completion).toEqual({ ready: true, remainingTaskCount: 0,

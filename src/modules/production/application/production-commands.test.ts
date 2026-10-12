@@ -256,7 +256,7 @@ describe("production task command service", () => {
     await context.db.update(bakeCycles).set({ status: "LOCKED", activePlanningSnapshotId: value.planningSnapshotId }).where(eq(bakeCycles.id, value.cycleId));
     await context.db.update(bakeCycles).set({ activePlanningSnapshotId: null }).where(eq(bakeCycles.id, value.cycleId));
     await expect(commands.updateTask(OWNER_ID, updateInput(value))).rejects.toBeInstanceOf(ProductionStateError);
-    await context.db.update(bakeCycles).set({ activePlanningSnapshotId: value.planningSnapshotId, status: "COMPLETED" }).where(eq(bakeCycles.id, value.cycleId));
+    await context.db.update(bakeCycles).set({ activePlanningSnapshotId: value.planningSnapshotId, status: "CANCELLED" }).where(eq(bakeCycles.id, value.cycleId));
     await expect(commands.updateTask(OWNER_ID, updateInput(value))).rejects.toBeInstanceOf(ProductionStateError);
   });
 

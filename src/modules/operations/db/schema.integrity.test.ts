@@ -2,6 +2,11 @@ import { sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createTestDatabase } from "@tests/helpers/test-db";
 import type { DatabaseClient } from "@/lib/db/types";
+import { OWNER_ID as PLANNING_OWNER_ID } from "@tests/fixtures/owner";
+import { seedLockedPlanningScenario } from "@tests/fixtures/planning";
+import { createCycleOperationsCommandService } from "@/modules/operations/application/cycle-commands";
+import { createOrderOperationsCommandService } from "@/modules/operations/application/order-commands";
+import { bakeCycles } from "@/modules/cycles/db/schema";
 
 const OWNER_ID = "71000000-0000-4000-8000-000000000001";
 const OTHER_OWNER_ID = "71000000-0000-4000-8000-000000000002";
@@ -27,6 +32,13 @@ async function expectConstraintViolation(
   expect(
     (rejection as Error & { cause?: { constraint?: string } }).cause,
   ).toMatchObject({ constraint });
+}
+
+async function expectTriggerRejection(operation: () => Promise<unknown>, marker: string) {
+  let rejection: unknown;
+  try { await operation(); } catch (error) { rejection = error; }
+  expect(rejection).toBeInstanceOf(Error);
+  expect((rejection as Error & { cause?: Error }).cause?.message).toContain(marker);
 }
 
 async function seedPackingFixture(
@@ -115,6 +127,76 @@ describe("Phase 4B packing integrity", () => {
 
   afterEach(async () => context.close());
 
+  it("rejects direct fulfillment jumps", async () => {
+    await seedPackingFixture(context.db, { orderStatus: "CONFIRMED" });
+    await expectTriggerRejection(() => context.db.execute(sql`
+      UPDATE orders SET fulfillment_status = 'PACKED' WHERE id = ${ORDER_ID}
+    `), "order fulfillment transition not allowed");
+  });
+
+  it("rejects packing while an active item is incomplete", async () => {
+    await seedPackingFixture(context.db);
+    await insertProgress(context.db, { packedQuantity: 1 });
+    await expectTriggerRejection(() => context.db.execute(sql`
+      UPDATE orders SET fulfillment_status = 'PACKED' WHERE id = ${ORDER_ID}
+    `), "order packing incomplete");
+  });
+
+  it("rejects direct delivery of an order that was never packed", async () => {
+    await seedPackingFixture(context.db);
+    await expectTriggerRejection(() => context.db.execute(sql`
+      UPDATE orders SET fulfillment_status = 'DELIVERED' WHERE id = ${ORDER_ID}
+    `), "order fulfillment transition not allowed");
+  });
+
+  it("requires a current generation before direct cycle production start", async () => {
+    await seedPackingFixture(context.db, { cycleStatus: "LOCKED", orderStatus: "CONFIRMED" });
+    await expectTriggerRejection(() => context.db.execute(sql`
+      UPDATE bake_cycles SET status = 'IN_PRODUCTION' WHERE id = ${CYCLE_ID}
+    `), "cycle operations requires current task generation");
+  });
+
+  it("rejects direct production start from OPEN and direct completion from LOCKED", async () => {
+    await seedPackingFixture(context.db, { cycleStatus: "LOCKED", orderStatus: "CONFIRMED" });
+    await expectTriggerRejection(() => context.db.execute(sql`
+      UPDATE bake_cycles SET status = 'COMPLETED' WHERE id = ${CYCLE_ID}
+    `), "cycle operations transition not allowed");
+    await context.db.execute(sql`
+      UPDATE bake_cycles SET status = 'OPEN' WHERE id = ${CYCLE_ID}
+    `);
+    await expectTriggerRejection(() => context.db.execute(sql`
+      UPDATE bake_cycles SET status = 'IN_PRODUCTION' WHERE id = ${CYCLE_ID}
+    `), "cycle operations transition not allowed");
+  });
+
+  it("rejects direct completion while current work is unfinished", async () => {
+    const scenario = await seedLockedPlanningScenario(context.db);
+    await createCycleOperationsCommandService(context.db).startCycle(
+      PLANNING_OWNER_ID, { cycleId: scenario.cycleId },
+    );
+    await expectTriggerRejection(() => context.db.execute(sql`
+      UPDATE bake_cycles SET status = 'COMPLETED'
+      WHERE owner_id = ${PLANNING_OWNER_ID} AND id = ${scenario.cycleId}
+    `), "cycle completion blocked by unfinished work");
+  });
+
+  it("rejects direct unlock after an Order starts production", async () => {
+    const scenario = await seedLockedPlanningScenario(context.db);
+    await createCycleOperationsCommandService(context.db).startCycle(
+      PLANNING_OWNER_ID, { cycleId: scenario.cycleId },
+    );
+    await createOrderOperationsCommandService(context.db).startOrders(
+      PLANNING_OWNER_ID, { cycleId: scenario.cycleId, orderIds: [scenario.orderIds[0]!] },
+    );
+    await expectTriggerRejection(() => context.db.execute(sql`
+      UPDATE bake_cycles SET status = 'OPEN', active_planning_snapshot_id = NULL
+      WHERE owner_id = ${PLANNING_OWNER_ID} AND id = ${scenario.cycleId}
+    `), "cycle unlock blocked by operations");
+    const [cycle] = await context.db.select().from(bakeCycles)
+      .where(sql`${bakeCycles.id} = ${scenario.cycleId}`);
+    expect(cycle!.status).toBe("IN_PRODUCTION");
+  });
+
   it("allows packing progress changes while the active item, Order, and Cycle are in production", async () => {
     await seedPackingFixture(context.db);
     await insertProgress(context.db);
@@ -198,7 +280,7 @@ describe("Phase 4B packing integrity", () => {
 
   it("rejects a progress update after the Order becomes packed", async () => {
     await seedPackingFixture(context.db);
-    await insertProgress(context.db);
+    await insertProgress(context.db, { packedQuantity: 4 });
     await context.db.execute(sql`
       UPDATE orders
       SET fulfillment_status = 'PACKED'

@@ -358,7 +358,7 @@ export async function seedPlanningScenario(
       deliveryFeePayer: "CUSTOMER" as const,
       deliveryLocation: "เชียงใหม่",
       paymentStatus: "PAID" as const,
-      fulfillmentStatus: "IN_PRODUCTION" as const,
+      fulfillmentStatus: "CONFIRMED" as const,
       amountPaidSatang: secondQuantity * 12_000 + 5_000,
       createdAt: new Date("2026-08-03T00:00:00.000Z"),
       updatedAt: new Date("2026-08-03T00:00:00.000Z"),

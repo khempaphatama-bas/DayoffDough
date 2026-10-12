@@ -35,15 +35,6 @@ const INITIAL_STATE: OrderStatusActionState = {
   saved: false,
 };
 
-const FORWARD_ACTIONS: ReadonlyArray<
-  Readonly<{ status: Exclude<OrderFulfillmentStatus, "CANCELLED">; label: string }>
-> = [
-  { status: "CONFIRMED", label: "ยืนยันออเดอร์" },
-  { status: "IN_PRODUCTION", label: "เริ่มผลิต" },
-  { status: "PACKED", label: "แพ็กเสร็จแล้ว" },
-  { status: "DELIVERED", label: "จัดส่งแล้ว" },
-];
-
 function ActionFeedback({
   state,
   success,
@@ -86,14 +77,8 @@ export function OrderStatusActions({
     restoreOrderPaymentTracking,
     INITIAL_STATE,
   );
-  const currentIndex = FORWARD_ACTIONS.findIndex(
-    (action) => action.status === fulfillmentStatus,
-  );
-  const availableForwardActions =
-    fulfillmentStatus === "CANCELLED" || fulfillmentStatus === "DELIVERED"
-      ? []
-      : FORWARD_ACTIONS.filter((_, index) => index > currentIndex);
   const productionFrozen = cycleStatus !== "DRAFT" && cycleStatus !== "OPEN";
+  const canConfirm = !productionFrozen && fulfillmentStatus === "NEW";
 
   function confirmCancellation(event: FormEvent<HTMLFormElement>) {
     if (!window.confirm("ยืนยันยกเลิกออเดอร์นี้หรือไม่?")) {
@@ -101,38 +86,18 @@ export function OrderStatusActions({
     }
   }
 
-  function confirmDelivery(event: FormEvent<HTMLFormElement>) {
-    const submitter = (event.nativeEvent as SubmitEvent)
-      .submitter as HTMLButtonElement | null;
-    if (
-      submitter?.value === "DELIVERED" &&
-      !window.confirm("ยืนยันว่าออเดอร์นี้จัดส่งแล้วหรือไม่?")
-    ) {
-      event.preventDefault();
-    }
-  }
-
   return (
     <section className="grid gap-4" aria-label="จัดการสถานะออเดอร์">
-      {availableForwardActions.length > 0 ? (
+      {canConfirm ? (
         <form
           action={fulfillmentAction}
           className="flex flex-wrap gap-2"
-          onSubmit={confirmDelivery}
         >
           <input name="orderId" type="hidden" value={orderId} />
-          {availableForwardActions.map((action) => (
-            <button
-              className="min-h-11 rounded-xl border border-stone-800 px-4 font-semibold text-stone-800 disabled:opacity-60"
-              disabled={fulfillmentPending}
-              key={action.status}
-              name="status"
-              type="submit"
-              value={action.status}
-            >
-              {action.label}
-            </button>
-          ))}
+          <button className="min-h-11 rounded-xl border border-stone-800 px-4 font-semibold text-stone-800 disabled:opacity-60"
+            disabled={fulfillmentPending} name="status" type="submit" value="CONFIRMED">
+            ยืนยันออเดอร์
+          </button>
         </form>
       ) : null}
       <ActionFeedback

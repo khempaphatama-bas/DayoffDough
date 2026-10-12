@@ -47,6 +47,23 @@ describe("Phase 4B operations schema", () => {
 
   afterEach(async () => context.close());
 
+  it("installs authoritative Order and Cycle lifecycle triggers", async () => {
+    const rows = await queryRows<{ tableName: string; triggerName: string; functionName: string }>(context.db, sql`
+      SELECT relation.relname AS "tableName", trigger_row.tgname AS "triggerName",
+        procedure.proname AS "functionName"
+      FROM pg_trigger AS trigger_row
+      JOIN pg_class AS relation ON relation.oid = trigger_row.tgrelid
+      JOIN pg_proc AS procedure ON procedure.oid = trigger_row.tgfoid
+      WHERE NOT trigger_row.tgisinternal
+        AND trigger_row.tgname IN ('order_fulfillment_transition_guard', 'cycle_operations_lifecycle_guard')
+      ORDER BY relation.relname
+    `);
+    expect(rows).toEqual([
+      { tableName: "bake_cycles", triggerName: "cycle_operations_lifecycle_guard", functionName: "enforce_cycle_operations_lifecycle" },
+      { tableName: "orders", triggerName: "order_fulfillment_transition_guard", functionName: "enforce_order_fulfillment_transition" },
+    ]);
+  });
+
   it("stores local delivery time and packing quantities with the required types", async () => {
     expect(await operationColumns(context.db)).toEqual([
       {

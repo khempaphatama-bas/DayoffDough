@@ -190,12 +190,14 @@ export async function updateFulfillmentStatusAction(
   if (!parsed.success) {
     return { error: "กรุณาตรวจสอบสถานะออเดอร์", saved: false };
   }
+  if (parsed.data.status !== "CONFIRMED") {
+    return { error: "กรุณาใช้หน้าปฏิบัติงานรอบผลิตเพื่อเปลี่ยนสถานะออเดอร์", saved: false };
+  }
 
   try {
-    const order = await createOrderService(db).updateFulfillmentStatus(
+    const order = await createOrderService(db).confirmBeforeProduction(
       owner.id,
       parsed.data.orderId,
-      parsed.data.status,
     );
     revalidateOrderStatusPaths(order);
     return { error: null, saved: true };

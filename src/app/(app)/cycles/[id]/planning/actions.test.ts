@@ -36,6 +36,7 @@ import {
   PlanningStateError,
 } from "@/modules/planning/application/planning-commands";
 import { lockCycleAction, unlockCycleAction } from "./actions";
+import { OperationsStateError } from "@/modules/operations/domain/types";
 
 const INITIAL_STATE: PlanningActionState = {
   error: null,
@@ -291,6 +292,21 @@ describe("planning actions", () => {
     await expect(
       unlockCycleAction(INITIAL_UNLOCK_STATE, valid),
     ).resolves.toEqual({ error: "ปลดล็อกรอบนี้ไม่ได้", saved: false });
+    expect(next.revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("maps the operations unlock blocker to its specific Thai message", async () => {
+    commands.unlock.mockRejectedValueOnce(new OperationsStateError(
+      "UNLOCK_BLOCKED_BY_OPERATIONS", "Cycle operations have started",
+    ));
+    const valid = new FormData();
+    valid.set("cycleId", CYCLE_ID);
+    valid.set("reason", "เพิ่มออเดอร์ด่วน");
+    valid.set("confirmation", "ปลดล็อก");
+
+    await expect(unlockCycleAction(INITIAL_UNLOCK_STATE, valid)).resolves.toEqual({
+      error: "ปลดล็อกรอบไม่ได้ เพราะเริ่มทำออเดอร์แล้ว", saved: false,
+    });
     expect(next.revalidatePath).not.toHaveBeenCalled();
   });
 

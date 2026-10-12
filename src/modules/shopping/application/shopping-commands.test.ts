@@ -6,6 +6,10 @@ import { seedLockedPlanningScenario } from "@tests/fixtures/planning";
 import { createTestDatabase } from "@tests/helpers/test-db";
 import { lockOwnedInventoryItems } from "@/lib/db/row-locks";
 import { bakeCycles } from "@/modules/cycles/db/schema";
+import { createCycleOperationsCommandService } from "@/modules/operations/application/cycle-commands";
+import { createOrderOperationsCommandService } from "@/modules/operations/application/order-commands";
+import { orderItems } from "@/modules/orders/db/schema";
+import { cycleTaskGenerations, cycleTasks } from "@/modules/production/db/schema";
 import {
   inventoryItems,
   inventoryMovements,
@@ -42,6 +46,29 @@ const LATER_PURCHASED_AT = new Date("2026-08-23T06:00:00.000Z");
 
 type Context = Awaited<ReturnType<typeof createTestDatabase>>;
 type Fixture = Awaited<ReturnType<typeof seedLockedPlanningScenario>>;
+
+async function completeOperations(db: Context["db"], fixture: Fixture) {
+  const cycles = createCycleOperationsCommandService(db, CLOCK);
+  const orders = createOrderOperationsCommandService(db, CLOCK);
+  await cycles.startCycle(OWNER_ID, { cycleId: fixture.cycleId });
+  await orders.startOrders(OWNER_ID, { cycleId: fixture.cycleId, orderIds: fixture.orderIds.slice(0, 2) });
+  for (const orderId of fixture.orderIds.slice(0, 2)) {
+    const [item] = await db.select().from(orderItems).where(eq(orderItems.orderId, orderId!));
+    await orders.setPackedQuantity(OWNER_ID, {
+      cycleId: fixture.cycleId, orderItemId: item!.id,
+      packedQuantity: item!.quantity, expectedPackedQuantity: 0,
+    });
+    await orders.confirmOrderPacked(OWNER_ID, { cycleId: fixture.cycleId, orderId: orderId! });
+  }
+  await orders.deliverOrders(OWNER_ID, { cycleId: fixture.cycleId, orderIds: fixture.orderIds.slice(0, 2) });
+  const [generation] = await db.select().from(cycleTaskGenerations)
+    .where(eq(cycleTaskGenerations.planningSnapshotId, fixture.planningSnapshotId));
+  await db.update(cycleTasks).set({ status: "DONE" })
+    .where(eq(cycleTasks.cycleTaskGenerationId, generation!.id));
+  await cycles.completeCycle(OWNER_ID, {
+    cycleId: fixture.cycleId, expectedTaskGenerationId: generation!.id, confirmation: true,
+  });
+}
 
 function confirmInput(fixture: Fixture, overrides: Partial<{
   confirmationRequestId: string;
@@ -475,12 +502,15 @@ describe("shopping command service", () => {
       planningSnapshotId: "74000000-0000-4000-8000-000000000001",
     }))).rejects.toBeInstanceOf(ShoppingStateError);
 
-    for (const status of ["OPEN", "COMPLETED", "CANCELLED"] as const) {
-      await context.db.update(bakeCycles).set({ status }).where(eq(bakeCycles.id, fixture.cycleId));
-      await expect(service.confirmStock(OWNER_ID, confirmInput(fixture))).rejects.toBeInstanceOf(ShoppingStateError);
-    }
-    await context.db.update(bakeCycles).set({ status: "IN_PRODUCTION" }).where(eq(bakeCycles.id, fixture.cycleId));
+    await context.db.update(bakeCycles).set({ status: "OPEN" }).where(eq(bakeCycles.id, fixture.cycleId));
+    await expect(service.confirmStock(OWNER_ID, confirmInput(fixture))).rejects.toBeInstanceOf(ShoppingStateError);
+    await context.db.update(bakeCycles).set({ status: "LOCKED" }).where(eq(bakeCycles.id, fixture.cycleId));
+    await createCycleOperationsCommandService(context.db, CLOCK).startCycle(OWNER_ID, { cycleId: fixture.cycleId });
     await expect(service.confirmStock(OWNER_ID, confirmInput(fixture))).resolves.toMatchObject({ kind: "SHOPPING" });
+    await completeOperations(context.db, fixture);
+    await expect(service.confirmStock(OWNER_ID, confirmInput(fixture, {
+      confirmationRequestId: SECOND_CONFIRMATION_REQUEST_ID,
+    }))).rejects.toBeInstanceOf(ShoppingStateError);
     await context.db.update(cyclePlanningSnapshots).set({
       status: "SUPERSEDED",
       unlockedAt: CLOCK.now(),
@@ -635,10 +665,7 @@ describe("shopping command service", () => {
       packCount: 2,
       totalPriceSatang: 0,
     }));
-    await context.db
-      .update(bakeCycles)
-      .set({ status: "IN_PRODUCTION" })
-      .where(eq(bakeCycles.id, fixture.cycleId));
+    await createCycleOperationsCommandService(context.db, CLOCK).startCycle(OWNER_ID, { cycleId: fixture.cycleId });
     await expect(
       service.recordPurchase(OWNER_ID, purchaseInput(fixture, shoppingItem.id, {
         purchaseRequestId: PURCHASE_2,
@@ -662,12 +689,6 @@ describe("shopping command service", () => {
     const service = createShoppingCommandService(context.db, CLOCK);
     await context.db.update(bakeCycles).set({ status: "OPEN" }).where(eq(bakeCycles.id, fixture.cycleId));
     await expect(service.recordPurchase(OWNER_ID, purchaseInput(fixture, shoppingItem.id))).rejects.toBeInstanceOf(ShoppingStateError);
-    for (const status of ["COMPLETED", "CANCELLED"] as const) {
-      await context.db.update(bakeCycles).set({ status }).where(eq(bakeCycles.id, fixture.cycleId));
-      await expect(
-        service.recordPurchase(OWNER_ID, purchaseInput(fixture, shoppingItem.id)),
-      ).rejects.toBeInstanceOf(ShoppingStateError);
-    }
     await context.db.update(bakeCycles).set({ status: "LOCKED" }).where(eq(bakeCycles.id, fixture.cycleId));
     await context.db.update(cyclePlanningSnapshots).set({
       status: "SUPERSEDED",
@@ -675,6 +696,8 @@ describe("shopping command service", () => {
       unlockReason: "ปรับรอบ",
       unlockedFromStatus: "LOCKED",
     }).where(eq(cyclePlanningSnapshots.id, fixture.planningSnapshotId));
+    await expect(service.recordPurchase(OWNER_ID, purchaseInput(fixture, shoppingItem.id))).rejects.toBeInstanceOf(ShoppingStateError);
+    await context.db.update(bakeCycles).set({ status: "CANCELLED" }).where(eq(bakeCycles.id, fixture.cycleId));
     await expect(service.recordPurchase(OWNER_ID, purchaseInput(fixture, shoppingItem.id))).rejects.toBeInstanceOf(ShoppingStateError);
 
     const isolated = await seedLockedPlanningScenario(context.db, {

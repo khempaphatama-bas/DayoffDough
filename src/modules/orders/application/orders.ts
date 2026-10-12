@@ -249,13 +249,6 @@ const orderFormIncludesSchema = z.object({
   deliveryMethodId: uuidSchema.nullable(),
 });
 const fulfillmentStatusSchema = z.enum(orderFulfillmentStatus);
-const fulfillmentFlow: ReadonlyArray<OrderFulfillmentStatus> = [
-  "NEW",
-  "CONFIRMED",
-  "IN_PRODUCTION",
-  "PACKED",
-  "DELIVERED",
-];
 
 type OrderRow = typeof orders.$inferSelect;
 type OrderWriteInput = z.infer<typeof orderInputSchema>;
@@ -846,25 +839,25 @@ export function createOrderService(db: DatabaseClient) {
       const existing = locked.order;
       const cycle = locked.cyclesById.get(existing.bakeCycleId);
       if (!cycle) throw new Error("Cycle not found");
-      if (explicitCancellation && !isProductionEditable(cycle.status)) {
+      if (!isProductionEditable(cycle.status)) {
         throw new Error("Cycle production inputs are locked");
       }
 
       const currentStatus =
         existing.fulfillmentStatus as OrderFulfillmentStatus;
-      const currentIndex = fulfillmentFlow.indexOf(currentStatus);
-      const nextIndex = fulfillmentFlow.indexOf(parsedStatus.data);
+      if (!explicitCancellation && currentStatus === "CONFIRMED") {
+        return requireOrderDetail(tx, parsedOwnerId.data, parsedOrderId.data);
+      }
       const canCancel =
         explicitCancellation &&
         parsedStatus.data === "CANCELLED" &&
         currentStatus !== "CANCELLED" &&
         currentStatus !== "DELIVERED";
-      const canMoveForward =
+      const canConfirm =
         !explicitCancellation &&
-        parsedStatus.data !== "CANCELLED" &&
-        currentIndex >= 0 &&
-        nextIndex > currentIndex;
-      if (!canCancel && !canMoveForward) {
+        currentStatus === "NEW" &&
+        parsedStatus.data === "CONFIRMED";
+      if (!canCancel && !canConfirm) {
         throw new Error("Invalid fulfillment transition");
       }
 
@@ -893,7 +886,14 @@ export function createOrderService(db: DatabaseClient) {
     orderId: string,
     status: OrderFulfillmentStatus,
   ): Promise<OrderDetail> {
-    return transitionFulfillmentStatus(ownerId, orderId, status, false);
+    void ownerId;
+    void orderId;
+    void status;
+    throw new Error("Invalid fulfillment transition");
+  }
+
+  async function confirmBeforeProduction(ownerId: string, orderId: string): Promise<OrderDetail> {
+    return transitionFulfillmentStatus(ownerId, orderId, "CONFIRMED", false);
   }
 
   async function markRefunded(
@@ -1259,6 +1259,7 @@ export function createOrderService(db: DatabaseClient) {
     },
 
     updateFulfillmentStatus,
+    confirmBeforeProduction,
 
     async cancel(ownerId: string, orderId: string): Promise<OrderDetail> {
       return transitionFulfillmentStatus(ownerId, orderId, "CANCELLED", true);

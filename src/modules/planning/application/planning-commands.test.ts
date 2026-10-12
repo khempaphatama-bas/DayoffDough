@@ -1,11 +1,14 @@
 import { and, count, eq, sql } from "drizzle-orm";
 import type { Logger } from "drizzle-orm/logger";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OTHER_OWNER_ID, OWNER_ID } from "@tests/fixtures/owner";
-import { seedPlanningScenario } from "@tests/fixtures/planning";
+import { seedLockedPlanningScenario, seedPlanningScenario } from "@tests/fixtures/planning";
 import { createTestDatabase } from "@tests/helpers/test-db";
 import type { DatabaseClient } from "@/lib/db/types";
 import { createCycleService } from "@/modules/cycles/application/cycles";
+import { createCycleOperationsCommandService } from "@/modules/operations/application/cycle-commands";
+import { createOrderOperationsCommandService } from "@/modules/operations/application/order-commands";
+import { OperationsStateError } from "@/modules/operations/domain/types";
 import { bakeCycles } from "@/modules/cycles/db/schema";
 import {
   createOrderService,
@@ -117,6 +120,38 @@ describe("planning command service", () => {
   });
 
   afterEach(async () => context.close());
+
+  it("invokes the unlock guard inside the transaction and leaves the active generation untouched on rejection", async () => {
+    const scenario = await seedLockedPlanningScenario(context.db);
+    const guard = vi.fn(async () => {
+      throw new OperationsStateError("UNLOCK_BLOCKED_BY_OPERATIONS", "Cycle operations have started");
+    });
+    const commands = createPlanningCommandService(context.db, { now: () => UNLOCKED_AT }, {
+      assertCycleOperationsUnlockAllowed: guard,
+    });
+    await expect(commands.unlock(OWNER_ID, {
+      cycleId: scenario.cycleId, reason: "เปลี่ยนแผน", confirmation: "ปลดล็อก",
+    })).rejects.toMatchObject({ kind: "UNLOCK_BLOCKED_BY_OPERATIONS" });
+    expect(guard).toHaveBeenCalledWith(expect.anything(), OWNER_ID, scenario.cycleId);
+    await expect(createCycleService(context.db).get(OWNER_ID, scenario.cycleId))
+      .resolves.toMatchObject({ status: "LOCKED", activePlanningSnapshotId: scenario.planningSnapshotId });
+    const [snapshot] = await context.db.select().from(cyclePlanningSnapshots)
+      .where(eq(cyclePlanningSnapshots.id, scenario.planningSnapshotId));
+    expect(snapshot).toMatchObject({ status: "ACTIVE", unlockedAt: null });
+  });
+
+  it("allows unlock after payment and task progress alone", async () => {
+    const scenario = await seedLockedPlanningScenario(context.db);
+    await context.db.update(orders).set({ amountPaidSatang: 0, paymentStatus: "UNPAID" })
+      .where(eq(orders.id, scenario.orderIds[0]!));
+    const [generation] = await context.db.select().from(cycleTaskGenerations)
+      .where(eq(cycleTaskGenerations.planningSnapshotId, scenario.planningSnapshotId));
+    await context.db.update(cycleTasks).set({ status: "IN_PROGRESS" })
+      .where(eq(cycleTasks.cycleTaskGenerationId, generation!.id));
+    await expect(createPlanningCommandService(context.db).unlock(OWNER_ID, {
+      cycleId: scenario.cycleId, reason: "เปลี่ยนแผน", confirmation: "ปลดล็อก",
+    })).resolves.toMatchObject({ status: "SUPERSEDED" });
+  });
 
   it("atomically unlocks a locked generation without mutating its children and re-locks as generation 2", async () => {
     const scenario = await seedPlanningScenario(context.db);
@@ -536,10 +571,8 @@ describe("planning command service", () => {
       lockRequestId: "30303030-3030-4030-8030-303030303030",
       overrides: [],
     });
-    await createCycleService(context.db).changeStatus(
-      OWNER_ID,
-      scenario.cycleId,
-      "IN_PRODUCTION",
+    await createCycleOperationsCommandService(context.db).startCycle(
+      OWNER_ID, { cycleId: scenario.cycleId },
     );
 
     await expect(
@@ -565,22 +598,46 @@ describe("planning command service", () => {
   it.each(["OPEN", "COMPLETED", "CANCELLED"] as const)(
     "rejects unlock from %s without changing snapshot metadata",
     async (status) => {
-      const scenario = await seedPlanningScenario(context.db);
+      const completedScenario = status === "COMPLETED"
+        ? await seedLockedPlanningScenario(context.db)
+        : null;
+      const scenario = completedScenario ?? await seedPlanningScenario(context.db);
       const commands = createPlanningCommandService(context.db, {
         now: () => new Date(LOCKED_AT),
       });
       let lockedId: string | null = null;
-      if (status !== "OPEN") {
+      if (status === "COMPLETED") {
+        if (!completedScenario) throw new Error("Locked fixture missing snapshot");
+        lockedId = completedScenario.planningSnapshotId;
+        const cycles = createCycleOperationsCommandService(context.db);
+        const operations = createOrderOperationsCommandService(context.db);
+        await cycles.startCycle(OWNER_ID, { cycleId: scenario.cycleId });
+        const orderIds = scenario.orderIds.slice(0, 2);
+        await operations.startOrders(OWNER_ID, { cycleId: scenario.cycleId, orderIds });
+        for (const orderId of orderIds) {
+          const [item] = await context.db.select().from(orderItems).where(eq(orderItems.orderId, orderId!));
+          await operations.setPackedQuantity(OWNER_ID, {
+            cycleId: scenario.cycleId, orderItemId: item!.id,
+            packedQuantity: item!.quantity, expectedPackedQuantity: 0,
+          });
+          await operations.confirmOrderPacked(OWNER_ID, { cycleId: scenario.cycleId, orderId: orderId! });
+        }
+        await operations.deliverOrders(OWNER_ID, { cycleId: scenario.cycleId, orderIds });
+        const [generation] = await context.db.select().from(cycleTaskGenerations)
+          .where(eq(cycleTaskGenerations.planningSnapshotId, completedScenario.planningSnapshotId));
+        await context.db.update(cycleTasks).set({ status: "DONE" })
+          .where(eq(cycleTasks.cycleTaskGenerationId, generation!.id));
+        await cycles.completeCycle(OWNER_ID, {
+          cycleId: scenario.cycleId, expectedTaskGenerationId: generation!.id, confirmation: true,
+        });
+      } else if (status !== "OPEN") {
         const preview = await createPlanningQueryService(context.db, {
           now: () => new Date(LOCKED_AT),
         }).preview(OWNER_ID, scenario.cycleId);
         const locked = await commands.lock(OWNER_ID, {
           cycleId: scenario.cycleId,
           inputFingerprint: preview.inputFingerprint,
-          lockRequestId:
-            status === "COMPLETED"
-              ? "40404040-4040-4040-8040-404040404040"
-              : "50505050-5050-4050-8050-505050505050",
+          lockRequestId: "50505050-5050-4050-8050-505050505050",
           overrides: [],
         });
         lockedId = locked.id;

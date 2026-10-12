@@ -8,7 +8,7 @@ const ORDER_ID = "00000000-0000-4000-8000-000000000060";
 describe("OrderStatusActions", () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it("offers named forward, refund, and confirmed cancellation actions", async () => {
+  it("offers confirmation before production, refund, and confirmed cancellation actions", async () => {
     const updateFulfillmentStatus = vi.fn().mockResolvedValue({
       error: null,
       saved: true,
@@ -35,7 +35,7 @@ describe("OrderStatusActions", () => {
       <OrderStatusActions
         cancelOrder={cancelOrder}
         cycleStatus="OPEN"
-        fulfillmentStatus="CONFIRMED"
+        fulfillmentStatus="NEW"
         markOrderRefunded={markOrderRefunded}
         orderId={ORDER_ID}
         paymentStatus="PARTIAL"
@@ -45,9 +45,7 @@ describe("OrderStatusActions", () => {
     );
 
     for (const name of [
-      "เริ่มผลิต",
-      "แพ็กเสร็จแล้ว",
-      "จัดส่งแล้ว",
+      "ยืนยันออเดอร์",
       "บันทึกคืนเงิน",
       "ยกเลิกออเดอร์",
     ]) {
@@ -102,16 +100,11 @@ describe("OrderStatusActions", () => {
     expect((submitted as FormData).get("status")).toBe("RESTORE");
   });
 
-  it("requires confirmation before delivery and never offers cancellation after delivery", async () => {
+  it("does not offer delivery or cancellation after delivery", async () => {
     const updateFulfillmentStatus = vi.fn().mockResolvedValue({
       error: null,
       saved: true,
     });
-    const confirm = vi
-      .spyOn(window, "confirm")
-      .mockReturnValueOnce(false)
-      .mockReturnValueOnce(true);
-    const user = userEvent.setup();
     const { rerender } = render(
       <OrderStatusActions
         cancelOrder={vi.fn()}
@@ -125,14 +118,9 @@ describe("OrderStatusActions", () => {
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: "จัดส่งแล้ว" }));
-    expect(confirm).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("button", { name: "จัดส่งแล้ว" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "แพ็กเสร็จแล้ว" })).toBeNull();
     expect(updateFulfillmentStatus).not.toHaveBeenCalled();
-
-    await user.click(screen.getByRole("button", { name: "จัดส่งแล้ว" }));
-    await waitFor(() => expect(updateFulfillmentStatus).toHaveBeenCalledOnce());
-    expect((updateFulfillmentStatus.mock.calls[0]?.[1] as FormData).get("status"))
-      .toBe("DELIVERED");
 
     rerender(
       <OrderStatusActions
@@ -150,7 +138,7 @@ describe("OrderStatusActions", () => {
       .not.toBeInTheDocument();
   });
 
-  it("hides cancellation for a production-frozen cycle but keeps forward and refund controls", () => {
+  it("hides cancellation and generic forward controls for a production-frozen cycle", () => {
     render(
       <OrderStatusActions
         cancelOrder={vi.fn()}
@@ -165,8 +153,8 @@ describe("OrderStatusActions", () => {
     );
 
     expect(screen.queryByRole("button", { name: "ยกเลิกออเดอร์" })).toBeNull();
-    expect(screen.getByRole("button", { name: "เริ่มผลิต" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "แพ็กเสร็จแล้ว" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "เริ่มผลิต" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "แพ็กเสร็จแล้ว" })).toBeNull();
     expect(screen.getByRole("button", { name: "บันทึกคืนเงิน" })).toBeInTheDocument();
   });
 });

@@ -19,6 +19,7 @@ import type {
   PlanningGenerationSummary,
 } from "./planning-queries";
 import { persistPlanningSnapshot } from "./snapshot-writer";
+import { assertCycleOperationsUnlockAllowed } from "@/modules/operations/application/unlock-guard";
 import {
   persistCycleTaskGeneration,
   type PersistCycleTaskGeneration,
@@ -49,6 +50,7 @@ export class PlanningStateError extends Error {
 
 export type PlanningCommandDependencies = Readonly<{
   persistCycleTaskGeneration?: PersistCycleTaskGeneration;
+  assertCycleOperationsUnlockAllowed?: typeof assertCycleOperationsUnlockAllowed;
 }>;
 
 export function createPlanningCommandService(
@@ -58,6 +60,8 @@ export function createPlanningCommandService(
 ) {
   const writeCycleTaskGeneration =
     dependencies.persistCycleTaskGeneration ?? persistCycleTaskGeneration;
+  const assertUnlockAllowed =
+    dependencies.assertCycleOperationsUnlockAllowed ?? assertCycleOperationsUnlockAllowed;
   return {
     async unlock(
       ownerId: string,
@@ -104,6 +108,8 @@ export function createPlanningCommandService(
         if (!activeSnapshot || activeSnapshot.status !== "ACTIVE") {
           throw new PlanningStateError("Cycle cannot be unlocked");
         }
+
+        await assertUnlockAllowed(tx, verifiedOwnerId, cycle.id);
 
         const unlockedAt = clock.now();
         const [superseded] = await tx

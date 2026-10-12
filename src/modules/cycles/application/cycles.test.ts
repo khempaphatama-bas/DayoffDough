@@ -1,3 +1,4 @@
+import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Logger } from "drizzle-orm/logger";
 import { OTHER_OWNER_ID, OWNER_ID } from "@tests/fixtures/owner";
@@ -6,6 +7,10 @@ import { createTestDatabase } from "@tests/helpers/test-db";
 import { bakeCycles, bakeCycleStatus } from "@/modules/cycles/db/schema";
 import { createPlanningCommandService } from "@/modules/planning/application/planning-commands";
 import { createPlanningQueryService } from "@/modules/planning/application/planning-queries";
+import { createCycleOperationsCommandService } from "@/modules/operations/application/cycle-commands";
+import { createOrderOperationsCommandService } from "@/modules/operations/application/order-commands";
+import { orderItems } from "@/modules/orders/db/schema";
+import { cycleTaskGenerations, cycleTasks } from "@/modules/production/db/schema";
 import {
   type BakeCycleStatus,
   type BakeCycleInput,
@@ -23,6 +28,18 @@ const BASE_INPUT: BakeCycleInput = {
 describe("cycle service", () => {
   let context: Awaited<ReturnType<typeof createTestDatabase>>;
   let service: ReturnType<typeof createCycleService>;
+
+  it.each(["IN_PRODUCTION", "COMPLETED"] as const)(
+    "rejects generic transition into Operations-owned %s",
+    async (target) => {
+      const [cycle] = await context.db.insert(bakeCycles).values({
+        ownerId: OWNER_ID, name: "Locked cycle", status: "LOCKED",
+        targetProductionDate: "2026-08-29", primaryDeliveryDate: "2026-08-30",
+      }).returning();
+      await expect(service.changeStatus(OWNER_ID, cycle!.id, target))
+        .rejects.toThrow("Cycle transition belongs to Operations");
+    },
+  );
 
   beforeEach(async () => {
     context = await createTestDatabase();
@@ -181,8 +198,8 @@ describe("cycle service", () => {
     > = {
       DRAFT: ["OPEN", "CANCELLED"],
       OPEN: ["DRAFT", "CANCELLED"],
-      LOCKED: ["IN_PRODUCTION", "CANCELLED"],
-      IN_PRODUCTION: ["COMPLETED", "CANCELLED"],
+      LOCKED: ["CANCELLED"],
+      IN_PRODUCTION: ["CANCELLED"],
       COMPLETED: [],
       CANCELLED: [],
     };
@@ -219,7 +236,11 @@ describe("cycle service", () => {
         } else {
           await expect(
             service.changeStatus(OWNER_ID, cycle!.id, target),
-          ).rejects.toThrow("Invalid cycle status transition");
+          ).rejects.toThrow(
+            target === "IN_PRODUCTION" || target === "COMPLETED"
+              ? "Cycle transition belongs to Operations"
+              : "Invalid cycle status transition",
+          );
           await expect(service.get(OWNER_ID, cycle!.id)).resolves.toMatchObject({
             status: current,
             lockedAt,
@@ -266,16 +287,36 @@ describe("cycle service", () => {
         overrides: [],
       });
       if (source === "IN_PRODUCTION") {
-        await service.changeStatus(
-          OWNER_ID,
-          scenario.cycleId,
-          "IN_PRODUCTION",
+        await createCycleOperationsCommandService(context.db).startCycle(
+          OWNER_ID, { cycleId: scenario.cycleId },
         );
       }
 
-      await expect(
-        service.changeStatus(OWNER_ID, scenario.cycleId, target),
-      ).resolves.toMatchObject({
+      if (target === "COMPLETED") {
+        const orderCommands = createOrderOperationsCommandService(context.db);
+        const activeOrderIds = scenario.orderIds.slice(0, 2);
+        await orderCommands.startOrders(OWNER_ID, { cycleId: scenario.cycleId, orderIds: activeOrderIds });
+        for (const orderId of activeOrderIds) {
+          const [item] = await context.db.select().from(orderItems).where(eq(orderItems.orderId, orderId));
+          await orderCommands.setPackedQuantity(OWNER_ID, {
+            cycleId: scenario.cycleId, orderItemId: item!.id,
+            packedQuantity: item!.quantity, expectedPackedQuantity: 0,
+          });
+          await orderCommands.confirmOrderPacked(OWNER_ID, { cycleId: scenario.cycleId, orderId });
+        }
+        await orderCommands.deliverOrders(OWNER_ID, { cycleId: scenario.cycleId, orderIds: activeOrderIds });
+        const [generation] = await context.db.select().from(cycleTaskGenerations)
+          .where(eq(cycleTaskGenerations.planningSnapshotId, locked.id));
+        await context.db.update(cycleTasks).set({ status: "DONE" })
+          .where(eq(cycleTasks.cycleTaskGenerationId, generation!.id));
+        await createCycleOperationsCommandService(context.db).completeCycle(OWNER_ID, {
+          cycleId: scenario.cycleId, expectedTaskGenerationId: generation!.id, confirmation: true,
+        });
+      } else {
+        await service.changeStatus(OWNER_ID, scenario.cycleId, target);
+      }
+
+      await expect(service.get(OWNER_ID, scenario.cycleId)).resolves.toMatchObject({
         status: target,
         activePlanningSnapshotId: locked.id,
         lockedAt,

@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import type { ZodIssue } from "zod";
 import { requireOwner } from "@/lib/auth/require-owner";
 import { db } from "@/lib/db/client";
+import { OperationsStateError } from "@/modules/operations/domain/types";
 import {
   createPlanningCommandService,
   PlanningBlockedError,
@@ -184,6 +185,9 @@ export async function unlockCycleAction(
     revalidatePlanningViews(parsed.data.cycleId);
     return { error: null, saved: true };
   } catch (error) {
+    if (error instanceof OperationsStateError && error.kind === "UNLOCK_BLOCKED_BY_OPERATIONS") {
+      return { error: "ปลดล็อกรอบไม่ได้ เพราะเริ่มทำออเดอร์แล้ว", saved: false };
+    }
     if (error instanceof PlanningStateError) {
       return { error: "ปลดล็อกรอบนี้ไม่ได้", saved: false };
     }

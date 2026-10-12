@@ -85,6 +85,7 @@ describe("production task actions", () => {
       ["/cycles/72000000-0000-4000-8000-000000000001"],
       ["/cycles/72000000-0000-4000-8000-000000000001/planning"],
       ["/cycles/72000000-0000-4000-8000-000000000001/production"],
+      ["/cycles/72000000-0000-4000-8000-000000000001/operations"],
       ["/cycles"],
       ["/dashboard"],
     ]);
@@ -106,7 +107,7 @@ describe("production task actions", () => {
     const result = await createManualCycleTaskAction(INITIAL, payloadForm(payload));
     expect(result).toMatchObject({ error: null, saved: true });
     expect(service.createManualTask).toHaveBeenCalledWith(OWNER_ID, expect.objectContaining({ creationRequestId: REQUEST_ID }));
-    expect(next.revalidatePath).toHaveBeenCalledTimes(5);
+    expect(next.revalidatePath).toHaveBeenCalledTimes(6);
   });
 
   it("returns safe delete errors and does not leak raw database details", async () => {

@@ -11,6 +11,7 @@ import { cycleOrderItemSnapshots, cycleOrderSnapshots, cyclePlanningSnapshots } 
 import { createPlanningCommandService } from "@/modules/planning/application/planning-commands";
 import { createPlanningQueryService } from "@/modules/planning/application/planning-queries";
 import { createOrderOperationsCommandService } from "./order-commands";
+import { createCycleOperationsCommandService } from "./cycle-commands";
 import { createOperationsQueryService } from "./operations-queries";
 
 const MISSING_ID = "ffffffff-ffff-4fff-bfff-ffffffffffff";
@@ -62,7 +63,13 @@ describe("order operations commands", () => {
   }
 
   async function inProduction(cycleId: string) {
-    await context.db.update(bakeCycles).set({ status: "IN_PRODUCTION" }).where(eq(bakeCycles.id, cycleId));
+    await createCycleOperationsCommandService(context.db).startCycle(OWNER_ID, { cycleId });
+    const [secondOrder] = await context.db.select({ id: orders.id }).from(orders).where(and(
+      eq(orders.ownerId, OWNER_ID), eq(orders.bakeCycleId, cycleId), eq(orders.sourceChannel, "PHONE"),
+    ));
+    await createOrderOperationsCommandService(context.db).startOrders(OWNER_ID, {
+      cycleId, orderIds: [secondOrder!.id],
+    });
   }
 
   it("normalizes duplicate batch IDs, confirms, and starts exact retries", async () => {
@@ -89,6 +96,7 @@ describe("order operations commands", () => {
 
   it("rolls back mixed confirmation after the valid NEW Order sorts before the invalid Order", async () => {
     const s = await scenarioWithNewOrder();
+    await inProduction(s.cycleId);
     const commands = createOrderOperationsCommandService(context.db, CLOCK);
     await expect(commands.confirmOrders(OWNER_ID, {
       cycleId: s.cycleId, orderIds: [s.orderIds[1]!, NEW_ORDER_ID],

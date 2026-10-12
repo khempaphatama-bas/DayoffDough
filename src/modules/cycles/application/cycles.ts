@@ -136,6 +136,9 @@ export function createCycleService(db: DatabaseClient) {
       if (status === "LOCKED") {
         throw new Error("Cycle locking belongs to Phase 3");
       }
+      if (status === "IN_PRODUCTION" || status === "COMPLETED") {
+        throw new Error("Cycle transition belongs to Operations");
+      }
       const parsedOwnerId = uuidSchema.safeParse(ownerId);
       const parsedCycleId = uuidSchema.safeParse(cycleId);
       const parsedStatus = bakeCycleStatusSchema.safeParse(status);

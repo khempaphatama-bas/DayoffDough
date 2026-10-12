@@ -36,7 +36,7 @@ describe("cycle operations commands", () => {
     const commands = createOrderOperationsCommandService(context.db, CLOCK);
     const cycles = createCycleOperationsCommandService(context.db, CLOCK);
     await cycles.startCycle(OWNER_ID, { cycleId: s.cycleId });
-    await commands.startOrders(OWNER_ID, { cycleId: s.cycleId, orderIds: [s.orderIds[0]!] });
+    await commands.startOrders(OWNER_ID, { cycleId: s.cycleId, orderIds: s.orderIds.slice(0, 2) });
     for (const orderId of s.orderIds.slice(0, 2)) {
       const [item] = await context.db.select().from(orderItems).where(eq(orderItems.orderId, orderId!));
       await commands.setPackedQuantity(OWNER_ID, { cycleId: s.cycleId, orderItemId: item!.id, packedQuantity: item!.quantity, expectedPackedQuantity: 0 });

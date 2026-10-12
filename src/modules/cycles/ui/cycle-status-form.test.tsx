@@ -16,8 +16,8 @@ describe("CycleStatusForm", () => {
   it.each([
     ["DRAFT", ["", "OPEN", "CANCELLED"]],
     ["OPEN", ["", "DRAFT", "CANCELLED"]],
-    ["LOCKED", ["", "IN_PRODUCTION", "CANCELLED"]],
-    ["IN_PRODUCTION", ["", "COMPLETED", "CANCELLED"]],
+    ["LOCKED", ["", "CANCELLED"]],
+    ["IN_PRODUCTION", ["", "CANCELLED"]],
   ] as const)("offers only legal transitions from %s", (current, expected) => {
     render(
       <CycleStatusForm

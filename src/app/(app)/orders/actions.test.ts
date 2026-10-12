@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   restorePaymentTracking: vi.fn(),
   update: vi.fn(),
   updateFulfillmentStatus: vi.fn(),
+  confirmBeforeProduction: vi.fn(),
   createOrderService: vi.fn(),
   redirect: vi.fn(),
   requireOwner: vi.fn(),
@@ -82,6 +83,7 @@ describe("saveOrderAction", () => {
       restorePaymentTracking: mocks.restorePaymentTracking,
       update: mocks.update,
       updateFulfillmentStatus: mocks.updateFulfillmentStatus,
+      confirmBeforeProduction: mocks.confirmBeforeProduction,
     });
     mocks.create.mockResolvedValue({ id: ORDER_ID, bakeCycleId: CYCLE_ID });
     mocks.update.mockResolvedValue({ id: ORDER_ID, bakeCycleId: CYCLE_ID });
@@ -94,6 +96,7 @@ describe("saveOrderAction", () => {
     mocks.markRefunded.mockResolvedValue(statusResult);
     mocks.restorePaymentTracking.mockResolvedValue(statusResult);
     mocks.updateFulfillmentStatus.mockResolvedValue(statusResult);
+    mocks.confirmBeforeProduction.mockResolvedValue(statusResult);
     mocks.redirect.mockImplementation(() => {
       throw new Error("NEXT_REDIRECT");
     });
@@ -236,9 +239,9 @@ describe("saveOrderAction", () => {
     [
       "updates fulfillment",
       updateFulfillmentStatusAction,
-      "PACKED",
-      mocks.updateFulfillmentStatus,
-      [OWNER_ID, ORDER_ID, "PACKED"],
+      "CONFIRMED",
+      mocks.confirmBeforeProduction,
+      [OWNER_ID, ORDER_ID],
     ],
     [
       "cancels",
@@ -297,11 +300,11 @@ describe("saveOrderAction", () => {
       saved: false,
     });
     expect(mocks.requireOwner).toHaveBeenCalledOnce();
-    expect(mocks.updateFulfillmentStatus).not.toHaveBeenCalled();
+    expect(mocks.confirmBeforeProduction).not.toHaveBeenCalled();
   });
 
   it("returns a serializable Thai failure when the service rejects a transition", async () => {
-    mocks.updateFulfillmentStatus.mockRejectedValueOnce(
+    mocks.confirmBeforeProduction.mockRejectedValueOnce(
       new Error("Invalid fulfillment transition"),
     );
     const data = new FormData();
@@ -314,6 +317,16 @@ describe("saveOrderAction", () => {
       error: "อัปเดตสถานะออเดอร์ไม่สำเร็จ กรุณาลองอีกครั้ง",
       saved: false,
     });
+    expect(mocks.revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("rejects an old direct PACKED action without calling the pre-freeze command", async () => {
+    const data = new FormData();
+    data.set("orderId", ORDER_ID);
+    data.set("status", "PACKED");
+    await expect(updateFulfillmentStatusAction({ error: null, saved: false }, data))
+      .resolves.toMatchObject({ saved: false });
+    expect(mocks.confirmBeforeProduction).not.toHaveBeenCalled();
     expect(mocks.revalidatePath).not.toHaveBeenCalled();
   });
 

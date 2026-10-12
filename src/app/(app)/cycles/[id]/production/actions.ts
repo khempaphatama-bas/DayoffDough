@@ -75,6 +75,7 @@ function revalidateProductionViews(cycleId: string): void {
     `/cycles/${cycleId}`,
     `/cycles/${cycleId}/planning`,
     `/cycles/${cycleId}/production`,
+    `/cycles/${cycleId}/operations`,
     "/cycles",
     "/dashboard",
   ]) revalidatePath(path);
