@@ -1,9 +1,10 @@
 "use client";
 
-import { useActionState, useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
+import { useActionState, useEffect, useId, useRef, useState } from "react";
 import { completeCycleAction, type OperationsActionState } from "@/app/(app)/cycles/[id]/operations/actions";
 import { formatSatangAsBaht } from "@/modules/money/domain/money";
 import type { CycleOperationsView } from "@/modules/operations/domain/types";
+import { handleOperationsDialogKeyDown } from "./operations-dialog-keyboard";
 
 const INITIAL: OperationsActionState = { error: null, kind: null, fieldErrors: {}, saved: false };
 const buttonClass = "min-h-12 rounded-xl border border-stone-300 bg-white px-4 font-bold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-800 disabled:opacity-50";
@@ -26,20 +27,11 @@ export function CycleCompletionForm({ view, action = completeCycleAction }: Read
   if (cycle.status !== "IN_PRODUCTION") return null;
   const blocked = !completion.ready || completion.remainingTaskCount > 0 || completion.remainingOrderCount > 0 || pending;
   function close() { if (!pending) { setConfirming(false); trigger.current?.focus(); } }
-  function dialogKeys(event: KeyboardEvent<HTMLDivElement>) {
-    if (event.key === "Escape") { event.preventDefault(); close(); return; }
-    if (event.key !== "Tab") return;
-    const controls = event.currentTarget.querySelectorAll<HTMLElement>("button:not([disabled]), a[href]");
-    const first = controls[0]; const last = controls[controls.length - 1];
-    if (!first || !last) { event.preventDefault(); return; }
-    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
-    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
-  }
   return <section aria-label="จบรอบผลิต" className="grid gap-3 rounded-2xl border border-stone-200 p-4">
     <button type="button" className={buttonClass} disabled={blocked} ref={trigger} onClick={() => setConfirming(true)}>จบรอบผลิต</button>
     {!completion.ready ? <p className="text-stone-700">ยังจบรอบไม่ได้: งานค้าง {completion.remainingTaskCount} งาน · ออเดอร์ยังไม่ส่ง {completion.remainingOrderCount} ใบ</p> : null}
     {state.error && !confirming ? <p role="alert" className="text-red-800">{state.error}</p> : null}
-    {confirming ? <div role="dialog" aria-modal="true" aria-labelledby={dialogId} className="fixed inset-0 z-40 grid place-items-center bg-stone-950/40 p-4" onKeyDown={dialogKeys}>
+    {confirming ? <div role="dialog" aria-modal="true" aria-labelledby={dialogId} className="fixed inset-0 z-40 grid place-items-center bg-stone-950/40 p-4" onKeyDown={event => handleOperationsDialogKeyDown(event, close)}>
       <form action={formAction} className="grid max-h-[85dvh] w-full max-w-md gap-4 overflow-y-auto rounded-3xl bg-white p-5 shadow-xl">
         <h2 id={dialogId} className="text-xl font-bold">ยืนยันจบรอบผลิต</h2>
         <p>งานค้าง {completion.remainingTaskCount} งาน · ออเดอร์ยังไม่ส่ง {completion.remainingOrderCount} ใบ</p>

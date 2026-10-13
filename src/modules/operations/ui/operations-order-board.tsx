@@ -1,11 +1,12 @@
 "use client";
 
-import { useActionState, useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
+import { useActionState, useEffect, useId, useRef, useState } from "react";
 import { confirmOrdersAction, startOrdersAction, deliverOrdersAction, type OperationsActionState } from "@/app/(app)/cycles/[id]/operations/actions";
 import { compareOperationsOrders } from "@/modules/operations/domain/rules";
 import type { CycleOperationsView, CycleOperationsHeader, OperationsOrder } from "@/modules/operations/domain/types";
 import { formatSatangAsBaht } from "@/modules/money/domain/money";
 import { OperationsOrderCard } from "./operations-order-card";
+import { handleOperationsDialogKeyDown } from "./operations-dialog-keyboard";
 
 const INITIAL: OperationsActionState = { error: null, kind: null, fieldErrors: {}, saved: false };
 const buttonClass = "min-h-12 rounded-xl border border-stone-300 bg-white px-4 font-bold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-800 disabled:opacity-50";
@@ -29,15 +30,6 @@ function OrderGroup({ orders, cycle, title, label, action, delivery = false, dis
   const paymentWarning = selectedOrders.filter(order => order.paymentStatus === "UNPAID" || order.paymentStatus === "PARTIAL");
   const blocked = disabled || pending || ids.length === 0 || ids.length > 100;
   function close() { if (!pending) { setConfirming(false); trigger.current?.focus(); } }
-  function dialogKeys(event: KeyboardEvent<HTMLDivElement>) {
-    if (event.key === "Escape") { event.preventDefault(); close(); return; }
-    if (event.key !== "Tab") return;
-    const controls = event.currentTarget.querySelectorAll<HTMLElement>("button:not([disabled]), a[href]");
-    const first = controls[0]; const last = controls[controls.length - 1];
-    if (!first || !last) { event.preventDefault(); return; }
-    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
-    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
-  }
   return <section aria-label={title} className="grid gap-4">
     <h2 className="text-xl font-bold">{title}</h2>
     {orders.map(order => <div className="grid gap-2" key={order.id}>
@@ -50,7 +42,7 @@ function OrderGroup({ orders, cycle, title, label, action, delivery = false, dis
       <input name="payload" type="hidden" value={JSON.stringify({ cycleId: cycle.id, orderIds: ids })} />
       <button type={delivery ? "button" : "submit"} ref={trigger} className={buttonClass} disabled={blocked} onClick={delivery ? () => setConfirming(true) : undefined}>{label} {ids.length} ออเดอร์</button>
       {state.error && !confirming ? <p role="alert" className="text-sm text-red-800">{state.error} {state.kind === "STALE_DATA" ? <a className="underline" href={`/cycles/${cycle.id}/operations`}>โหลดข้อมูลล่าสุด</a> : null}</p> : null}
-      {confirming ? <div role="dialog" aria-modal="true" aria-labelledby={dialogId} className="fixed inset-0 z-40 grid place-items-center bg-stone-950/40 p-4" onKeyDown={dialogKeys}>
+      {confirming ? <div role="dialog" aria-modal="true" aria-labelledby={dialogId} className="fixed inset-0 z-40 grid place-items-center bg-stone-950/40 p-4" onKeyDown={event => handleOperationsDialogKeyDown(event, close)}>
         <div className="grid max-h-[85dvh] w-full max-w-md gap-4 overflow-y-auto rounded-3xl bg-white p-5 shadow-xl">
           <h3 id={dialogId} className="text-xl font-bold">ยืนยันส่งสำเร็จ {ids.length} ออเดอร์</h3>
           <ul>{selectedOrders.map(order => <li key={order.id}>{order.customerName} · {order.deliveryMethodName ?? "ยังไม่กำหนดวิธีส่ง"}</li>)}</ul>
