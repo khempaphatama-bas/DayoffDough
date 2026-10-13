@@ -91,7 +91,8 @@ BEGIN
 
   SELECT status INTO cycle_status
   FROM bake_cycles
-  WHERE owner_id = NEW.owner_id AND id = NEW.bake_cycle_id;
+  WHERE owner_id = NEW.owner_id AND id = NEW.bake_cycle_id
+  FOR SHARE;
 
   IF cycle_status IS NULL THEN
     RAISE EXCEPTION 'order fulfillment transition not allowed: cycle missing';
@@ -216,3 +217,78 @@ $$ LANGUAGE plpgsql;--> statement-breakpoint
 CREATE TRIGGER cycle_operations_lifecycle_guard
 BEFORE UPDATE OF status ON bake_cycles
 FOR EACH ROW EXECUTE FUNCTION enforce_cycle_operations_lifecycle();
+--> statement-breakpoint
+CREATE OR REPLACE FUNCTION enforce_cycle_task_lifecycle() RETURNS trigger AS $$
+DECLARE
+  generation_row cycle_task_generations%ROWTYPE;
+  snapshot_row cycle_planning_snapshots%ROWTYPE;
+  cycle_row bake_cycles%ROWTYPE;
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    RAISE EXCEPTION 'cycle task hard delete is not allowed';
+  END IF;
+
+  IF TG_OP = 'UPDATE' AND (
+    NEW.owner_id IS DISTINCT FROM OLD.owner_id
+    OR NEW.cycle_task_generation_id IS DISTINCT FROM OLD.cycle_task_generation_id
+    OR NEW.origin IS DISTINCT FROM OLD.origin
+    OR NEW.source_template_id IS DISTINCT FROM OLD.source_template_id
+    OR NEW.source_activity_id IS DISTINCT FROM OLD.source_activity_id
+    OR NEW.source_template_scope IS DISTINCT FROM OLD.source_template_scope
+    OR NEW.source_product_id IS DISTINCT FROM OLD.source_product_id
+    OR NEW.source_template_name IS DISTINCT FROM OLD.source_template_name
+    OR NEW.source_activity_name IS DISTINCT FROM OLD.source_activity_name
+    OR NEW.source_product_name IS DISTINCT FROM OLD.source_product_name
+    OR NEW.creation_request_id IS DISTINCT FROM OLD.creation_request_id
+  ) THEN
+    RAISE EXCEPTION 'cycle task lineage is immutable';
+  END IF;
+
+  SELECT * INTO generation_row
+  FROM cycle_task_generations
+  WHERE owner_id = NEW.owner_id
+    AND id = NEW.cycle_task_generation_id;
+
+  SELECT * INTO snapshot_row
+  FROM cycle_planning_snapshots
+  WHERE owner_id = generation_row.owner_id
+    AND bake_cycle_id = generation_row.bake_cycle_id
+    AND id = generation_row.planning_snapshot_id;
+
+  SELECT * INTO cycle_row
+  FROM bake_cycles
+  WHERE owner_id = generation_row.owner_id
+    AND id = generation_row.bake_cycle_id
+  FOR SHARE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'task generation is read-only';
+  END IF;
+
+  IF TG_OP = 'UPDATE' THEN
+    IF snapshot_row.status <> 'ACTIVE'
+      OR cycle_row.active_planning_snapshot_id IS DISTINCT FROM snapshot_row.id
+      OR cycle_row.status NOT IN ('LOCKED', 'IN_PRODUCTION') THEN
+      RAISE EXCEPTION 'task generation is read-only';
+    END IF;
+    RETURN NEW;
+  END IF;
+
+  IF NEW.origin = 'MANUAL' THEN
+    IF snapshot_row.status <> 'ACTIVE'
+      OR cycle_row.active_planning_snapshot_id IS DISTINCT FROM snapshot_row.id
+      OR cycle_row.status NOT IN ('LOCKED', 'IN_PRODUCTION') THEN
+      RAISE EXCEPTION 'task generation is read-only';
+    END IF;
+    RETURN NEW;
+  END IF;
+
+  IF snapshot_row.status <> 'ACTIVE'
+    OR cycle_row.status <> 'OPEN'
+    OR cycle_row.active_planning_snapshot_id IS NOT NULL THEN
+    RAISE EXCEPTION 'task generation is read-only';
+  END IF;
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;

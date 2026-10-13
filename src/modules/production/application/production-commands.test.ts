@@ -6,6 +6,9 @@ import { seedLockedPlanningScenario } from "@tests/fixtures/planning";
 import { createTestDatabase } from "@tests/helpers/test-db";
 import { bakeCycles } from "@/modules/cycles/db/schema";
 import { cyclePlanningSnapshots } from "@/modules/planning/db/schema";
+import { createCycleOperationsCommandService } from "@/modules/operations/application/cycle-commands";
+import { createOrderOperationsCommandService } from "@/modules/operations/application/order-commands";
+import { orderItems } from "@/modules/orders/db/schema";
 import { products } from "@/modules/products/db/schema";
 import { cycleTaskGenerations, cycleTasks } from "@/modules/production/db/schema";
 import { createProductionCommandService, ProductionStateError, ProductionValidationError } from "./production-commands";
@@ -256,7 +259,28 @@ describe("production task command service", () => {
     await context.db.update(bakeCycles).set({ status: "LOCKED", activePlanningSnapshotId: value.planningSnapshotId }).where(eq(bakeCycles.id, value.cycleId));
     await context.db.update(bakeCycles).set({ activePlanningSnapshotId: null }).where(eq(bakeCycles.id, value.cycleId));
     await expect(commands.updateTask(OWNER_ID, updateInput(value))).rejects.toBeInstanceOf(ProductionStateError);
-    await context.db.update(bakeCycles).set({ activePlanningSnapshotId: value.planningSnapshotId, status: "CANCELLED" }).where(eq(bakeCycles.id, value.cycleId));
+    await context.db.update(bakeCycles).set({ activePlanningSnapshotId: value.planningSnapshotId }).where(eq(bakeCycles.id, value.cycleId));
+    const cycles = createCycleOperationsCommandService(context.db);
+    const operations = createOrderOperationsCommandService(context.db);
+    const orderIds = value.orderIds.slice(0, 2);
+    await cycles.startCycle(OWNER_ID, { cycleId: value.cycleId });
+    await operations.startOrders(OWNER_ID, { cycleId: value.cycleId, orderIds });
+    for (const orderId of orderIds) {
+      const [item] = await context.db.select().from(orderItems).where(eq(orderItems.orderId, orderId!));
+      await operations.setPackedQuantity(OWNER_ID, {
+        cycleId: value.cycleId, orderItemId: item!.id,
+        packedQuantity: item!.quantity, expectedPackedQuantity: 0,
+      });
+      await operations.confirmOrderPacked(OWNER_ID, { cycleId: value.cycleId, orderId: orderId! });
+    }
+    await operations.deliverOrders(OWNER_ID, { cycleId: value.cycleId, orderIds });
+    await context.db.update(cycleTasks).set({ status: "DONE" })
+      .where(eq(cycleTasks.cycleTaskGenerationId, value.generation.id));
+    await cycles.completeCycle(OWNER_ID, {
+      cycleId: value.cycleId, expectedTaskGenerationId: value.generation.id, confirmation: true,
+    });
+    const [terminalCycle] = await context.db.select().from(bakeCycles).where(eq(bakeCycles.id, value.cycleId));
+    expect(terminalCycle?.status).toBe("COMPLETED");
     await expect(commands.updateTask(OWNER_ID, updateInput(value))).rejects.toBeInstanceOf(ProductionStateError);
   });
 

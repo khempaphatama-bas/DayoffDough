@@ -683,7 +683,7 @@ describe("shopping command service", () => {
     expect(zeroPrice).toMatchObject({ packBaseQuantity: "2000.000000" });
   });
 
-  it("rejects OPEN, terminal or superseded lifecycle writes and owner/cycle/item isolation violations", async () => {
+  it("rejects OPEN or superseded lifecycle writes and owner/cycle/item isolation violations", async () => {
     const fixture = await seedLockedPlanningScenario(context.db);
     const shoppingItem = await shoppingItemForPurchase(context.db, fixture);
     const service = createShoppingCommandService(context.db, CLOCK);
@@ -697,9 +697,6 @@ describe("shopping command service", () => {
       unlockedFromStatus: "LOCKED",
     }).where(eq(cyclePlanningSnapshots.id, fixture.planningSnapshotId));
     await expect(service.recordPurchase(OWNER_ID, purchaseInput(fixture, shoppingItem.id))).rejects.toBeInstanceOf(ShoppingStateError);
-    await context.db.update(bakeCycles).set({ status: "CANCELLED" }).where(eq(bakeCycles.id, fixture.cycleId));
-    await expect(service.recordPurchase(OWNER_ID, purchaseInput(fixture, shoppingItem.id))).rejects.toBeInstanceOf(ShoppingStateError);
-
     const isolated = await seedLockedPlanningScenario(context.db, {
       ownerId: OTHER_OWNER_ID,
       idSet: "SECONDARY",
@@ -724,6 +721,29 @@ describe("shopping command service", () => {
       })),
     ).rejects.toBeInstanceOf(ShoppingStateError);
   });
+
+  it.each(["COMPLETED", "CANCELLED"] as const)(
+    "rejects purchases for %s with an active planning snapshot",
+    async (status) => {
+      const fixture = await seedLockedPlanningScenario(context.db);
+      const shoppingItem = await shoppingItemForPurchase(context.db, fixture);
+      if (status === "COMPLETED") {
+        await completeOperations(context.db, fixture);
+      } else {
+        await context.db.update(bakeCycles).set({ status: "CANCELLED" })
+          .where(eq(bakeCycles.id, fixture.cycleId));
+      }
+      const [terminalSnapshot] = await context.db.select().from(cyclePlanningSnapshots)
+        .where(eq(cyclePlanningSnapshots.id, fixture.planningSnapshotId));
+      const [cycle] = await context.db.select().from(bakeCycles)
+        .where(eq(bakeCycles.id, fixture.cycleId));
+      expect(terminalSnapshot?.status).toBe("ACTIVE");
+      expect(cycle?.status).toBe(status);
+      await expect(createShoppingCommandService(context.db, CLOCK).recordPurchase(
+        OWNER_ID, purchaseInput(fixture, shoppingItem.id),
+      )).rejects.toBeInstanceOf(ShoppingStateError);
+    },
+  );
 
   it("rolls back a purchase movement and price when the entry insert fails", async () => {
     const fixture = await seedLockedPlanningScenario(context.db);

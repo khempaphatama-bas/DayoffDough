@@ -7,6 +7,9 @@ import {
 } from "@tests/fixtures/planning";
 import { createTestDatabase } from "@tests/helpers/test-db";
 import { bakeCycles } from "@/modules/cycles/db/schema";
+import { createCycleOperationsCommandService } from "@/modules/operations/application/cycle-commands";
+import { createOrderOperationsCommandService } from "@/modules/operations/application/order-commands";
+import { orderItems } from "@/modules/orders/db/schema";
 import { cyclePlanningSnapshots } from "@/modules/planning/db/schema";
 import { products } from "@/modules/products/db/schema";
 import {
@@ -322,17 +325,36 @@ describe("production query service", () => {
   });
 
   it("returns history for terminal cycles even when the snapshot remains active", async () => {
-    const scenario = await seedLockedPlanningScenario(context.db, {
-      cycleStatus: "OPEN",
+    const scenario = await seedLockedPlanningScenario(context.db);
+    const cycles = createCycleOperationsCommandService(context.db);
+    const operations = createOrderOperationsCommandService(context.db);
+    const orderIds = scenario.orderIds.slice(0, 2);
+    await cycles.startCycle(OWNER_ID, { cycleId: scenario.cycleId });
+    await operations.startOrders(OWNER_ID, { cycleId: scenario.cycleId, orderIds });
+    for (const orderId of orderIds) {
+      const [item] = await context.db.select().from(orderItems).where(eq(orderItems.orderId, orderId!));
+      await operations.setPackedQuantity(OWNER_ID, {
+        cycleId: scenario.cycleId, orderItemId: item!.id,
+        packedQuantity: item!.quantity, expectedPackedQuantity: 0,
+      });
+      await operations.confirmOrderPacked(OWNER_ID, { cycleId: scenario.cycleId, orderId: orderId! });
+    }
+    await operations.deliverOrders(OWNER_ID, { cycleId: scenario.cycleId, orderIds });
+    const [generation] = await context.db.select().from(cycleTaskGenerations)
+      .where(eq(cycleTaskGenerations.planningSnapshotId, scenario.planningSnapshotId));
+    await context.db.update(cycleTasks).set({ status: "DONE" })
+      .where(eq(cycleTasks.cycleTaskGenerationId, generation!.id));
+    await cycles.completeCycle(OWNER_ID, {
+      cycleId: scenario.cycleId, expectedTaskGenerationId: generation!.id, confirmation: true,
     });
-    await context.db
-      .update(bakeCycles)
-      .set({ status: "CANCELLED" })
-      .where(eq(bakeCycles.id, scenario.cycleId));
     const view = await createProductionQueryService(context.db).getCycleProduction(
       OWNER_ID,
       scenario.cycleId,
     );
-    expect(view).toMatchObject({ kind: "HISTORY", writable: false });
+    expect(view).toMatchObject({
+      kind: "HISTORY", writable: false,
+      cycle: { cycleStatus: "COMPLETED" },
+      generation: { planningStatus: "ACTIVE" },
+    });
   });
 });
