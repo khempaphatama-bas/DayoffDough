@@ -3,9 +3,14 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z, type ZodIssue } from "zod";
+import { and, eq } from "drizzle-orm";
 import { requireOwner } from "@/lib/auth/require-owner";
 import { db } from "@/lib/db/client";
 import { createOrderService } from "@/modules/orders/application/orders";
+import { orders } from "@/modules/orders/db/schema";
+import { bakeCycles } from "@/modules/cycles/db/schema";
+import { createOrderOperationsCommandService } from "@/modules/operations/application/order-commands";
+import { OperationsStateError } from "@/modules/operations/domain/types";
 import {
   normalizeOrderForm,
   orderFormSchema,
@@ -19,13 +24,14 @@ export type OrderActionState = Readonly<{
 export type OrderStatusActionState = Readonly<{
   error: string | null;
   saved: boolean;
+  operationsHref?: string;
 }>;
 
 const orderIdSchema = z.string().uuid();
 const fulfillmentStatusFormSchema = z.object({
   orderId: orderIdSchema,
+  cycleId: orderIdSchema.optional(),
   status: z.enum([
-    "NEW",
     "CONFIRMED",
     "IN_PRODUCTION",
     "PACKED",
@@ -185,23 +191,63 @@ export async function updateFulfillmentStatusAction(
   const owner = await requireOwner();
   const parsed = fulfillmentStatusFormSchema.safeParse({
     orderId: formData.get("orderId"),
+    cycleId: formData.get("cycleId") ?? undefined,
     status: formData.get("status"),
   });
   if (!parsed.success) {
     return { error: "กรุณาตรวจสอบสถานะออเดอร์", saved: false };
   }
-  if (parsed.data.status !== "CONFIRMED") {
-    return { error: "กรุณาใช้หน้าปฏิบัติงานรอบผลิตเพื่อเปลี่ยนสถานะออเดอร์", saved: false };
-  }
-
+  let authoritativeCycleId: string | undefined;
   try {
-    const order = await createOrderService(db).confirmBeforeProduction(
-      owner.id,
-      parsed.data.orderId,
-    );
-    revalidateOrderStatusPaths(order);
+    // IDs/status for routing are read independently of totals; command guards
+    // still recheck ownership, lifecycle and adjacency under their own locks.
+    const readOrder = async () => {
+      const [order] = await db.select({
+        id: orders.id, bakeCycleId: orders.bakeCycleId, customerId: orders.customerId, cycleStatus: bakeCycles.status,
+      }).from(orders).innerJoin(bakeCycles, and(eq(bakeCycles.id, orders.bakeCycleId), eq(bakeCycles.ownerId, orders.ownerId)))
+        .where(and(eq(orders.ownerId, owner.id), eq(orders.id, parsed.data.orderId))).limit(1);
+      if (!order) throw new OperationsStateError("NOT_FOUND", "Operations record not found");
+      return order;
+    };
+    const order = await readOrder();
+    authoritativeCycleId = order.bakeCycleId;
+    if (parsed.data.cycleId !== undefined && parsed.data.cycleId !== order.bakeCycleId) {
+      throw new OperationsStateError("STALE_DATA", "Cycle membership changed");
+    }
+    const operations = createOrderOperationsCommandService(db);
+    const single = { cycleId: order.bakeCycleId, orderId: order.id };
+    const batch = { cycleId: order.bakeCycleId, orderIds: [order.id] };
+    switch (parsed.data.status) {
+      case "CONFIRMED":
+        if (order.cycleStatus === "DRAFT" || order.cycleStatus === "OPEN") {
+          await createOrderService(db).confirmBeforeProduction(owner.id, order.id);
+        } else { await operations.confirmOrders(owner.id, batch); }
+        break;
+      case "IN_PRODUCTION": await operations.startOrders(owner.id, batch); break;
+      case "PACKED": await operations.confirmOrderPacked(owner.id, single); break;
+      case "DELIVERED": await operations.deliverOrders(owner.id, batch); break;
+    }
+    const affectedOrder = await readOrder();
+    revalidateOrderStatusPaths(affectedOrder);
+    for (const path of ["operations", "production", "planning"]) revalidatePath(`/cycles/${affectedOrder.bakeCycleId}/${path}`);
     return { error: null, saved: true };
-  } catch {
+  } catch (error) {
+    if (error instanceof OperationsStateError) {
+      if (error.kind === "PACKING_INCOMPLETE" && authoritativeCycleId) {
+        return {
+          error: "ยังแพ็กสินค้าไม่ครบ กรุณาบันทึกจำนวนที่แพ็กในหน้าปฏิบัติงานรอบผลิต",
+          operationsHref: `/cycles/${authoritativeCycleId}/operations`, saved: false,
+        };
+      }
+      const messages = {
+        NOT_FOUND: "ไม่พบข้อมูลสำหรับการปฏิบัติงาน",
+        STALE_DATA: "ข้อมูลมีการเปลี่ยนแปลง กรุณาโหลดข้อมูลล่าสุด",
+        INVALID_CYCLE_STATE: "สถานะรอบผลิตไม่อนุญาตให้ทำรายการนี้",
+        INVALID_ORDER_STATE: "สถานะออเดอร์ไม่อนุญาตให้ทำรายการนี้",
+      };
+      return { error: error.kind in messages ? messages[error.kind as keyof typeof messages] : "อัปเดตสถานะออเดอร์ไม่สำเร็จ กรุณาลองอีกครั้ง", saved: false };
+    }
+    console.error("Order fulfillment action failed");
     return {
       error: "อัปเดตสถานะออเดอร์ไม่สำเร็จ กรุณาลองอีกครั้ง",
       saved: false,

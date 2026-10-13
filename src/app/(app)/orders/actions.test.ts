@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { PgDialect } from "drizzle-orm/pg-core";
+import { OperationsStateError } from "@/modules/operations/domain/types";
 
 const mocks = vi.hoisted(() => ({
   cancel: vi.fn(),
@@ -12,6 +14,8 @@ const mocks = vi.hoisted(() => ({
   redirect: vi.fn(),
   requireOwner: vi.fn(),
   revalidatePath: vi.fn(),
+  select: vi.fn(), where: vi.fn(), innerJoin: vi.fn(),
+  confirmOrders: vi.fn(), startOrders: vi.fn(), confirmOrderPacked: vi.fn(), deliverOrders: vi.fn(),
 }));
 
 vi.mock("next/cache", () => ({ revalidatePath: mocks.revalidatePath }));
@@ -19,7 +23,8 @@ vi.mock("next/navigation", () => ({ redirect: mocks.redirect }));
 vi.mock("@/lib/auth/require-owner", () => ({
   requireOwner: mocks.requireOwner,
 }));
-vi.mock("@/lib/db/client", () => ({ db: {} }));
+vi.mock("@/lib/db/client", () => ({ db: { select: mocks.select } }));
+vi.mock("@/modules/operations/application/order-commands", () => ({ createOrderOperationsCommandService: () => mocks }));
 vi.mock("@/modules/orders/application/orders", () => ({
   createOrderService: mocks.createOrderService,
 }));
@@ -97,6 +102,13 @@ describe("saveOrderAction", () => {
     mocks.restorePaymentTracking.mockResolvedValue(statusResult);
     mocks.updateFulfillmentStatus.mockResolvedValue(statusResult);
     mocks.confirmBeforeProduction.mockResolvedValue(statusResult);
+    const query = { from: vi.fn(), innerJoin: mocks.innerJoin, where: mocks.where, limit: vi.fn() };
+    query.from.mockReturnValue(query);
+    query.innerJoin.mockReturnValue(query);
+    query.where.mockReturnValue(query);
+    query.limit.mockResolvedValue([{ ...statusResult, cycleStatus: "OPEN" }]);
+    mocks.select.mockReturnValue(query);
+    for (const command of [mocks.confirmOrders, mocks.startOrders, mocks.confirmOrderPacked, mocks.deliverOrders]) command.mockResolvedValue(statusResult);
     mocks.redirect.mockImplementation(() => {
       throw new Error("NEXT_REDIRECT");
     });
@@ -284,6 +296,9 @@ describe("saveOrderAction", () => {
         `/cycles/${CYCLE_ID}`,
         `/customers/${CUSTOMER_ID}`,
         "/dashboard",
+        ...(action === updateFulfillmentStatusAction ? [
+          `/cycles/${CYCLE_ID}/operations`, `/cycles/${CYCLE_ID}/production`, `/cycles/${CYCLE_ID}/planning`,
+        ] : []),
       ]);
     },
   );
@@ -304,6 +319,7 @@ describe("saveOrderAction", () => {
   });
 
   it("returns a serializable Thai failure when the service rejects a transition", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
     mocks.confirmBeforeProduction.mockRejectedValueOnce(
       new Error("Invalid fulfillment transition"),
     );
@@ -318,9 +334,12 @@ describe("saveOrderAction", () => {
       saved: false,
     });
     expect(mocks.revalidatePath).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledExactlyOnceWith("Order fulfillment action failed");
+    log.mockRestore();
   });
 
   it("rejects an old direct PACKED action without calling the pre-freeze command", async () => {
+    mocks.confirmOrderPacked.mockRejectedValueOnce(new OperationsStateError("INVALID_ORDER_STATE", "No jump"));
     const data = new FormData();
     data.set("orderId", ORDER_ID);
     data.set("status", "PACKED");
@@ -328,6 +347,80 @@ describe("saveOrderAction", () => {
       .resolves.toMatchObject({ saved: false });
     expect(mocks.confirmBeforeProduction).not.toHaveBeenCalled();
     expect(mocks.revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["CONFIRMED", mocks.confirmOrders, { cycleId: CYCLE_ID, orderIds: [ORDER_ID] }],
+    ["IN_PRODUCTION", mocks.startOrders, { cycleId: CYCLE_ID, orderIds: [ORDER_ID] }],
+    ["PACKED", mocks.confirmOrderPacked, { cycleId: CYCLE_ID, orderId: ORDER_ID }],
+    ["DELIVERED", mocks.deliverOrders, { cycleId: CYCLE_ID, orderIds: [ORDER_ID] }],
+  ] as const)("dispatches %s through its guarded command using owned parents", async (status, command, input) => {
+    mocks.select().limit.mockResolvedValue([{ id: ORDER_ID, bakeCycleId: CYCLE_ID, customerId: CUSTOMER_ID, cycleStatus: "IN_PRODUCTION" }]);
+    const data = new FormData();
+    data.set("orderId", ORDER_ID);
+    data.set("cycleId", CYCLE_ID);
+    data.set("status", status);
+    expect(await updateFulfillmentStatusAction({ error: null, saved: false }, data)).toEqual({ error: null, saved: true });
+    expect(command).toHaveBeenCalledExactlyOnceWith(OWNER_ID, input);
+    expect(mocks.confirmBeforeProduction).not.toHaveBeenCalled();
+    expect(mocks.updateFulfillmentStatus).not.toHaveBeenCalled();
+    expect(mocks.revalidatePath.mock.calls.map(([path]) => path)).toEqual([
+      "/orders", `/orders/${ORDER_ID}`, "/cycles", `/cycles/${CYCLE_ID}`, `/customers/${CUSTOMER_ID}`, "/dashboard",
+      `/cycles/${CYCLE_ID}/operations`, `/cycles/${CYCLE_ID}/production`, `/cycles/${CYCLE_ID}/planning`,
+    ]);
+    const where = new PgDialect().sqlToQuery(mocks.where.mock.calls[0]![0]);
+    expect(where.params).toEqual([OWNER_ID, ORDER_ID]);
+    expect(where.sql).toContain('"orders"."owner_id"');
+    const join = new PgDialect().sqlToQuery(mocks.innerJoin.mock.calls[0]![1]);
+    expect(join.sql).toContain('"bake_cycles"."owner_id"');
+    expect(join.sql).toContain('"orders"."owner_id"');
+  });
+
+  it.each(["DRAFT", "OPEN"])("preserves dedicated pre-freeze confirmation in %s", async (cycleStatus) => {
+    mocks.select().limit.mockResolvedValue([{ id: ORDER_ID, bakeCycleId: CYCLE_ID, customerId: CUSTOMER_ID, cycleStatus }]);
+    const data = new FormData(); data.set("orderId", ORDER_ID); data.set("status", "CONFIRMED");
+    expect(await updateFulfillmentStatusAction({ error: null, saved: false }, data)).toEqual({ error: null, saved: true });
+    expect(mocks.confirmBeforeProduction).toHaveBeenCalledExactlyOnceWith(OWNER_ID, ORDER_ID);
+    expect(mocks.confirmOrders).not.toHaveBeenCalled();
+  });
+
+  it.each(["not-a-uuid", "00000000-0000-4000-8000-000000000099"])("rejects malformed or mismatched cycle intent %s", async (cycleId) => {
+    const data = new FormData(); data.set("orderId", ORDER_ID); data.set("cycleId", cycleId); data.set("status", "CONFIRMED");
+    expect(await updateFulfillmentStatusAction({ error: null, saved: false }, data)).toMatchObject({ saved: false });
+    expect(mocks.confirmBeforeProduction).not.toHaveBeenCalled();
+    expect(mocks.confirmOrders).not.toHaveBeenCalled();
+    expect(mocks.revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("maps packing incomplete into a useful Operations link without bypassing the guard", async () => {
+    mocks.confirmOrderPacked.mockRejectedValue(new OperationsStateError("PACKING_INCOMPLETE", "private"));
+    const data = new FormData(); data.set("orderId", ORDER_ID); data.set("status", "PACKED");
+    expect(await updateFulfillmentStatusAction({ error: null, saved: false }, data)).toEqual({
+      error: "ยังแพ็กสินค้าไม่ครบ กรุณาบันทึกจำนวนที่แพ็กในหน้าปฏิบัติงานรอบผลิต", saved: false, operationsHref: `/cycles/${CYCLE_ID}/operations`,
+    });
+    expect(mocks.updateFulfillmentStatus).not.toHaveBeenCalled();
+    expect(mocks.revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("keeps unknown and cross-owner parents indistinguishable without mutation", async () => {
+    mocks.select().limit.mockResolvedValue([]);
+    const data = new FormData(); data.set("orderId", ORDER_ID); data.set("status", "CONFIRMED");
+    expect(await updateFulfillmentStatusAction({ error: null, saved: false }, data)).toEqual({ error: "ไม่พบข้อมูลสำหรับการปฏิบัติงาน", saved: false });
+    expect(mocks.confirmBeforeProduction).not.toHaveBeenCalled();
+    expect(mocks.confirmOrders).not.toHaveBeenCalled();
+  });
+
+  it("rejects NEW rather than reopening via a generic status write", async () => {
+    const data = new FormData(); data.set("orderId", ORDER_ID); data.set("status", "NEW");
+    expect(await updateFulfillmentStatusAction({ error: null, saved: false }, data)).toEqual({ error: "กรุณาตรวจสอบสถานะออเดอร์", saved: false });
+    expect(mocks.updateFulfillmentStatus).not.toHaveBeenCalled();
+  });
+
+  it.each([saveOrderAction, updateFulfillmentStatusAction, cancelOrderAction, markOrderRefundedAction, restoreOrderPaymentTrackingAction])("does not catch authentication failures", async (action) => {
+    mocks.requireOwner.mockRejectedValueOnce(new Error("NEXT_REDIRECT"));
+    await expect(action({ error: null, saved: false, fieldErrors: {} }, new FormData())).rejects.toThrow("NEXT_REDIRECT");
+    expect(mocks.createOrderService).not.toHaveBeenCalled();
+    expect(mocks.select).not.toHaveBeenCalled();
   });
 
   it("maps the exact production-freeze rejection for cancellation without raw leakage", async () => {
