@@ -1,7 +1,9 @@
-import type { CycleOperationsView, OperationsTask } from "@/modules/operations/domain/types";
+import type { CycleOperationsView, OperationsTask, OperationsOrder, OperationsOrderItem } from "@/modules/operations/domain/types";
 
 export const CYCLE_ID = "72000000-0000-4000-8000-000000000001";
 export const GENERATION_ID = "72000000-0000-4000-8000-000000000002";
+export const ITEM: OperationsOrderItem = { id: "72000000-0000-4000-8000-000000000030", productName: "Focaccia", quantity: 10, packedQuantity: 2, unitPriceSatang: 5000, lineNote: "แยกถุง" };
+export const ORDER: OperationsOrder = { id: "72000000-0000-4000-8000-000000000040", customerName: "คุณเมย์", confirmedDeliveryDate: "2026-09-12", confirmedDeliveryTime: "10:00", deliveryMethodName: "รับเอง", grandTotalSatang: 50000, amountPaidSatang: 20000, balanceSatang: 30000, paymentStatus: "PARTIAL", fulfillmentStatus: "IN_PRODUCTION", deliveryNote: "โทรก่อนส่ง", specialInstructions: "ไม่ใส่พริก", items: [ITEM] };
 export const TASK: OperationsTask = {
   id: "72000000-0000-4000-8000-000000000010", taskGenerationId: GENERATION_ID,
   origin: "TEMPLATE", sourceTemplateName: "ฟอคคาเซียประจำรอบ", sourceActivityName: "พักแป้ง",

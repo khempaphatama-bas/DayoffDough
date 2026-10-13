@@ -112,6 +112,17 @@ describe("cycle operations query", () => {
     });
   });
 
+  it("reads frozen delivery instructions for active orders and live notes for cancelled disclosure", async () => {
+    const scenario = await seedLockedPlanningScenario(context.db);
+    await context.db.update(cycleOrderSnapshots).set({ deliveryNote: "Snapshot delivery", specialInstructions: "Snapshot special" })
+      .where(eq(cycleOrderSnapshots.sourceOrderId, scenario.orderIds[0]!));
+    await context.db.update(orders).set({ deliveryNote: "Live delivery", specialInstructions: "Live special" })
+      .where(eq(orders.bakeCycleId, scenario.cycleId));
+    const view = await readyView(scenario.cycleId);
+    expect(view.orders[0]).toMatchObject({ deliveryNote: "Snapshot delivery", specialInstructions: "Snapshot special" });
+    expect(view.cancelledOrders[0]).toMatchObject({ deliveryNote: "Live delivery", specialInstructions: "Live special" });
+  });
+
   it("coalesces missing packing progress to zero and reads a present row", async () => {
     const scenario = await seedLockedPlanningScenario(context.db);
     await createCycleOperationsCommandService(context.db).startCycle(OWNER_ID, { cycleId: scenario.cycleId });

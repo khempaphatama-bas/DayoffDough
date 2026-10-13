@@ -83,6 +83,8 @@ export type OperationsOrder = Readonly<{
   confirmedDeliveryDate: string | null;
   confirmedDeliveryTime: string | null;
   deliveryMethodName: string | null;
+  deliveryNote: string | null;
+  specialInstructions: string | null;
   grandTotalSatang: number;
   amountPaidSatang: number;
   balanceSatang: number;

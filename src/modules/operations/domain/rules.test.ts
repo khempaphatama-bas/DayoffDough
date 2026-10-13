@@ -35,6 +35,8 @@ function order(overrides: Partial<OperationsOrder>): OperationsOrder {
     confirmedDeliveryDate: "2026-09-23",
     confirmedDeliveryTime: null,
     deliveryMethodName: "Pickup",
+    deliveryNote: null,
+    specialInstructions: null,
     grandTotalSatang: 100_000,
     amountPaidSatang: 100_000,
     balanceSatang: 0,
