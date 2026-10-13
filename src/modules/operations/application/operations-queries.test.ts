@@ -54,6 +54,22 @@ describe("cycle operations query", () => {
     await commands.deliverOrders(OWNER_ID, { cycleId: scenario.cycleId, orderIds: activeOrderIds });
   }
 
+  it("supplies all owner-scoped active products for task editing, not only task products", async () => {
+    const scenario = await seedLockedPlanningScenario(context.db);
+    await context.db.insert(products).values([
+      { id: "60000000-0000-4000-8000-000000000121", ownerId: OWNER_ID, name: "B active unrelated", sellingUnit: "piece", defaultUnitPriceSatang: 100 },
+      { id: "60000000-0000-4000-8000-000000000122", ownerId: OWNER_ID, name: "A active unrelated", sellingUnit: "piece", defaultUnitPriceSatang: 100 },
+      { id: "60000000-0000-4000-8000-000000000123", ownerId: OWNER_ID, name: "Inactive", sellingUnit: "piece", defaultUnitPriceSatang: 100, active: false },
+      { id: "60000000-0000-4000-8000-000000000124", ownerId: OTHER_OWNER_ID, name: "Foreign", sellingUnit: "piece", defaultUnitPriceSatang: 100 },
+    ]);
+    const view = await readyView(scenario.cycleId);
+    expect(view.products).toEqual([
+      { id: "60000000-0000-4000-8000-000000000122", name: "A active unrelated" },
+      { id: "60000000-0000-4000-8000-000000000121", name: "B active unrelated" },
+      { id: scenario.productId, name: "ฟอคคาเซีย" },
+    ]);
+  });
+
   it("uses the current generation, frozen membership and names, and live state", async () => {
     const scenario = await seedLockedPlanningScenario(context.db);
     const [generation] = await context.db.select().from(cycleTaskGenerations)

@@ -1,3 +1,5 @@
+import type { ProductOption } from "@/modules/production/domain/types";
+
 export const operationsErrorKinds = [
   "NOT_FOUND",
   "STALE_DATA",
@@ -108,6 +110,7 @@ export type CycleOperationsView =
         generation: number;
       }>;
       tasks: readonly OperationsTask[];
+      products: readonly ProductOption[];
       taskBuckets: OperationsTaskBuckets;
       orders: readonly OperationsOrder[];
       cancelledOrders: readonly OperationsOrder[];

@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import { z } from "zod";
 import type { DatabaseClient } from "@/lib/db/types";
 import { bakeCycles } from "@/modules/cycles/db/schema";
@@ -166,7 +166,7 @@ export function createOperationsQueryService(
         };
       }
 
-      const [taskRows, snapshotOrders, snapshotItems, liveOrders] = await Promise.all([
+      const [taskRows, snapshotOrders, snapshotItems, liveOrders, productOptions] = await Promise.all([
         db.select().from(cycleTasks).where(and(
           eq(cycleTasks.ownerId, verifiedOwnerId),
           eq(cycleTasks.cycleTaskGenerationId, taskGeneration.id),
@@ -184,6 +184,9 @@ export function createOperationsQueryService(
           eq(orders.ownerId, verifiedOwnerId),
           eq(orders.bakeCycleId, verifiedCycleId),
         )),
+        db.select({ id: products.id, name: products.name }).from(products)
+          .where(and(eq(products.ownerId, verifiedOwnerId), eq(products.active, true)))
+          .orderBy(asc(products.name), asc(products.id)),
       ]);
       const tasks = taskRows.map(toTask).sort(compareTasks);
       const activeLiveOrders = liveOrders.filter((row) => row.fulfillmentStatus !== "CANCELLED");
@@ -310,6 +313,7 @@ export function createOperationsQueryService(
           generation: taskGeneration.generation,
         },
         tasks,
+        products: productOptions,
         taskBuckets: bucketOperationsTasks(tasks, clock.now()),
         orders: activeOrders,
         cancelledOrders,

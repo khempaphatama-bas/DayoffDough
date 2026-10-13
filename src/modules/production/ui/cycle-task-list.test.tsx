@@ -106,6 +106,17 @@ describe("CycleTaskList", () => {
     expect(screen.getByText("อ่านอย่างเดียว")).toBeVisible();
   });
 
+  it("retains shared editing and hides an open edit form when the view becomes read-only", async () => {
+    const user = (await import("@testing-library/user-event")).default.setup();
+    const { rerender } = render(<CycleTaskList view={{ ...currentView, tasks: [currentView.tasks[0]!] }} />);
+    await user.click(screen.getByRole("button", { name: "แก้ไขงาน" }));
+    expect(screen.getByLabelText("ชื่องาน")).toHaveValue("พักแป้ง");
+    expect(screen.getByRole("option", { name: "บริยอช" })).toBeInTheDocument();
+    rerender(<CycleTaskList view={{ ...currentView, kind: "HISTORY", writable: false, generation: { ...currentView.generation, planningStatus: "SUPERSEDED" } }} />);
+    expect(screen.queryByLabelText("ชื่องาน")).toBeNull();
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+
   it("offers quick status choices and only shows skip reason for skipped tasks", () => {
     const skippedTask: CycleTaskView = { ...currentView.tasks[0]!, status: "SKIPPED", skipReason: "ไม่มีวัตถุดิบ" };
     render(<CycleTaskList view={{ ...currentView, tasks: [skippedTask] }} />);
