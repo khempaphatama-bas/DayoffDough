@@ -167,6 +167,7 @@ export async function createProductionTemplate(
   }
   const response = await activationResponse;
   expect(response.ok()).toBe(true);
+  expect(await response.finished()).toBeNull();
   await expect(page).toHaveURL(/\/production\/templates$/, {
     timeout: SERVER_ACTION_TIMEOUT,
   });
@@ -252,7 +253,9 @@ export async function createProduct(
     { timeout: SERVER_ACTION_TIMEOUT },
   );
   await page.getByRole("button", { name: "บันทึกสินค้า" }).click();
-  expect((await saveResponse).ok()).toBe(true);
+  const saved = await saveResponse;
+  expect(saved.ok()).toBe(true);
+  expect(await saved.finished()).toBeNull();
   await expect(page.getByRole("main")).toContainText("บันทึกสินค้าแล้ว", {
     timeout: SERVER_ACTION_TIMEOUT,
   });
@@ -310,6 +313,7 @@ export async function createRecipeVersion(
   await page.getByRole("button", { name: "เปิดใช้เวอร์ชันนี้" }).click();
   const response = await activationResponse;
   expect(response.ok()).toBe(true);
+  expect(await response.finished()).toBeNull();
   await page.goto(productUrl);
   await expect(page.getByRole("main")).toContainText("สูตรที่ใช้งานอยู่", {
     timeout: SERVER_ACTION_TIMEOUT,
@@ -370,6 +374,7 @@ export async function createDeliveryMethod(
   await page.getByRole("button", { name: "บันทึกวิธีส่ง" }).click();
   const response = await saveResponse;
   expect(response.ok()).toBe(true);
+  expect(await response.finished()).toBeNull();
   await expect(page.getByRole("main")).toContainText("บันทึกวิธีส่งแล้ว", {
     timeout: SERVER_ACTION_TIMEOUT,
   });
@@ -449,6 +454,7 @@ export async function createOrder(
     totalQuantity: number;
     discountBaht: string;
     amountPaidBaht: string;
+    confirmedDeliveryTime?: string;
   }>,
 ): Promise<void> {
   if (!Number.isSafeInteger(input.totalQuantity) || input.totalQuantity < 2) {
@@ -495,6 +501,7 @@ export async function createOrder(
     .fill("บรรทัดที่สอง");
   await page.getByLabel("ส่วนลด (บาท)").fill(input.discountBaht);
   await page.getByLabel("ยอดชำระแล้ว (บาท)").fill(input.amountPaidBaht);
+  await page.getByLabel("เวลานัดส่ง").fill(input.confirmedDeliveryTime ?? "");
 
   await page
     .getByRole("button", { name: "บันทึกออเดอร์" })
@@ -527,7 +534,9 @@ export async function confirmCycleStock(
   await page
     .getByRole("button", { name: "ยืนยันสต๊อกและสร้างรายการซื้อ" })
     .press("Enter");
-  expect((await response).ok()).toBe(true);
+  const saved = await response;
+  expect(saved.ok()).toBe(true);
+  expect(await saved.finished()).toBeNull();
   await page.goto(currentUrl);
 }
 
@@ -556,7 +565,9 @@ export async function recordCyclePurchase(
       name: /^(บันทึกการซื้อ|เพิ่มการซื้ออีกครั้ง)$/,
     })
     .press("Enter");
-  expect((await response).ok()).toBe(true);
+  const saved = await response;
+  expect(saved.ok()).toBe(true);
+  expect(await saved.finished()).toBeNull();
   await page.goto(currentUrl, {
     waitUntil: "domcontentloaded",
     timeout: SERVER_ACTION_TIMEOUT,

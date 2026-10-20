@@ -109,13 +109,35 @@ Phase 3B ใช้ migration `0011_phase_3b_inventory_shopping` โดยเพ�
 
 Phase 4A ใช้ migration `0012_phase_4a_production_timeline` โดยเพิ่มตาราง Production Template, Activity, Task Generation และ Cycle Task พร้อม RLS, owner-scoped foreign keys, immutable generation guards และ lifecycle checks
 
-เมื่อตั้งค่า Supabase แล้ว ให้ใช้ migrations ทั้งหมดตามลำดับด้วยคำสั่งนี้ (รวม migration `0012`):
+Phase 4B ใช้ `drizzle/0013_phase_4b_operations.sql`: เพิ่มเวลานัดส่งใน Order และ Planning Snapshot และตาราง `order_item_packing_progress` พร้อม owner-scoped FK, `ON DELETE RESTRICT`, RLS และ integrity triggers สำหรับ Packing, fulfillment และการจบรอบ โดย backfill active items ของออเดอร์ `PACKED | DELIVERED` ก่อนเปิด triggers ไม่แก้ historical snapshot ย้อนหลัง
+
+เมื่อตั้งค่า Supabase แล้ว ให้ใช้ migrations ทั้งหมดตามลำดับด้วยคำสั่งนี้ (รวม migration `0013`):
 
 ```bash
 pnpm db:migrate
 ```
 
 ตารางทุกชุดเปิด Row Level Security และไม่มี anonymous Data API policy แอปตรวจ `owner_id` ซ้ำใน application service และ Server Action ทุก mutation
+
+### Apply Phase 4B บน Supabase
+
+ยืนยัน project reference และ database target ว่าเป็น development/test ที่ได้รับอนุญาตก่อนใช้ `SUPABASE_DATABASE_URL` ของเป้าหมายนั้น แล้วรัน `pnpm db:migrate` เพียงครั้งเดียวตาม migration journal ห้ามใช้ฐาน production หรือเป้าหมายที่ระบุไม่ได้ ตรวจ `drizzle.__drizzle_migrations` ว่ารวม 0013, time columns ทั้งสองเป็น nullable `time without time zone`, Packing table เปิด RLS และไม่มี anonymous policy แล้วจึง deploy แอปและรัน authenticated E2E บนข้อมูลแยก namespace
+
+การทดสอบ release ในเครื่องใช้ PostgreSQL ชั่วคราวที่ bind เฉพาะ loopback และ override `SUPABASE_DATABASE_URL` ก่อนโหลด env (ไม่ override กลับ) จึงใช้ Supabase เพียง Authentication เท่านั้น การผ่าน local migration/E2E ไม่ได้แปลว่า apply migration ให้ฐานร้านจริงแล้ว ต้อง apply และตรวจฐาน deployment แยกต่างหากเมื่อได้รับอนุญาต
+
+## Operations Workspace (Phase 4B)
+
+เปิด `/cycles/[id]/operations` จากรายละเอียดรอบหรือ Production Timeline เพื่อทำงานทีละรอบและสลับรอบผ่านตัวเลือกด้านบน งานเลยกำหนด/วันนี้ใช้เวลา `Asia/Bangkok`; งานวันถัดไปพับไว้และแสดงเฉพาะ current Task Generation ประวัติรุ่นเก่ายังคงอ่านได้ใน Production Timeline
+
+เวลานัดส่งเป็น optional `HH:mm` ในวันส่งท้องถิ่น ไม่แปลงเป็น UTC และออเดอร์ที่ระบุเวลาเรียงก่อนออเดอร์ที่ไม่ระบุเวลา การแก้วัน/เวลาหลังล็อกต้อง unlock/re-lock; ค่า null ไม่เปลี่ยน fingerprint ของแผนเก่า
+
+ต้องกดเริ่มรอบผลิตและยืนยัน/เริ่มทำออเดอร์เองตามลำดับ `NEW → CONFIRMED → IN_PRODUCTION → PACKED → DELIVERED` ไม่มี automatic cascade เมื่อ Task เสร็จหรือแพ็กครบ Packing เป็นจำนวนเต็มต่อ active Order Item ตั้งแต่ 0 ถึงจำนวนสั่ง และบันทึกเป็นยอดสะสมแบบ absolute เพื่อไม่เพิ่มซ้ำเมื่อ retry ต้องกด “ยืนยันแพ็กครบ” เอง; หากแก้ก่อนส่งให้ “เปิดแก้ไขการแพ็ก” ก่อน หลังส่ง Packing/fulfillment อ่านอย่างเดียว การส่งหลายออเดอร์รับเฉพาะ `PACKED` และสำเร็จทั้งชุดหรือ rollback ทั้งชุด
+
+Unlock ทำได้ก่อนเริ่ม Order Operations; หลังมีออเดอร์ `IN_PRODUCTION | PACKED | DELIVERED` หรือ Packing มากกว่าศูนย์จะถูกบล็อก การรับเงินอย่างเดียวไม่บล็อก unlock จบรอบได้เมื่อ current Tasks ทุกงาน `DONE | SKIPPED` (ข้ามต้องมีเหตุผล) และทุกออเดอร์ที่ไม่ยกเลิกส่งแล้ว ยอดค้างเป็นคำเตือน ไม่ใช่ตัวบล็อก
+
+Quick Payment รับเพิ่ม/ชำระครบ/แก้ยอดสะสมได้ ห้ามยอดติดลบ เกินยอดรวม หรือเขียนทับ stale amount และยังใช้หลังส่งหรือ Cycle `COMPLETED` ได้ ออเดอร์ `REFUNDED` ใช้ refund/restore เดิมที่ Order detail; Cycle `CANCELLED` อ่านอย่างเดียวใน Operations รอบที่จบแบบเก่าแต่ยังมีงาน/ออเดอร์ค้างแสดง integrity warning โดยไม่เขียนประวัติใหม่
+
+Phase 5 ยังไม่รวมในรุ่นนี้: payment ledger, carrier/tracking API, stock consumption, actual cost/profit, CSV, offline sync, notifications และ multi-user roles
 
 ## พัฒนา
 
@@ -149,4 +171,4 @@ pnpm test:e2e --project=phone
 pnpm test:e2e --project=desktop
 ```
 
-E2E ใช้ชื่อข้อมูลที่ไม่ซ้ำในแต่ละรอบและไม่ต้องมีหน้า sign-up สาธารณะ ข้อมูล fixture จะถูกเก็บต่อในฐานข้อมูล จึงต้องรันกับ Supabase project สำหรับ development/test เท่านั้น ห้ามใช้ production project
+E2E ใช้ชื่อข้อมูลที่ไม่ซ้ำในแต่ละรอบและไม่ต้องมีหน้า sign-up สาธารณะ ข้อมูล fixture จะถูกเก็บต่อในฐานข้อมูล จึงต้องใช้ฐาน development/test แยกเฉพาะ (แนะนำ PostgreSQL ชั่วคราวแบบ loopback แล้วลบ container/volume หลังทดสอบ) ห้ามใช้ production project ตั้ง `CI=1` เพื่อบังคับ fresh webserver และตรวจ port 3000 ว่างก่อนเริ่ม อย่าหยุด server ที่ไม่เกี่ยวข้อง เก็บ traces/screenshots ใน private temporary directory เพราะอาจมีข้อมูล login และลบเมื่อเสร็จ

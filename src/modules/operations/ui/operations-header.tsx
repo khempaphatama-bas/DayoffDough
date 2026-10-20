@@ -37,7 +37,7 @@ export function OperationsHeader({ view }: Readonly<{ view: CycleOperationsView 
     <header className="grid gap-4 rounded-3xl border border-stone-200 bg-white p-5 shadow-sm">
       <label className="grid gap-2 text-sm font-semibold text-stone-700">
         เลือกรอบผลิต
-        <select className="min-h-11 rounded-xl border border-stone-300 bg-white px-4 text-base focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-800" value={cycle.id}
+        <select className="min-h-11 min-w-0 w-full max-w-full rounded-xl border border-stone-300 bg-white px-4 text-base focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-800" value={cycle.id}
           onChange={(event) => {
             const id = event.target.value;
             if (id !== cycle.id && view.cycleOptions.some((option) => option.id === id)) router.push(`/cycles/${id}/operations`);

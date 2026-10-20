@@ -118,6 +118,24 @@ describe("production task actions", () => {
     expect(next.revalidatePath).not.toHaveBeenCalled();
   });
 
+  it.each(["direct form", "useActionState"] as const)("deletes an owned manual task through the %s signature and refreshes Operations", async (signature) => {
+    service.softDeleteManualTask.mockResolvedValueOnce({ id: TASK_ID });
+    const form = payloadForm({ cycleId: CYCLE_ID, taskGenerationId: GENERATION_ID, taskId: TASK_ID });
+    const result = signature === "direct form"
+      ? await deleteManualCycleTaskAction(form)
+      : await deleteManualCycleTaskAction(INITIAL, form);
+    expect(result).toMatchObject({ error: null, fieldErrors: {}, saved: true });
+    expect(auth.requireOwner).toHaveBeenCalledOnce();
+    expect(service.softDeleteManualTask).toHaveBeenCalledWith(OWNER_ID, {
+      cycleId: CYCLE_ID, taskGenerationId: GENERATION_ID, taskId: TASK_ID,
+    });
+    expect(next.revalidatePath.mock.calls).toEqual([
+      [`/cycles/${CYCLE_ID}`], [`/cycles/${CYCLE_ID}/planning`],
+      [`/cycles/${CYCLE_ID}/production`], [`/cycles/${CYCLE_ID}/operations`],
+      ["/cycles"], ["/dashboard"],
+    ]);
+  });
+
   it("logs unexpected failures with identifiers only and returns a safe error", async () => {
     const logger = vi.spyOn(console, "error").mockImplementation(() => {});
     service.createManualTask.mockRejectedValueOnce(new Error("postgres://secret raw SQL"));

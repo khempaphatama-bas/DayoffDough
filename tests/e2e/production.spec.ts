@@ -33,7 +33,9 @@ async function submitCurrentPageAction(
 ): Promise<void> {
   const response = currentPageAction(page);
   await container.getByRole("button", { name: buttonName, exact: true }).click();
-  expect((await response).ok()).toBe(true);
+  const saved = await response;
+  expect(saved.ok()).toBe(true);
+  expect(await saved.finished()).toBeNull();
 }
 
 async function getProductSelect(container: Locator): Promise<Locator> {
@@ -153,6 +155,7 @@ test("owner runs the complete production timeline lifecycle", async ({ page }, t
     totalQuantity: 10,
     discountBaht: "0",
     amountPaidBaht: "0",
+    confirmedDeliveryTime: "10:15",
   });
 
   await page.goto(`${cycleUrl}/planning`);
@@ -296,7 +299,9 @@ test("owner runs the complete production timeline lifecycle", async ({ page }, t
   await expect(deletedManualTask.getByRole("button", { name: "ลบงาน" })).toBeVisible();
   const deleteResponse = currentPageAction(page);
   await deletedManualTask.getByRole("button", { name: "ลบงาน" }).click();
-  expect((await deleteResponse).ok()).toBe(true);
+  const deleted = await deleteResponse;
+  expect(deleted.ok()).toBe(true);
+  expect(await deleted.finished()).toBeNull();
   await page.goto(`${cycleUrl}/production`);
   await expect(page.getByRole("article", { name: new RegExp(deletedManualTitle) })).toHaveCount(0);
 

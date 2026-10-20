@@ -50,7 +50,9 @@ async function lockCurrentPlan(page: Page, productName: string): Promise<void> {
     { timeout: SERVER_ACTION_TIMEOUT },
   );
   await page.getByRole("button", { name: "ยืนยันล็อกรอบ" }).press("Enter");
-  expect((await response).ok()).toBe(true);
+  const locked = await response;
+  expect(locked.ok()).toBe(true);
+  expect(await locked.finished()).toBeNull();
 }
 
 async function openPlanningFromCycle(page: Page): Promise<void> {
@@ -73,7 +75,9 @@ async function unlockCurrentPlan(page: Page, cycleUrl: string): Promise<void> {
     { timeout: SERVER_ACTION_TIMEOUT },
   );
   await page.getByRole("button", { name: "ปลดล็อกรอบ" }).press("Enter");
-  expect((await response).ok()).toBe(true);
+  const unlocked = await response;
+  expect(unlocked.ok()).toBe(true);
+  expect(await unlocked.finished()).toBeNull();
   await page.goto(cycleUrl);
   await expect(
     page.getByRole("link", { name: "ตรวจแผนและล็อกรอบ" }),

@@ -24,6 +24,7 @@ async function submitOrderActionAndReload(
   await page.getByRole("button", { name: buttonName, exact: true }).click();
   const response = await actionResponse;
   expect(response.ok()).toBe(true);
+  expect(await response.finished()).toBeNull();
   await page.goto(orderUrl);
   await expect(
     page.getByRole("heading", { name: "แก้ไขออเดอร์" }),
@@ -67,8 +68,10 @@ test("owner creates and cancels a duplicate-line order without losing history", 
     totalQuantity: 3,
     discountBaht: "20",
     amountPaidBaht: "200",
+    confirmedDeliveryTime: "11:30",
   });
   const orderUrl = page.url();
+  await expect(page.getByLabel("เวลานัดส่ง")).toHaveValue("11:30");
 
   const firstProduct = page.getByRole("combobox", {
     name: "สินค้า รายการที่ 1",
@@ -97,11 +100,14 @@ test("owner creates and cancels a duplicate-line order without losing history", 
   const statusActions = page.getByRole("region", {
     name: "จัดการสถานะออเดอร์",
   });
-  await submitOrderActionAndReload(page, orderUrl, "แพ็กเสร็จแล้ว");
+  await expect(statusActions.getByRole("button", { name: "ยืนยันแพ็กครบ" })).toHaveCount(0);
+  await expect(statusActions.getByRole("button", { name: "จัดส่งแล้ว" })).toHaveCount(0);
+  await submitOrderActionAndReload(page, orderUrl, "ยืนยันออเดอร์");
   await expect(
-    statusActions.getByRole("button", { name: "แพ็กเสร็จแล้ว" }),
+    statusActions.getByRole("button", { name: "ยืนยันออเดอร์" }),
   ).toHaveCount(0);
-  await expect(orderPage).toContainText("การจัดเตรียมแพ็กเสร็จแล้ว");
+  await expect(orderPage).toContainText("การจัดเตรียมยืนยันแล้ว");
+  await expect(statusActions.getByRole("button", { name: "เริ่มทำออเดอร์" })).toHaveCount(0);
 
   await submitOrderActionAndReload(page, orderUrl, "บันทึกคืนเงิน");
   await expect(
@@ -165,6 +171,7 @@ test("owner creates and cancels a duplicate-line order without losing history", 
   await page.getByRole("button", { name: "ยกเลิกออเดอร์" }).click();
   const cancelled = await cancelResponse;
   expect(cancelled.ok()).toBe(true);
+  expect(await cancelled.finished()).toBeNull();
   await page.goto("/cycles");
   await expect(
     page.getByRole("heading", { name: "รอบอบ", exact: true }),

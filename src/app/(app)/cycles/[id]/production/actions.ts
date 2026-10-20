@@ -124,8 +124,6 @@ export async function createManualCycleTaskAction(_previousState: ProductionActi
   }
 }
 
-export function deleteManualCycleTaskAction(formData: FormData): Promise<ProductionActionState>;
-export function deleteManualCycleTaskAction(_previousState: ProductionActionState, formData: FormData): Promise<ProductionActionState>;
 export async function deleteManualCycleTaskAction(
   first: FormData | ProductionActionState,
   second?: FormData,

@@ -106,8 +106,10 @@ test("owner locks, unlocks, and re-locks immutable planning generations", async 
     totalQuantity: 10,
     discountBaht: "0",
     amountPaidBaht: "0",
+    confirmedDeliveryTime: "09:30",
   });
   const orderUrl = page.url();
+  await expect(page.getByLabel("เวลานัดส่ง")).toHaveValue("09:30");
 
   await page.goto(cycleUrl);
   await page
@@ -160,6 +162,7 @@ test("owner locks, unlocks, and re-locks immutable planning generations", async 
   await page.getByRole("button", { name: "ยืนยันล็อกรอบ" }).click();
   const firstLock = await firstLockResponse;
   expect(firstLock.ok()).toBe(true);
+  expect(await firstLock.finished()).toBeNull();
   await page.goto(`${firstPlanningUrl}?generation=1`);
   await expect(
     page.getByRole("heading", { name: "รุ่น 1", exact: true }),
@@ -202,6 +205,7 @@ test("owner locks, unlocks, and re-locks immutable planning generations", async 
   ).toBeDisabled();
   const amountPaid = page.getByLabel("ยอดชำระแล้ว (บาท)");
   await expect(amountPaid).toBeEnabled();
+  await expect(page.getByLabel("เวลานัดส่ง")).toBeDisabled();
   await expect(
     page.getByRole("button", { name: "ยกเลิกออเดอร์" }),
   ).toHaveCount(0);
@@ -218,6 +222,7 @@ test("owner locks, unlocks, and re-locks immutable planning generations", async 
   await paymentSave.click();
   const savedPayment = await paymentResponse;
   expect(savedPayment.ok()).toBe(true);
+  expect(await savedPayment.finished()).toBeNull();
   await page.goto(orderUrl);
   await expect(page.getByRole("main")).toContainText("ชำระบางส่วน", {
     timeout: SERVER_ACTION_TIMEOUT,
@@ -239,6 +244,7 @@ test("owner locks, unlocks, and re-locks immutable planning generations", async 
   await page.getByRole("button", { name: "ปลดล็อกรอบ" }).click();
   const unlocked = await unlockResponse;
   expect(unlocked.ok()).toBe(true);
+  expect(await unlocked.finished()).toBeNull();
   await page.goto(cycleUrl);
   await expect(page.getByRole("heading", { name: cycleName })).toBeVisible();
   await expect(
@@ -268,6 +274,7 @@ test("owner locks, unlocks, and re-locks immutable planning generations", async 
   await orderSave.click();
   const savedOrder = await orderResponse;
   expect(savedOrder.ok()).toBe(true);
+  expect(await savedOrder.finished()).toBeNull();
   await page.goto(orderUrl);
   await expect(secondQuantity).toHaveValue("11");
 
@@ -298,6 +305,7 @@ test("owner locks, unlocks, and re-locks immutable planning generations", async 
   await page.getByRole("button", { name: "ยืนยันล็อกรอบ" }).click();
   const secondLock = await secondLockResponse;
   expect(secondLock.ok()).toBe(true);
+  expect(await secondLock.finished()).toBeNull();
   await page.goto(`${secondPlanningUrl}?generation=2`, {
     waitUntil: "domcontentloaded",
   });
