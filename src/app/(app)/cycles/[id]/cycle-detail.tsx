@@ -88,6 +88,11 @@ export function CycleDetail({
           </p>
         </div>
         <div className="grid gap-3">
+          {cycle.status === "LOCKED" || cycle.status === "IN_PRODUCTION" || ((cycle.status === "COMPLETED" || cycle.status === "CANCELLED") && cycle.activePlanningSnapshotId !== null) ? (
+            <Link className="inline-flex min-h-12 items-center justify-center rounded-xl bg-amber-800 px-6 text-lg font-bold text-white shadow-sm" href={`/cycles/${cycle.id}/operations`}>
+              {cycle.status === "LOCKED" || cycle.status === "IN_PRODUCTION" ? "เปิด Operations" : "ดู Operations"}
+            </Link>
+          ) : null}
           {acceptsNewOrders ? (
             <Link
               className="inline-flex min-h-12 items-center justify-center rounded-xl border border-amber-800 px-6 text-lg font-bold text-amber-900"
@@ -107,7 +112,7 @@ export function CycleDetail({
           {cycle.activePlanningSnapshotId !== null ? (
             <>
               <Link
-                className="inline-flex min-h-12 items-center justify-center rounded-xl bg-stone-900 px-6 text-lg font-bold text-white shadow-sm"
+                className="inline-flex min-h-12 items-center justify-center rounded-xl border border-amber-800 px-6 text-lg font-bold text-amber-900"
                 href={`/cycles/${cycle.id}/planning`}
               >
                 ดูแผนการผลิต

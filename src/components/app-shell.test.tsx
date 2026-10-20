@@ -3,6 +3,10 @@ import { describe, expect, it } from "vitest";
 import { AppShell } from "./app-shell";
 
 describe("AppShell", () => {
+  it("keeps Cycle navigation active in Operations on desktop and phone", () => {
+    const { container } = render(<AppShell currentPath="/cycles/72000000-0000-4000-8000-000000000001/operations"><div>Operations</div></AppShell>);
+    for (const name of ["เมนูหลัก", "เมนูมือถือ"]) expect(within(within(container).getByRole("navigation", { name })).getByRole("link", { name: "รอบผลิต" })).toHaveAttribute("aria-current", "page");
+  });
   it("separates the complete desktop navigation from five phone destinations", () => {
     render(
       <AppShell currentPath="/dashboard">

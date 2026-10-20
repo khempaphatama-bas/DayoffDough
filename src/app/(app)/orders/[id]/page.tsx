@@ -150,6 +150,7 @@ export default async function OrderDetailPage({
           </dl>
         </div>
         <OrderStatusActions
+          cycleId={order.bakeCycleId}
           cancelOrder={cancelOrderAction}
           cycleStatus={order.cycleStatus}
           fulfillmentStatus={order.fulfillmentStatus}

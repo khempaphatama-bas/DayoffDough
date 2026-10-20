@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { BakeCycle } from "@/modules/cycles/application/cycles";
 import type {
@@ -119,6 +119,19 @@ const ORDERS = [
 ];
 
 describe("CycleDetail", () => {
+  it.each(["LOCKED", "IN_PRODUCTION", "COMPLETED", "CANCELLED"] as const)("links %s to Operations and retains secondary workspace links", (status) => {
+    const { container } = render(<CycleDetail cycle={{ ...CYCLE, status, activePlanningSnapshotId: "72000000-0000-4000-8000-000000000003" }} orders={ORDERS} summary={SUMMARY} />);
+    const page = within(container);
+    const name = status === "LOCKED" || status === "IN_PRODUCTION" ? "เปิด Operations" : "ดู Operations";
+    expect(page.getByRole("link", { name })).toHaveAttribute("href", `/cycles/${CYCLE.id}/operations`);
+    for (const label of ["ดูแผนการผลิต", "ดู Production Timeline", "เช็กสต๊อกและรายการซื้อ"]) expect(page.getByRole("link", { name: label })).toBeVisible();
+    expect(page.queryByRole("link", { name: "เพิ่มออเดอร์" })).toBeNull();
+  });
+
+  it("does not advertise unavailable terminal Operations history", () => {
+    const { container } = render(<CycleDetail cycle={{ ...CYCLE, status: "CANCELLED" }} orders={[]} summary={SUMMARY} />);
+    expect(within(container).queryByRole("link", { name: "ดู Operations" })).toBeNull();
+  });
   it("shows live money, production demand, and cancelled order history", () => {
     render(<CycleDetail cycle={CYCLE} orders={ORDERS} summary={SUMMARY} />);
 

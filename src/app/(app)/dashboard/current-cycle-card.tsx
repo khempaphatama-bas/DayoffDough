@@ -21,6 +21,15 @@ export function selectNearestOpenCycle(
   );
 }
 
+export function selectCurrentOperatingCycle(cycles: ReadonlyArray<BakeCycle>): BakeCycle | null {
+  const priority: Partial<Record<BakeCycle["status"], number>> = { IN_PRODUCTION: 0, LOCKED: 1, OPEN: 2 };
+  return [...cycles].filter(cycle => priority[cycle.status] !== undefined).sort((left, right) =>
+    priority[left.status]! - priority[right.status]! ||
+    left.primaryDeliveryDate.localeCompare(right.primaryDeliveryDate) ||
+    left.cycleNumber - right.cycleNumber,
+  )[0] ?? null;
+}
+
 function formatDeliveryDate(value: string): string {
   return new Intl.DateTimeFormat("th-TH", {
     dateStyle: "long",
@@ -84,7 +93,7 @@ export function CurrentCycleCard(props: CurrentCycleCardProps) {
           </p>
         </div>
         <span className="w-fit rounded-full bg-emerald-100 px-3 py-1 text-sm font-semibold text-emerald-800">
-          เปิดรับออเดอร์
+          {cycle.status === "IN_PRODUCTION" ? "กำลังผลิต" : cycle.status === "LOCKED" ? "พร้อมเริ่มผลิต" : "เปิดรับออเดอร์"}
         </span>
       </div>
 
@@ -112,9 +121,9 @@ export function CurrentCycleCard(props: CurrentCycleCardProps) {
       <div className="grid gap-3 sm:grid-cols-2">
         <Link
           className="inline-flex min-h-11 items-center justify-center rounded-xl bg-amber-800 px-5 font-semibold text-white"
-          href={`/orders/new?cycleId=${cycle.id}`}
+          href={cycle.status === "OPEN" ? `/orders/new?cycleId=${cycle.id}` : `/cycles/${cycle.id}/operations`}
         >
-          เพิ่มออเดอร์
+          {cycle.status === "OPEN" ? "เพิ่มออเดอร์" : "เปิด Operations"}
         </Link>
         <Link
           className="inline-flex min-h-11 items-center justify-center rounded-xl border border-amber-800 px-5 font-semibold text-amber-900"

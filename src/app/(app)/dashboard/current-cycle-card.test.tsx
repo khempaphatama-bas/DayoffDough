@@ -1,8 +1,8 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { BakeCycle } from "@/modules/cycles/application/cycles";
 import type { CycleOrderSummary } from "@/modules/orders/application/orders";
-import { CurrentCycleCard, selectNearestOpenCycle } from "./current-cycle-card";
+import { CurrentCycleCard, selectNearestOpenCycle, selectCurrentOperatingCycle } from "./current-cycle-card";
 
 const EARLIER: BakeCycle = {
   id: "11111111-1111-4111-8111-111111111111",
@@ -41,6 +41,23 @@ const SUMMARY: CycleOrderSummary = {
 };
 
 describe("CurrentCycleCard", () => {
+  it("prioritizes production, locked, then open, with date/number tie-breakers", () => {
+    const production: BakeCycle = { ...LATER, status: "IN_PRODUCTION" };
+    const locked: BakeCycle = { ...EARLIER, status: "LOCKED" };
+    expect(selectCurrentOperatingCycle([EARLIER, locked, production])).toEqual(production);
+    expect(selectCurrentOperatingCycle([EARLIER, locked])).toEqual(locked);
+    expect(selectCurrentOperatingCycle([LATER, EARLIER])).toEqual(EARLIER);
+    expect(selectCurrentOperatingCycle([{ ...EARLIER, cycleNumber: 14 }, EARLIER])).toEqual(EARLIER);
+    expect(selectCurrentOperatingCycle([{ ...EARLIER, status: "COMPLETED" }, { ...LATER, status: "CANCELLED" }, { ...EARLIER, status: "DRAFT" }])).toBeNull();
+  });
+
+  it.each([["IN_PRODUCTION", "กำลังผลิต"], ["LOCKED", "พร้อมเริ่มผลิต"]] as const)("makes Operations primary for %s and does not offer new orders", (status, label) => {
+    const { container } = render(<CurrentCycleCard cycle={{ ...EARLIER, status }} summary={SUMMARY} />);
+    const card = within(container);
+    expect(card.getByText(label)).toBeVisible();
+    expect(card.getByRole("link", { name: "เปิด Operations" })).toHaveAttribute("href", `/cycles/${EARLIER.id}/operations`);
+    expect(card.queryByRole("link", { name: "เพิ่มออเดอร์" })).toBeNull();
+  });
   it("selects the nearest OPEN delivery date and shows operating totals", () => {
     expect(selectNearestOpenCycle([LATER, EARLIER])).toEqual(EARLIER);
 

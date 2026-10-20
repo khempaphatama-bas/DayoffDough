@@ -10,25 +10,21 @@ import { evaluateMasterDataReadiness } from "@/modules/readiness/domain/readines
 import { createSettingsService } from "@/modules/settings/application/settings";
 import {
   CurrentCycleCard,
-  selectNearestOpenCycle,
+  selectCurrentOperatingCycle,
 } from "./current-cycle-card";
 
 export default async function DashboardPage() {
   const owner = await requireOwner();
-  const [settings, inventory, products, delivery, openCycles] = await Promise.all([
+  const [settings, inventory, products, delivery, cycles] = await Promise.all([
     createSettingsService(db).get(owner.id),
     createInventoryService(db).listItems(owner.id),
     createProductService(db).listProducts(owner.id),
     createDeliveryService(db).listDeliveryConfiguration(owner.id),
-    createCycleService(db).list(owner.id, { status: "OPEN" }),
+    createCycleService(db).list(owner.id),
   ]);
-  const cycleSummaries = await createOrderService(db).listCycleSummaries(
-    owner.id,
-    openCycles.map((cycle) => cycle.id),
-  );
-  const currentCycle = selectNearestOpenCycle(openCycles);
+  const currentCycle = selectCurrentOperatingCycle(cycles);
   const currentCycleSummary = currentCycle
-    ? (cycleSummaries.get(currentCycle.id) ?? null)
+    ? ((await createOrderService(db).listCycleSummaries(owner.id, [currentCycle.id])).get(currentCycle.id) ?? null)
     : null;
   if (currentCycle && !currentCycleSummary) {
     throw new Error("Cycle summary not found");

@@ -34,6 +34,13 @@ function StatusBadge({ status }: Readonly<{ status: BakeCycleStatus }>) {
   );
 }
 
+function OperationsLink({ cycle }: Readonly<{ cycle: BakeCycle }>) {
+  const active = cycle.status === "LOCKED" || cycle.status === "IN_PRODUCTION";
+  const history = (cycle.status === "COMPLETED" || cycle.status === "CANCELLED") && cycle.activePlanningSnapshotId !== null;
+  if (!active && !history) return null;
+  return <Link className={`inline-flex min-h-11 items-center justify-center rounded-xl px-4 font-semibold ${active ? "bg-amber-800 text-white" : "border border-amber-800 text-amber-900"}`} href={`/cycles/${cycle.id}/operations`}>{active ? "เปิด Operations" : "ดู Operations"}</Link>;
+}
+
 export function CycleList({
   cycles,
   query,
@@ -139,6 +146,7 @@ export function CycleList({
                     </dd>
                   </div>
                 </dl>
+                <div className="mt-4"><OperationsLink cycle={cycle} /></div>
               </article>
             ))}
           </div>
@@ -161,12 +169,15 @@ export function CycleList({
                 <span className="text-sm font-bold text-amber-800">
                   #{cycle.cycleNumber}
                 </span>
-                <Link
-                  className="inline-flex min-h-11 items-center font-semibold text-stone-900 hover:text-amber-800"
-                  href={`/cycles/${cycle.id}`}
-                >
-                  {cycle.name}
-                </Link>
+                <div className="grid gap-2">
+                  <Link
+                    className="inline-flex min-h-11 items-center font-semibold text-stone-900 hover:text-amber-800"
+                    href={`/cycles/${cycle.id}`}
+                  >
+                    {cycle.name}
+                  </Link>
+                  <OperationsLink cycle={cycle} />
+                </div>
                 <div>
                   <StatusBadge status={cycle.status} />
                 </div>

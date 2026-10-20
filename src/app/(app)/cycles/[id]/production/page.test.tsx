@@ -23,6 +23,15 @@ describe("ProductionPage", () => {
     mocks.notFound.mockImplementation(() => { throw new Error("NEXT_NOT_FOUND"); });
   });
 
+  it("links only the current generation to Operations, preserving history navigation", async () => {
+    const current = render(await ProductionPage({ params: Promise.resolve({ id: CYCLE_ID }) }));
+    expect(within(current.container).getByRole("link", { name: "เปิด Operations" })).toHaveAttribute("href", `/cycles/${CYCLE_ID}/operations`);
+    current.unmount();
+    mocks.get.mockResolvedValueOnce({ ...VIEW, kind: "HISTORY", writable: false });
+    const history = render(await ProductionPage({ params: Promise.resolve({ id: CYCLE_ID }), searchParams: Promise.resolve({ generation: "1" }) }));
+    expect(within(history.container).queryByRole("link", { name: /Operations/ })).toBeNull();
+  });
+
   it("awaits promised route props and loads the clean active generation", async () => {
     render(await ProductionPage({ params: Promise.resolve({ id: CYCLE_ID }), searchParams: Promise.resolve({}) }));
     expect(screen.getByTestId("timeline")).toHaveTextContent("CURRENT");

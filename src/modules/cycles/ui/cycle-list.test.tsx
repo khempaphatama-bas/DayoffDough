@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { BakeCycle } from "@/modules/cycles/application/cycles";
 import type { CycleOrderSummary } from "@/modules/orders/application/orders";
@@ -30,6 +30,17 @@ const SUMMARY: CycleOrderSummary = {
 };
 
 describe("CycleList", () => {
+  it.each(["LOCKED", "IN_PRODUCTION", "COMPLETED", "CANCELLED"] as const)("provides %s Operations entry points on both layouts", (status) => {
+    const { container } = render(<CycleList cycles={[{ ...CYCLE, status, activePlanningSnapshotId: "72000000-0000-4000-8000-000000000003" }]} query="" status="all" summaries={new Map()} />);
+    const name = status === "LOCKED" || status === "IN_PRODUCTION" ? "เปิด Operations" : "ดู Operations";
+    const links = within(container).getAllByRole("link", { name });
+    expect(links).toHaveLength(2);
+    for (const link of links) expect(link).toHaveAttribute("href", `/cycles/${CYCLE.id}/operations`);
+  });
+  it.each(["OPEN", "DRAFT", "CANCELLED"] as const)("omits unavailable Operations entry points for %s", (status) => {
+    const { container } = render(<CycleList cycles={[{ ...CYCLE, status }]} query="" status="all" summaries={new Map()} />);
+    expect(within(container).queryByRole("link", { name: /Operations/ })).toBeNull();
+  });
   it("renders cycle metadata and a detail destination", () => {
     render(
       <CycleList

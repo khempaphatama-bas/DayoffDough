@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   OrderDetail,
@@ -39,6 +39,7 @@ vi.mock("@/app/(app)/orders/actions", () => ({
 vi.mock("@/app/(app)/customers/actions", () => ({
   createQuickCustomerAction: vi.fn(),
 }));
+vi.mock("@/app/(app)/cycles/[id]/operations/actions", () => ({ reopenOrderPackingAction: vi.fn() }));
 
 import OrderDetailPage from "./page";
 
@@ -154,6 +155,16 @@ const HISTORICAL_OPTIONS: OrderFormOptions = {
 };
 
 describe("OrderDetailPage", () => {
+  it("connects frozen active orders to Cycle Operations and includes Cycle in guarded status forms", async () => {
+    mocks.get.mockResolvedValueOnce({ ...DETAIL, cycleStatus: "IN_PRODUCTION", fulfillmentStatus: "CONFIRMED" });
+    const { container } = render(await OrderDetailPage({ params: Promise.resolve({ id: ORDER_ID }) }));
+    const ui = within(container);
+    expect(ui.getByRole("link", { name: "เปิด Operations" })).toHaveAttribute("href", `/cycles/${CYCLE_ID}/operations`);
+    const form = ui.getByRole("button", { name: "เริ่มทำออเดอร์" }).closest("form")!;
+    expect(form.querySelector('input[name="cycleId"]')).toHaveValue(CYCLE_ID);
+    expect(form.querySelector('input[name="orderId"]')).toHaveValue(ORDER_ID);
+    expect(ui.getByRole("button", { name: "บันทึกคืนเงิน" })).toBeEnabled();
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.requireOwner.mockResolvedValue({ id: OWNER_ID, email: "owner@example.com" });
@@ -189,6 +200,7 @@ describe("OrderDetailPage", () => {
     expect(screen.queryByRole("button", { name: "ยกเลิกออเดอร์" })).toBeNull();
     expect(screen.queryByRole("button", { name: "เริ่มผลิต" })).toBeNull();
     expect(screen.getByRole("button", { name: "บันทึกคืนเงิน" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "เปิด Operations" })).toHaveAttribute("href", `/cycles/${CYCLE_ID}/operations`);
     expect(screen.getByLabelText("ลูกค้า")).toHaveValue(CUSTOMER_ID);
     expect(screen.getByLabelText("รอบผลิต")).toHaveValue(CYCLE_ID);
     expect(screen.getByLabelText("วิธีจัดส่ง")).toHaveValue(METHOD_ID);
