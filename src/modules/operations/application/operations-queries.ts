@@ -30,6 +30,16 @@ const uuidSchema = z.string().uuid();
 const SYSTEM_CLOCK: OperationsClock = { now: () => new Date() };
 const statusRank = { IN_PRODUCTION: 0, LOCKED: 1 } as const;
 
+export function compareOperationsCycles(
+  left: Pick<CycleOperationsOption, "id" | "status" | "primaryDeliveryDate" | "cycleNumber">,
+  right: Pick<CycleOperationsOption, "id" | "status" | "primaryDeliveryDate" | "cycleNumber">,
+): number {
+  return statusRank[left.status as keyof typeof statusRank] - statusRank[right.status as keyof typeof statusRank]
+    || left.primaryDeliveryDate.localeCompare(right.primaryDeliveryDate)
+    || left.cycleNumber - right.cycleNumber
+    || left.id.localeCompare(right.id);
+}
+
 function notFound(): never {
   throw new OperationsStateError("NOT_FOUND", "Operations cycle not found");
 }
@@ -120,12 +130,7 @@ export function createOperationsQueryService(
         eq(bakeCycles.ownerId, verifiedOwnerId),
         inArray(bakeCycles.status, ["LOCKED", "IN_PRODUCTION"]),
       ));
-      const cycleOptions = candidateCycles.sort((left, right) =>
-        statusRank[left.status as keyof typeof statusRank] - statusRank[right.status as keyof typeof statusRank]
-        || left.primaryDeliveryDate.localeCompare(right.primaryDeliveryDate)
-        || left.cycleNumber - right.cycleNumber
-        || left.id.localeCompare(right.id),
-      ).map(toOption);
+      const cycleOptions = candidateCycles.sort(compareOperationsCycles).map(toOption);
       if ((cycle.status === "COMPLETED" || cycle.status === "CANCELLED")
         && !cycleOptions.some((option) => option.id === cycle.id)) {
         cycleOptions.push(toOption(cycle));

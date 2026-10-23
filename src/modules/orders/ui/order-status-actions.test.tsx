@@ -18,6 +18,7 @@ describe("OrderStatusActions", () => {
     ["IN_PRODUCTION", "ยืนยันแพ็กครบ", "PACKED"],
     ["PACKED", "จัดส่งแล้ว", "DELIVERED"],
   ] as const)("offers only the next guarded forward action for %s and includes its Cycle", async (fulfillmentStatus, label, status) => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
     const actions = props();
     const { container } = render(<OrderStatusActions {...actions} fulfillmentStatus={fulfillmentStatus} />);
     const ui = within(container);
@@ -34,6 +35,29 @@ describe("OrderStatusActions", () => {
     expect(submitted.get("orderId")).toBe(ORDER_ID);
     expect(submitted.get("cycleId")).toBe(CYCLE_ID);
     expect(submitted.get("status")).toBe(status);
+  });
+  it("cancels delivery without mutations, then submits the accepted terminal transition exactly once", async () => {
+    const actions = props();
+    const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValueOnce(true);
+    const { container } = render(<OrderStatusActions {...actions} fulfillmentStatus="PACKED" />);
+    const ui = within(container);
+    const user = userEvent.setup();
+
+    await user.click(ui.getByRole("button", { name: "จัดส่งแล้ว" }));
+
+    expect(confirm).toHaveBeenCalledOnce();
+    for (const action of [actions.updateFulfillmentStatus, actions.reopenOrderPacking, actions.cancelOrder,
+      actions.markOrderRefunded, actions.restoreOrderPaymentTracking]) expect(action).not.toHaveBeenCalled();
+
+    await user.click(ui.getByRole("button", { name: "จัดส่งแล้ว" }));
+
+    await waitFor(() => expect(actions.updateFulfillmentStatus).toHaveBeenCalledOnce());
+    expect(confirm).toHaveBeenCalledTimes(2);
+    const submitted = actions.updateFulfillmentStatus.mock.calls[0]![1] as FormData;
+    expect(submitted.get("orderId")).toBe(ORDER_ID);
+    expect(submitted.get("cycleId")).toBe(CYCLE_ID);
+    expect(submitted.get("status")).toBe("DELIVERED");
+    expect(actions.reopenOrderPacking).not.toHaveBeenCalled();
   });
   it("reopens packing through the dedicated correction action only for PACKED", async () => {
     const actions = props();

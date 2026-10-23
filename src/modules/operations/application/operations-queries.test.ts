@@ -15,12 +15,27 @@ import { createPlanningQueryService } from "@/modules/planning/application/plann
 import { cycleOrderItemSnapshots, cycleOrderSnapshots, cyclePlanningSnapshots } from "@/modules/planning/db/schema";
 import { products } from "@/modules/products/db/schema";
 import { cycleTaskGenerations, cycleTasks } from "@/modules/production/db/schema";
-import { createOperationsQueryService } from "./operations-queries";
+import { compareOperationsCycles, createOperationsQueryService } from "./operations-queries";
 import { createCycleOperationsCommandService } from "./cycle-commands";
 import { createOrderOperationsCommandService } from "./order-commands";
 
 const MISSING_CYCLE_ID = "ffffffff-ffff-4fff-bfff-ffffffffffff";
 const CLOCK = { now: () => new Date("2026-08-29T05:00:00.000Z") };
+
+describe("Operations switcher tie breaks", () => {
+  const base = { id: "b", status: "LOCKED" as const, primaryDeliveryDate: "2026-08-29", cycleNumber: 20 };
+
+  it.each([
+    { key: "delivery date", earlier: { ...base, id: "z", primaryDeliveryDate: "2026-08-28", cycleNumber: 99 } },
+    { key: "cycle number after equal dates", earlier: { ...base, id: "z", cycleNumber: 19 } },
+    // Cycle numbers are unique in persisted rows; this defensive last tie-break
+    // is exercised directly without weakening the real database constraint.
+    { key: "ID after equal dates and cycle numbers", earlier: { ...base, id: "a" } },
+  ])("sorts by $key before considering later keys", ({ earlier }) => {
+    expect([base, earlier].sort(compareOperationsCycles).map(cycle => cycle.id)).toEqual([earlier.id, "b"]);
+    expect([earlier, base].sort(compareOperationsCycles).map(cycle => cycle.id)).toEqual([earlier.id, "b"]);
+  });
+});
 
 describe("cycle operations query", () => {
   let context: Awaited<ReturnType<typeof createTestDatabase>>;

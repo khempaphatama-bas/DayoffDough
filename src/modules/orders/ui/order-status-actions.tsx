@@ -109,12 +109,19 @@ export function OrderStatusActions({
     }
   }
 
+  function confirmDelivery(event: FormEvent<HTMLFormElement>) {
+    if (next?.status === "DELIVERED" && !window.confirm("ยืนยันว่าได้จัดส่งออเดอร์นี้แล้วหรือไม่?")) {
+      event.preventDefault();
+    }
+  }
+
   return (
     <section className="grid gap-4" aria-label="จัดการสถานะออเดอร์">
       {productionFrozen && fulfillmentStatus !== "CANCELLED" ? <Link className="inline-flex min-h-11 items-center font-semibold text-amber-900 underline" href={`/cycles/${cycleId}/operations`}>เปิด Operations</Link> : null}
       {next ? (
         <form
           action={fulfillmentAction}
+          onSubmit={confirmDelivery}
           className="flex flex-wrap gap-2"
         >
           <input name="orderId" type="hidden" value={orderId} />

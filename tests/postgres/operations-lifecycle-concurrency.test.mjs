@@ -264,3 +264,101 @@ test("direct Task status regression serializes with Cycle completion", { timeout
 test("direct manual Task insertion serializes with Cycle completion", { timeout: 20_000 }, async () => {
   await runTaskCompletionRace("manual_insert");
 });
+
+async function runPackingTransitionRace(firstOperation) {
+  const adminUrl = localAdminUrl();
+  const databaseName = `dayoffdough_finalfix_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
+  const databaseUrl = new URL(adminUrl);
+  databaseUrl.pathname = `/${databaseName}`;
+  const admin = client(adminUrl);
+  const itemId = "74000000-0000-4000-8000-000000000001";
+  const productId = "74000000-0000-4000-8000-000000000002";
+  let migrationClient;
+  let first;
+  let second;
+  let observer;
+  let firstOpen = false;
+  try {
+    await admin.unsafe(`CREATE DATABASE "${databaseName}"`);
+    migrationClient = client(databaseUrl);
+    await migrate(drizzle(migrationClient), { migrationsFolder: "drizzle" });
+    await migrationClient`INSERT INTO customers (id, owner_id, name) VALUES (${CUSTOMER_ID}, ${OWNER_ID}, 'Packing race customer')`;
+    await migrationClient`INSERT INTO products (id, owner_id, name, selling_unit, default_unit_price_satang)
+      VALUES (${productId}, ${OWNER_ID}, 'Packing race bread', 'piece', 100)`;
+    await migrationClient`INSERT INTO bake_cycles (id, owner_id, name, status, target_production_date, primary_delivery_date)
+      VALUES (${CYCLE_ID}, ${OWNER_ID}, 'Packing race cycle', 'IN_PRODUCTION', '2026-09-26', '2026-09-27')`;
+    await migrationClient`INSERT INTO orders (id, owner_id, customer_id, bake_cycle_id, fulfillment_status)
+      VALUES (${ORDER_ID}, ${OWNER_ID}, ${CUSTOMER_ID}, ${CYCLE_ID}, 'IN_PRODUCTION')`;
+    await migrationClient`INSERT INTO order_items (id, owner_id, order_id, product_id, quantity, unit_price_satang, position)
+      VALUES (${itemId}, ${OWNER_ID}, ${ORDER_ID}, ${productId}, 10, 100, 0)`;
+    await migrationClient`INSERT INTO order_item_packing_progress (owner_id, order_item_id, packed_quantity)
+      VALUES (${OWNER_ID}, ${itemId}, 10)`;
+
+    first = client(databaseUrl);
+    second = client(databaseUrl);
+    observer = client(databaseUrl);
+    const decrement = connection => connection`UPDATE order_item_packing_progress SET packed_quantity = 9
+      WHERE owner_id = ${OWNER_ID} AND order_item_id = ${itemId}`;
+    const pack = connection => connection`UPDATE orders SET fulfillment_status = 'PACKED'
+      WHERE owner_id = ${OWNER_ID} AND id = ${ORDER_ID}`;
+    const readState = async () => (await observer`SELECT o.fulfillment_status AS status, p.packed_quantity AS packed
+      FROM orders o JOIN order_items i ON i.owner_id = o.owner_id AND i.order_id = o.id
+      JOIN order_item_packing_progress p ON p.owner_id = i.owner_id AND p.order_item_id = i.id
+      WHERE o.owner_id = ${OWNER_ID} AND o.id = ${ORDER_ID}`)[0];
+
+    await first`BEGIN`;
+    firstOpen = true;
+    await first`SET LOCAL statement_timeout = '5s'`;
+    await first`SET LOCAL lock_timeout = '3s'`;
+    await (firstOperation === "progress" ? decrement(first) : pack(first));
+    // The first statement has completed but stays uncommitted. The independent
+    // observer proves the second writer starts against the old committed state.
+    assert.deepEqual(await readState(), { status: "IN_PRODUCTION", packed: 10 });
+    await second`BEGIN`;
+    await second`SET LOCAL statement_timeout = '5s'`;
+    await second`SET LOCAL lock_timeout = '3s'`;
+    let secondResult;
+    try {
+      await (firstOperation === "progress" ? pack(second) : decrement(second));
+      await second`COMMIT`;
+      secondResult = { kind: "committed" };
+    } catch (error) {
+      await second`ROLLBACK`;
+      secondResult = { kind: "rejected", code: error.code };
+    }
+    await first`COMMIT`;
+    firstOpen = false;
+
+    const state = await readState();
+    assert.ok(!["PACKED", "DELIVERED"].includes(state.status) || state.packed === 10,
+      `must not commit terminal fulfillment with incomplete Packing: ${JSON.stringify(state)}`);
+    assert.deepEqual(secondResult, { kind: "rejected", code: "55P03" },
+      "the conflicting parent lock rejects the second direct writer without waiting on an inverted child lock");
+    assert.deepEqual(state, firstOperation === "progress"
+      ? { status: "IN_PRODUCTION", packed: 9 } : { status: "PACKED", packed: 10 });
+
+    // A fresh retry rechecks current parents/progress, not the stale pre-lock state.
+    if (firstOperation === "progress") {
+      await assert.rejects(pack(second), /order packing incomplete/);
+      assert.deepEqual(await readState(), { status: "IN_PRODUCTION", packed: 9 });
+    } else {
+      await assert.rejects(decrement(second), /packing progress requires order IN_PRODUCTION/);
+      await second`UPDATE orders SET fulfillment_status = 'DELIVERED' WHERE owner_id = ${OWNER_ID} AND id = ${ORDER_ID}`;
+      await assert.rejects(decrement(second), /packing progress requires order IN_PRODUCTION/);
+      assert.deepEqual(await readState(), { status: "DELIVERED", packed: 10 });
+    }
+  } finally {
+    if (firstOpen && first) await first`ROLLBACK`;
+    await Promise.allSettled([migrationClient?.end(), first?.end(), second?.end(), observer?.end()]);
+    await admin.unsafe(`DROP DATABASE IF EXISTS "${databaseName}"`);
+    await admin.end();
+  }
+}
+
+test("direct Packing decrement first excludes concurrent PACKED transition", { timeout: 20_000 }, async () => {
+  await runPackingTransitionRace("progress");
+});
+
+test("direct PACKED transition first excludes concurrent Packing decrement", { timeout: 20_000 }, async () => {
+  await runPackingTransitionRace("transition");
+});

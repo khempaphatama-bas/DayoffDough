@@ -89,7 +89,7 @@ async function packedProgressRows(db: ReturnType<typeof drizzle>) {
 }
 
 describe("0013 Phase 4B operations migration", () => {
-  it("ignores a zero Packing row preserved from before the progress trigger", async () => {
+  it.each([0, 1])("evaluates historical Packing quantity %i independently of Order start", async (packedQuantity) => {
     const client = new PGlite();
     const db = drizzle(client);
     try {
@@ -117,16 +117,31 @@ describe("0013 Phase 4B operations migration", () => {
       for (const statement of statements.slice(0, progressGuardIndex)) {
         if (statement.trim()) await db.execute(sql.raw(statement));
       }
+      // Only this private PGlite fixture is seeded at the migration's historical
+      // pre-guard boundary. Re-enable every guard before testing the application
+      // predicate; do not regress an operational Order or disable live guards.
       await db.execute(sql`INSERT INTO order_item_packing_progress (
         owner_id, order_item_id, packed_quantity
-      ) VALUES (${OWNER_ID}, ${IN_PRODUCTION_ITEM_ID}, 0)`);
+      ) VALUES (${OWNER_ID}, ${IN_PRODUCTION_ITEM_ID}, ${packedQuantity})`);
       for (const statement of statements.slice(progressGuardIndex)) {
         if (statement.trim()) await db.execute(sql.raw(statement));
       }
 
-      await expect(assertCycleOperationsUnlockAllowed(
-        db as unknown as DatabaseClient, OWNER_ID, CYCLE_ID,
-      )).resolves.toBeUndefined();
+      const state = await db.execute(sql`SELECT fulfillment_status FROM orders
+        WHERE owner_id = ${OWNER_ID} AND bake_cycle_id = ${CYCLE_ID}`);
+      expect(state.rows).toEqual([{ fulfillment_status: "CONFIRMED" }]);
+      expect(await packedProgressRows(db)).toEqual([
+        { orderItemId: IN_PRODUCTION_ITEM_ID, packedQuantity },
+      ]);
+      if (packedQuantity === 0) {
+        await expect(assertCycleOperationsUnlockAllowed(
+          db as unknown as DatabaseClient, OWNER_ID, CYCLE_ID,
+        )).resolves.toBeUndefined();
+      } else {
+        await expect(assertCycleOperationsUnlockAllowed(
+          db as unknown as DatabaseClient, OWNER_ID, CYCLE_ID,
+        )).rejects.toMatchObject({ kind: "UNLOCK_BLOCKED_BY_OPERATIONS", message: "Cycle operations have started" });
+      }
     } finally {
       await client.close();
     }

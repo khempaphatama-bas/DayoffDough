@@ -52,26 +52,54 @@ BEGIN
     RAISE EXCEPTION 'packing progress requires an active order item';
   END IF;
 
-  IF NEW.packed_quantity > item_row.quantity THEN
-    RAISE EXCEPTION 'packed quantity cannot exceed active order item quantity';
-  END IF;
-
+  -- Discover lineage without locking children. Both guards below serialize on
+  -- the owned Cycle, then recheck parents. Row triggers already hold their
+  -- target tuple: NOWAIT (55P03) avoids an inverted wait against an app command
+  -- holding Cycle -> Order -> Item -> Progress. Direct SQL callers must retry
+  -- the whole transaction on contention; app Cycle-first locks are reentrant.
   SELECT * INTO order_row
   FROM orders
   WHERE owner_id = item_row.owner_id
     AND id = item_row.order_id;
 
-  IF NOT FOUND OR order_row.fulfillment_status <> 'IN_PRODUCTION' THEN
+  IF NOT FOUND THEN
     RAISE EXCEPTION 'packing progress requires order IN_PRODUCTION';
   END IF;
 
   SELECT * INTO cycle_row
   FROM bake_cycles
   WHERE owner_id = order_row.owner_id
-    AND id = order_row.bake_cycle_id;
+    AND id = order_row.bake_cycle_id
+  FOR UPDATE NOWAIT;
 
   IF NOT FOUND OR cycle_row.status <> 'IN_PRODUCTION' THEN
     RAISE EXCEPTION 'packing progress requires cycle IN_PRODUCTION';
+  END IF;
+
+  SELECT * INTO order_row
+  FROM orders
+  WHERE owner_id = NEW.owner_id
+    AND id = item_row.order_id
+    AND bake_cycle_id = cycle_row.id
+  FOR UPDATE NOWAIT;
+
+  IF NOT FOUND OR order_row.fulfillment_status <> 'IN_PRODUCTION' THEN
+    RAISE EXCEPTION 'packing progress requires order IN_PRODUCTION';
+  END IF;
+
+  SELECT * INTO item_row
+  FROM order_items
+  WHERE owner_id = NEW.owner_id
+    AND id = NEW.order_item_id
+    AND order_id = order_row.id
+    AND active = true;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'packing progress requires an active order item';
+  END IF;
+
+  IF NEW.packed_quantity > item_row.quantity THEN
+    RAISE EXCEPTION 'packed quantity cannot exceed active order item quantity';
   END IF;
 
   RETURN NEW;
@@ -92,7 +120,10 @@ BEGIN
   SELECT status INTO cycle_status
   FROM bake_cycles
   WHERE owner_id = NEW.owner_id AND id = NEW.bake_cycle_id
-  FOR SHARE;
+  -- Same conflicting parent lock as Packing, before reading completeness.
+  -- Never wait for Cycle while holding the implicitly locked Order target:
+  -- an app writer may already hold Cycle and be waiting for this Order.
+  FOR UPDATE NOWAIT;
 
   IF cycle_status IS NULL THEN
     RAISE EXCEPTION 'order fulfillment transition not allowed: cycle missing';

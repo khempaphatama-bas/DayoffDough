@@ -128,62 +128,62 @@ export function CycleTaskForm({
   }
 
   return (
-    <form key={state.error ? JSON.stringify(state.values) : "stable"} className="grid gap-4 rounded-3xl border border-stone-200 bg-white p-5 pb-24 shadow-sm md:pb-5" onSubmit={submit}>
+    <form key={state.error ? JSON.stringify(state.values) : "stable"} className="grid min-w-0 w-full max-w-full gap-4 rounded-3xl border border-stone-200 bg-white p-5 pb-24 shadow-sm md:pb-5" onSubmit={submit}>
       <input name="cycleId" type="hidden" value={cycleId} />
       <input name="taskGenerationId" type="hidden" value={taskGenerationId} />
       {mode === "edit" && task ? <input name="taskId" type="hidden" value={task.id} /> : null}
       {mode === "create" ? <input data-testid="creation-request-id" name="creationRequestId" type="hidden" value={state.saved ? creationRequestId : state.values.creationRequestId ?? creationRequestId} /> : null}
-      <label className="grid gap-2 text-sm font-semibold text-stone-700">
+      <label className="grid min-w-0 gap-2 text-sm font-semibold text-stone-700">
         ชื่องาน
-        <input className="min-h-11 rounded-xl border border-stone-300 px-4 text-base font-normal" defaultValue={title} name="title" required />
+        <input className="min-h-11 min-w-0 w-full max-w-full rounded-xl border border-stone-300 px-4 text-base font-normal" defaultValue={title} name="title" required />
         <Errors error={state.fieldErrors.title} />
       </label>
-      <label className="grid gap-2 text-sm font-semibold text-stone-700">
+      <label className="grid min-w-0 gap-2 text-sm font-semibold text-stone-700">
         สินค้า
-        <select className="min-h-11 rounded-xl border border-stone-300 bg-white px-4 text-base font-normal" defaultValue={productId} name="productId">
+        <select className="min-h-11 min-w-0 w-full max-w-full rounded-xl border border-stone-300 bg-white px-4 text-base font-normal" defaultValue={productId} name="productId">
           <option value="">งานระดับรอบ (ไม่ผูกสินค้า)</option>
           {products.map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}
         </select>
         <Errors error={state.fieldErrors.productId} />
       </label>
-      <div className="grid gap-4 sm:grid-cols-3">
-        <label className="grid gap-2 text-sm font-semibold text-stone-700">
+      <div className="grid min-w-0 gap-4 sm:grid-cols-3">
+        <label className="grid min-w-0 gap-2 text-sm font-semibold text-stone-700">
           จำนวนแบตช์
-          <input className="min-h-11 rounded-xl border border-stone-300 px-4 text-base font-normal" defaultValue={batchCount} min="0.000001" name="batchCount" step="0.000001" type="number" />
+          <input className="min-h-11 min-w-0 w-full max-w-full rounded-xl border border-stone-300 px-4 text-base font-normal" defaultValue={batchCount} min="0.000001" name="batchCount" step="0.000001" type="number" />
           <Errors error={state.fieldErrors.batchCount} />
         </label>
-        <label className="grid gap-2 text-sm font-semibold text-stone-700">
+        <label className="grid min-w-0 gap-2 text-sm font-semibold text-stone-700">
           ระยะเวลา (นาที)
-          <input className="min-h-11 rounded-xl border border-stone-300 px-4 text-base font-normal" defaultValue={duration} min="1" name="estimatedDurationMinutes" required type="number" />
+          <input className="min-h-11 min-w-0 w-full max-w-full rounded-xl border border-stone-300 px-4 text-base font-normal" defaultValue={duration} min="1" name="estimatedDurationMinutes" required type="number" />
           <Errors error={state.fieldErrors.estimatedDurationMinutes} />
         </label>
-        <label className="grid gap-2 text-sm font-semibold text-stone-700">
+        <label className="grid min-w-0 gap-2 text-sm font-semibold text-stone-700">
           ลำดับ
-          <input className="min-h-11 rounded-xl border border-stone-300 px-4 text-base font-normal" defaultValue={sequence} min="1" name="sequence" required type="number" />
+          <input className="min-h-11 min-w-0 w-full max-w-full rounded-xl border border-stone-300 px-4 text-base font-normal" defaultValue={sequence} min="1" name="sequence" required type="number" />
           <Errors error={state.fieldErrors.sequence} />
         </label>
       </div>
-      <label className="grid gap-2 text-sm font-semibold text-stone-700">
+      <label className="grid min-w-0 gap-2 text-sm font-semibold text-stone-700">
         เวลาที่กำหนด
-        <input className="min-h-11 rounded-xl border border-stone-300 px-4 text-base font-normal" defaultValue={scheduledAt} name="scheduledAt" required type="datetime-local" />
+        <input className="min-h-11 min-w-0 w-full max-w-full rounded-xl border border-stone-300 px-4 text-base font-normal" defaultValue={scheduledAt} name="scheduledAt" required type="datetime-local" />
         <Errors error={state.fieldErrors.scheduledAt} />
       </label>
-      <label className="grid gap-2 text-sm font-semibold text-stone-700">
+      <label className="grid min-w-0 gap-2 text-sm font-semibold text-stone-700">
         สถานะ
-        <select className="min-h-11 rounded-xl border border-stone-300 bg-white px-4 text-base font-normal" name="status" onChange={(event) => setStatus(event.target.value as CycleTaskView["status"])} value={displayedStatus}>
+        <select className="min-h-11 min-w-0 w-full max-w-full rounded-xl border border-stone-300 bg-white px-4 text-base font-normal" name="status" onChange={(event) => setStatus(event.target.value as CycleTaskView["status"])} value={displayedStatus}>
           {Object.entries(STATUS_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         </select>
       </label>
       {displayedStatus === "SKIPPED" ? (
-        <label className="grid gap-2 text-sm font-semibold text-stone-700">
+        <label className="grid min-w-0 gap-2 text-sm font-semibold text-stone-700">
           เหตุผลที่ข้าม
-          <textarea className="min-h-20 rounded-xl border border-stone-300 px-4 py-3 text-base font-normal" defaultValue={skipReason} name="skipReason" required />
+          <textarea className="min-h-20 min-w-0 w-full max-w-full rounded-xl border border-stone-300 px-4 py-3 text-base font-normal" defaultValue={skipReason} name="skipReason" required />
           <Errors error={state.fieldErrors.skipReason} />
         </label>
       ) : null}
-      <label className="grid gap-2 text-sm font-semibold text-stone-700">
+      <label className="grid min-w-0 gap-2 text-sm font-semibold text-stone-700">
         หมายเหตุ
-        <textarea className="min-h-20 rounded-xl border border-stone-300 px-4 py-3 text-base font-normal" defaultValue={notes} name="notes" />
+        <textarea className="min-h-20 min-w-0 w-full max-w-full rounded-xl border border-stone-300 px-4 py-3 text-base font-normal" defaultValue={notes} name="notes" />
       </label>
       {state.error ? <p className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-800" role="alert">{state.error}</p> : null}
       {state.saved ? <p aria-live="polite" className="rounded-xl bg-emerald-50 px-4 py-3 text-sm text-emerald-800">บันทึกงานแล้ว</p> : null}
