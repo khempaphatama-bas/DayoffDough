@@ -1,7 +1,7 @@
 # Day Off Dough OS — Phase 5A Consumption Design
 
 - วันที่: 2026-10-24 (Asia/Bangkok)
-- สถานะ: **ตรวจด้วย builder check และบันทึกข้อเสนอแก้จุดกำกวมแล้ว รอเจ้าของร้านอนุมัติเอกสาร ยังไม่ใช่สิทธิ์ให้ implement**
+- สถานะ: **เจ้าของร้านอนุมัติเอกสารแล้วเมื่อ 2026-10-24; ขั้นถัดไปเขียน implementation plan และให้ตรวจแผนก่อนเริ่ม implementation**
 - ฐานโค้ด: `main` ที่ `d1e13f0217708f1dadc1a11e61c7451ddae15778` (Phase 4B รวมแล้ว)
 - เอกสารอ้างอิง: MVP design, delivery roadmap, Phase 3A/3B/4A/4B designs ในโฟลเดอร์นี้
 
