@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import {
   boolean,
+  bigint,
   check,
   foreignKey,
   index,
@@ -8,6 +9,7 @@ import {
   numeric,
   pgEnum,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   unique,
@@ -180,3 +182,16 @@ export const inventoryMovements = pgTable(
     ),
   ],
 );
+
+// Applied cutover tokens only; the authoritative balance remains SUM(movements).
+export const inventoryLedgerStates = pgTable("inventory_ledger_states", {
+  ownerId: uuid("owner_id").notNull(),
+  inventoryItemId: uuid("inventory_item_id").notNull(),
+  ledgerRevision: bigint("ledger_revision", { mode: "bigint" }).notNull().default(sql`0`),
+  latestCountMovementId: uuid("latest_count_movement_id"),
+}, (table) => [
+  primaryKey({ columns: [table.ownerId, table.inventoryItemId] }),
+  foreignKey({ name: "ledger_states_owned_item_fk", columns: [table.ownerId, table.inventoryItemId], foreignColumns: [inventoryItems.ownerId, inventoryItems.id] }).onDelete("restrict"),
+  foreignKey({ name: "ledger_states_owned_count_fk", columns: [table.ownerId, table.inventoryItemId, table.latestCountMovementId], foreignColumns: [inventoryMovements.ownerId, inventoryMovements.inventoryItemId, inventoryMovements.id] }).onDelete("restrict"),
+  check("ledger_states_revision_nonnegative", sql`${table.ledgerRevision} >= 0`),
+]).enableRLS();

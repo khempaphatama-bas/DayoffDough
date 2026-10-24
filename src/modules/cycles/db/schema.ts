@@ -17,6 +17,7 @@ export const bakeCycleStatusEnum = pgEnum(
   "bake_cycle_status",
   bakeCycleStatus,
 );
+export const consumptionPolicyEnum = pgEnum("consumption_policy", ["LEGACY", "CONSUMPTION_V1"]);
 
 export const bakeCycles = pgTable(
   "bake_cycles",
@@ -26,6 +27,7 @@ export const bakeCycles = pgTable(
     cycleNumber: serial("cycle_number").notNull(),
     name: varchar("name", { length: 160 }).notNull(),
     status: bakeCycleStatusEnum("status").notNull().default("OPEN"),
+    consumptionPolicy: consumptionPolicyEnum("consumption_policy").notNull().default("CONSUMPTION_V1"),
     orderCutoffAt: timestamp("order_cutoff_at", {
       withTimezone: true,
       mode: "date",

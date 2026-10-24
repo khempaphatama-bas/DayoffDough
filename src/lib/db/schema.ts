@@ -3,6 +3,7 @@ export {
   bakeCycles,
   bakeCycleStatus,
   bakeCycleStatusEnum,
+  consumptionPolicyEnum,
 } from "@/modules/cycles/db/schema";
 export {
   deliveryMethods,
@@ -13,6 +14,7 @@ export {
 export {
   inventoryCategoryEnum,
   inventoryItems,
+  inventoryLedgerStates,
   inventoryMovements,
   inventoryMovementTypeEnum,
   inventoryPrices,
@@ -70,3 +72,13 @@ export {
   productionTemplates,
   productionTemplateScopeEnum,
 } from "@/modules/production/db/schema";
+export {
+  consumptionBasisEnum,
+  consumptionOperationKindEnum,
+  consumptionOperations,
+  consumptionRevisionItems,
+  consumptionRevisions,
+  cycleConsumptionContexts,
+  cycleConsumptionItems,
+  stockEffectModeEnum,
+} from "@/modules/consumption/db/schema";
