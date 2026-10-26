@@ -1,4 +1,5 @@
 import { eq } from "drizzle-orm";
+import { confirmConsumptionStock } from "@tests/fixtures/consumption";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { OTHER_OWNER_ID, OWNER_ID } from "@tests/fixtures/owner";
 import { seedLockedPlanningScenario } from "@tests/fixtures/planning";
@@ -101,6 +102,7 @@ describe("payment operations commands", () => {
     const commands = createOrderOperationsCommandService(context.db, CLOCK);
     const cycles = createCycleOperationsCommandService(context.db, CLOCK);
     const payment = createPaymentOperationsCommandService(context.db, CLOCK);
+    await confirmConsumptionStock(context.db, OWNER_ID, s.cycleId);
     await cycles.startCycle(OWNER_ID, { cycleId: s.cycleId });
     await commands.startOrders(OWNER_ID, { cycleId: s.cycleId, orderIds: s.orderIds.slice(0, 2) });
     for (const orderId of s.orderIds.slice(0, 2)) {

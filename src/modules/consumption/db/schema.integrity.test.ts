@@ -2,6 +2,12 @@ import { sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createTestDatabase } from "@tests/helpers/test-db";
 import { inventoryItems, inventoryMovements } from "@/modules/inventory/db/schema";
+import { confirmConsumptionStock, seedConsumptionScenario } from "@tests/fixtures/consumption";
+import { OWNER_ID } from "@tests/fixtures/owner";
+import { seedLockedPlanningScenario } from "@tests/fixtures/planning";
+import { createCycleOperationsCommandService } from "@/modules/operations/application/cycle-commands";
+import { loadConsumptionSource } from "../application/load-consumption-source";
+import { cycleConsumptionContexts, cycleConsumptionItems } from "./schema";
 
 const owner = "81000000-0000-4000-8000-000000000001";
 describe("ledger persistence integrity", () => {
@@ -17,6 +23,71 @@ describe("ledger persistence integrity", () => {
     movement = count!.id;
   });
   afterEach(async () => fixture?.close());
+
+  it("rejects direct V1 production INSERT and UPDATE without a registered context", async () => {
+    const s = await seedConsumptionScenario(fixture.db, { start: false });
+    await expect(fixture.db.execute(sql`UPDATE bake_cycles SET status = 'IN_PRODUCTION' WHERE id = ${s.cycleId}`)).rejects.toThrow();
+    await expect(fixture.db.execute(sql`INSERT INTO bake_cycles (owner_id, name, status, target_production_date, primary_delivery_date)
+      VALUES (${OWNER_ID}, 'Bypass', 'IN_PRODUCTION', '2026-10-24', '2026-10-25')`)).rejects.toThrow();
+    await expect(fixture.db.execute(sql`INSERT INTO bake_cycles (owner_id, name, status, target_production_date, primary_delivery_date)
+      VALUES (${OWNER_ID}, 'Bypass', 'COMPLETED', '2026-10-24', '2026-10-25')`)).rejects.toThrow();
+  });
+
+  it("rejects orphan and incomplete source registration at commit", async () => {
+    const s = await seedConsumptionScenario(fixture.db, { start: false });
+    await expect(fixture.db.execute(sql`INSERT INTO cycle_consumption_contexts (owner_id, bake_cycle_id, planning_snapshot_id, task_generation_id)
+      VALUES (${OWNER_ID}, ${s.cycleId}, ${s.planningSnapshotId}, ${s.taskGenerationId})`)).rejects.toThrow();
+    await expect(fixture.db.transaction(async (tx) => {
+      await tx.execute(sql`INSERT INTO cycle_consumption_contexts (owner_id, bake_cycle_id, planning_snapshot_id, task_generation_id)
+        VALUES (${OWNER_ID}, ${s.cycleId}, ${s.planningSnapshotId}, ${s.taskGenerationId})`);
+      await tx.execute(sql`UPDATE bake_cycles SET status = 'IN_PRODUCTION' WHERE id = ${s.cycleId}`);
+    })).rejects.toThrow();
+  });
+
+  it("blocks COUNT after a pending context is inserted even before its source children are inserted", async () => {
+    const s = await seedConsumptionScenario(fixture.db, { start: false });
+    const source = await loadConsumptionSource(fixture.db, OWNER_ID, s.planningSnapshotId);
+    await expect(fixture.db.transaction(async (tx) => {
+      const [context] = await tx.insert(cycleConsumptionContexts).values({ ownerId: OWNER_ID, bakeCycleId: s.cycleId, planningSnapshotId: s.planningSnapshotId, taskGenerationId: s.taskGenerationId }).returning();
+      await tx.insert(inventoryMovements).values({ ownerId: OWNER_ID, inventoryItemId: s.itemIds[0]!, type: "COUNT", quantityDeltaInBaseUnit: "0", countedQuantityInBaseUnit: "2200", occurredAt: new Date() });
+      await tx.insert(cycleConsumptionItems).values(source.map((item) => ({ ...item, ownerId: OWNER_ID, contextId: context!.id, planningSnapshotId: s.planningSnapshotId })));
+      await tx.execute(sql`UPDATE bake_cycles SET status = 'IN_PRODUCTION' WHERE id = ${s.cycleId}`);
+    })).rejects.toMatchObject({ cause: { message: "PENDING_USE: record pending consumption before counting stock" } });
+  });
+
+  it.each(["quantity", "label", "missing", "extra"])("rejects %s divergence from the exact immutable registered source", async (change) => {
+    const s = await seedConsumptionScenario(fixture.db, { start: false });
+    const source = await loadConsumptionSource(fixture.db, OWNER_ID, s.planningSnapshotId);
+    const [extra] = await fixture.db.insert(inventoryItems).values({ ownerId: OWNER_ID, name: "Extra", category: "INGREDIENT", baseUnit: "g", purchaseUnitLabel: "bag", baseQuantityPerPurchasePack: "1000" }).returning();
+    await expect(fixture.db.transaction(async (tx) => {
+      const [context] = await tx.insert(cycleConsumptionContexts).values({ ownerId: OWNER_ID, bakeCycleId: s.cycleId, planningSnapshotId: s.planningSnapshotId, taskGenerationId: s.taskGenerationId }).returning();
+      const items = source.map((item, index) => ({ ...item, ownerId: OWNER_ID, contextId: context!.id, planningSnapshotId: s.planningSnapshotId,
+        ...(change === "quantity" && index === 0 ? { plannedQuantity: "1" } : {}),
+        ...(change === "label" && index === 0 ? { inventoryItemName: "Not the snapshot label" } : {}),
+      }));
+      await tx.insert(cycleConsumptionItems).values(change === "missing" ? items.slice(1) : items);
+      if (change === "extra") await tx.insert(cycleConsumptionItems).values({ ...items[0]!, inventoryItemId: extra!.id, priceSnapshotId: null });
+      await tx.execute(sql`UPDATE bake_cycles SET status = 'IN_PRODUCTION' WHERE id = ${s.cycleId}`);
+    })).rejects.toThrow();
+    expect(await rows(sql`SELECT id FROM cycle_consumption_contexts WHERE owner_id = ${OWNER_ID}`)).toEqual([]);
+  });
+
+  it("rejects an owned generation belonging to a different Cycle and snapshot", async () => {
+    const s = await seedConsumptionScenario(fixture.db, { start: false });
+    const otherCycle = "84000000-0000-4000-8000-000000000011";
+    const otherSnapshot = "84000000-0000-4000-8000-000000000012";
+    const otherGeneration = "84000000-0000-4000-8000-000000000013";
+    await fixture.db.execute(sql`INSERT INTO bake_cycles (id, owner_id, name, status, target_production_date, primary_delivery_date)
+      VALUES (${otherCycle}, ${OWNER_ID}, 'Another source', 'OPEN', '2026-08-29', '2026-08-30')`);
+    await fixture.db.execute(sql`INSERT INTO cycle_planning_snapshots
+      (id, owner_id, bake_cycle_id, generation, status, lock_request_id, input_fingerprint, cycle_number, cycle_name, target_production_date, primary_delivery_date, labor_rate_satang_per_hour, default_waste_allowance_percent, timezone, currency, cost_complete, locked_at)
+      SELECT ${otherSnapshot}, owner_id, ${otherCycle}, generation, status, gen_random_uuid(), input_fingerprint, cycle_number, cycle_name, target_production_date, primary_delivery_date, labor_rate_satang_per_hour, default_waste_allowance_percent, timezone, currency, cost_complete, locked_at
+      FROM cycle_planning_snapshots WHERE id = ${s.planningSnapshotId}`);
+    await fixture.db.execute(sql`INSERT INTO cycle_task_generations (id, owner_id, bake_cycle_id, planning_snapshot_id, generation, primary_delivery_date, timezone)
+      SELECT ${otherGeneration}, owner_id, ${otherCycle}, ${otherSnapshot}, generation, primary_delivery_date, timezone FROM cycle_task_generations WHERE id = ${s.taskGenerationId}`);
+    await expect(fixture.db.insert(cycleConsumptionContexts).values({ ownerId: OWNER_ID, bakeCycleId: s.cycleId, planningSnapshotId: s.planningSnapshotId, taskGenerationId: otherGeneration }))
+      .rejects.toMatchObject({ cause: { message: "consumption requires the exact current generation" } });
+  });
 
   it("rejects UPDATE/DELETE of movements and direct metadata reset/delete/insert atomically", async () => {
     const before = await rows(sql`SELECT * FROM inventory_ledger_states`);
@@ -65,26 +136,17 @@ describe("ledger persistence integrity", () => {
   });
 
   it("protects immutable context/source/revision rows and only advances to an immediate owned successor", async () => {
-    const cycle = "84000000-0000-4000-8000-000000000001";
-    const snapshot = "84000000-0000-4000-8000-000000000002";
-    const generation = "84000000-0000-4000-8000-000000000003";
-    const context = "84000000-0000-4000-8000-000000000004";
+    const source = await seedLockedPlanningScenario(fixture.db, { ownerId: owner, includeIngredientPrice: false });
+    await confirmConsumptionStock(fixture.db, owner, source.cycleId, source.planningSnapshotId);
+    await createCycleOperationsCommandService(fixture.db).startCycle(owner, { cycleId: source.cycleId });
+    const [registered] = await rows(sql`SELECT id FROM cycle_consumption_contexts WHERE bake_cycle_id = ${source.cycleId}`) as { id: string }[];
+    const context = registered!.id;
+    const item = source.ingredientItemId;
+    const [initial] = await rows(sql`SELECT count_movement_id FROM cycle_inventory_counts WHERE planning_snapshot_id = ${source.planningSnapshotId} AND inventory_item_id = ${item}`) as { count_movement_id: string }[];
+    const movement = initial!.count_movement_id;
+    expect(await rows(sql`SELECT unit_cost_satang FROM cycle_inventory_price_snapshots WHERE planning_snapshot_id = ${source.planningSnapshotId} AND inventory_item_id = ${item}`)).toEqual([{ unit_cost_satang: null }]);
     const operation = "84000000-0000-4000-8000-000000000005";
     const revision = "84000000-0000-4000-8000-000000000006";
-    await fixture.db.execute(sql`INSERT INTO bake_cycles (id, owner_id, name, target_production_date, primary_delivery_date)
-      VALUES (${cycle}, ${owner}, 'Source', '2026-10-24', '2026-10-25')`);
-    await fixture.db.execute(sql`INSERT INTO cycle_planning_snapshots
-      (id, owner_id, bake_cycle_id, generation, status, lock_request_id, input_fingerprint, cycle_number, cycle_name,
-       target_production_date, primary_delivery_date, labor_rate_satang_per_hour, default_waste_allowance_percent, timezone, currency, cost_complete, locked_at)
-      VALUES (${snapshot}, ${owner}, ${cycle}, 1, 'ACTIVE', gen_random_uuid(), ${"a".repeat(64)}, 1, 'Source',
-        '2026-10-24', '2026-10-25', 0, 0, 'Asia/Bangkok', 'THB', true, now())`);
-    await fixture.db.execute(sql`INSERT INTO cycle_task_generations (id, owner_id, bake_cycle_id, planning_snapshot_id, generation, primary_delivery_date, timezone)
-      VALUES (${generation}, ${owner}, ${cycle}, ${snapshot}, 1, '2026-10-25', 'Asia/Bangkok')`);
-    await fixture.db.execute(sql`INSERT INTO cycle_consumption_contexts (id, owner_id, bake_cycle_id, planning_snapshot_id, task_generation_id)
-      VALUES (${context}, ${owner}, ${cycle}, ${snapshot}, ${generation})`);
-    // No price snapshot is required for an unpriced requirement.
-    await fixture.db.execute(sql`INSERT INTO cycle_consumption_items (owner_id, context_id, planning_snapshot_id, inventory_item_id, inventory_item_name, inventory_category, base_unit, planned_quantity)
-      VALUES (${owner}, ${context}, ${snapshot}, ${item}, 'Source flour', 'INGREDIENT', 'g', 2)`);
     await fixture.db.execute(sql`INSERT INTO consumption_operations (id, owner_id, request_id, kind, manifest, revision_ids, count_movement_ids)
       VALUES (${operation}, ${owner}, gen_random_uuid(), 'CONFIRM', '{}', ARRAY[${revision}]::uuid[], '{}')`);
     await fixture.db.execute(sql`INSERT INTO consumption_revisions (id, owner_id, context_id, operation_id, revision_number)

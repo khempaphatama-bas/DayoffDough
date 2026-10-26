@@ -2,6 +2,7 @@ import Decimal from "decimal.js";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { lockOwnedInventoryItems } from "@/lib/db/row-locks";
+import { assertNoPendingConsumption, rethrowConsumptionLockError } from "@/modules/consumption/application/count-barrier";
 import type { DatabaseClient } from "@/lib/db/types";
 import { calculateUnitCostSatang } from "@/modules/inventory/domain/cost";
 import {
@@ -264,6 +265,7 @@ export function createInventoryService(db: DatabaseClient) {
       return db.transaction(async (tx) => {
         const [item] = await lockOwnedInventoryItems(tx, ownerId, [itemId]);
         if (!item) throw new Error("Inventory item not found");
+        await assertNoPendingConsumption(tx, ownerId, [itemId]);
         const [balanceRow] = await tx
           .select({
             value: sql<string>`coalesce(sum(${inventoryMovements.quantityDeltaInBaseUnit}), 0)::text`,
@@ -290,7 +292,7 @@ export function createInventoryService(db: DatabaseClient) {
           .returning();
         if (!movement) throw new Error("Failed to record physical count");
         return movement;
-      });
+      }).catch(rethrowConsumptionLockError);
     },
 
     async listItems(ownerId: string): Promise<ReadonlyArray<InventoryItemDetail>> {

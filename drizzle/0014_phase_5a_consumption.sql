@@ -288,3 +288,136 @@ CREATE TRIGGER consumption_revisions_no_truncate BEFORE TRUNCATE ON consumption_
 FOR EACH STATEMENT EXECUTE FUNCTION reject_consumption_history_mutation();--> statement-breakpoint
 CREATE TRIGGER consumption_revision_items_no_truncate BEFORE TRUNCATE ON consumption_revision_items
 FOR EACH STATEMENT EXECUTE FUNCTION reject_consumption_history_mutation();
+--> statement-breakpoint
+
+-- Snapshot planned_requirement already includes its buffer. Sum it exactly once;
+-- no live recipe, purchase profile, price value or editable Task batch is read.
+CREATE FUNCTION consumption_snapshot_requirements(p_owner uuid, p_snapshot uuid)
+RETURNS TABLE (inventory_item_id uuid, inventory_item_name varchar, inventory_category inventory_category,
+  base_unit varchar, price_snapshot_id uuid, planned_quantity numeric) AS $$
+  SELECT r.inventory_item_id, r.inventory_item_name, p.inventory_category, r.base_unit,
+    r.price_snapshot_id, sum(r.planned_requirement)
+  FROM (
+    SELECT owner_id, planning_snapshot_id, inventory_item_id, inventory_item_name, base_unit, price_snapshot_id, planned_requirement
+      FROM cycle_material_requirements WHERE owner_id = p_owner AND planning_snapshot_id = p_snapshot
+    UNION ALL
+    SELECT owner_id, planning_snapshot_id, inventory_item_id, inventory_item_name, base_unit, price_snapshot_id, planned_requirement
+      FROM cycle_packaging_requirements WHERE owner_id = p_owner AND planning_snapshot_id = p_snapshot
+  ) r LEFT JOIN cycle_inventory_price_snapshots p ON p.owner_id = r.owner_id
+    AND p.planning_snapshot_id = r.planning_snapshot_id AND p.inventory_item_id = r.inventory_item_id AND p.id = r.price_snapshot_id
+  GROUP BY r.inventory_item_id, r.inventory_item_name, p.inventory_category, r.base_unit, r.price_snapshot_id;
+$$ LANGUAGE sql STABLE;--> statement-breakpoint
+
+CREATE FUNCTION lock_consumption_registration_source(p_owner uuid, p_cycle uuid, p_snapshot uuid, p_generation uuid)
+RETURNS void AS $$
+DECLARE
+  c bake_cycles%ROWTYPE;
+  s cycle_planning_snapshots%ROWTYPE;
+  g cycle_task_generations%ROWTYPE;
+  item_id uuid;
+BEGIN
+  -- A direct SQL child write may already hold a tuple. Never wait upstream.
+  SELECT * INTO c FROM bake_cycles WHERE owner_id = p_owner AND id = p_cycle FOR UPDATE NOWAIT;
+  SELECT * INTO s FROM cycle_planning_snapshots WHERE owner_id = p_owner AND bake_cycle_id = p_cycle AND id = p_snapshot FOR UPDATE NOWAIT;
+  SELECT * INTO g FROM cycle_task_generations WHERE owner_id = p_owner AND id = p_generation FOR UPDATE NOWAIT;
+  IF c.id IS NULL OR c.consumption_policy <> 'CONSUMPTION_V1'
+    OR c.active_planning_snapshot_id IS DISTINCT FROM s.id OR s.id IS NULL OR s.status <> 'ACTIVE'
+    OR g.id IS NULL OR g.bake_cycle_id <> c.id OR g.planning_snapshot_id <> s.id OR g.generation <> s.generation THEN
+    RAISE EXCEPTION 'consumption requires the exact current generation';
+  END IF;
+  FOR item_id IN SELECT DISTINCT r.inventory_item_id FROM consumption_snapshot_requirements(p_owner, p_snapshot) r ORDER BY r.inventory_item_id LOOP
+    PERFORM 1 FROM inventory_items WHERE owner_id = p_owner AND id = item_id FOR UPDATE NOWAIT;
+    IF NOT FOUND THEN RAISE EXCEPTION 'consumption requires an owned source item'; END IF;
+  END LOOP;
+END;
+$$ LANGUAGE plpgsql;--> statement-breakpoint
+
+CREATE FUNCTION enforce_consumption_registration_start() RETURNS trigger AS $$
+DECLARE c bake_cycles%ROWTYPE;
+BEGIN
+  PERFORM lock_consumption_registration_source(NEW.owner_id, NEW.bake_cycle_id, NEW.planning_snapshot_id, NEW.task_generation_id);
+  SELECT * INTO c FROM bake_cycles WHERE owner_id = NEW.owner_id AND id = NEW.bake_cycle_id;
+  IF c.status <> 'LOCKED' THEN RAISE EXCEPTION 'consumption registration requires a locked cycle'; END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;--> statement-breakpoint
+CREATE TRIGGER consumption_registration_start BEFORE INSERT ON cycle_consumption_contexts
+FOR EACH ROW EXECUTE FUNCTION enforce_consumption_registration_start();--> statement-breakpoint
+
+CREATE FUNCTION validate_consumption_registration(p_owner uuid, p_context uuid) RETURNS void AS $$
+DECLARE c cycle_consumption_contexts%ROWTYPE;
+BEGIN
+  SELECT * INTO c FROM cycle_consumption_contexts WHERE owner_id = p_owner AND id = p_context;
+  IF NOT FOUND THEN RAISE EXCEPTION 'consumption context is missing'; END IF;
+  PERFORM lock_consumption_registration_source(c.owner_id, c.bake_cycle_id, c.planning_snapshot_id, c.task_generation_id);
+  IF EXISTS (SELECT 1 FROM consumption_snapshot_requirements(c.owner_id, c.planning_snapshot_id) r
+      GROUP BY r.inventory_item_id HAVING count(*) <> 1)
+    OR EXISTS (
+      WITH required AS (SELECT * FROM consumption_snapshot_requirements(c.owner_id, c.planning_snapshot_id)),
+      copied AS (SELECT * FROM cycle_consumption_items WHERE owner_id = c.owner_id AND context_id = c.id)
+      SELECT 1 FROM required r FULL JOIN copied i ON i.inventory_item_id = r.inventory_item_id
+      WHERE r.inventory_item_id IS NULL OR i.inventory_item_id IS NULL OR r.inventory_category IS NULL
+        OR i.inventory_item_name IS DISTINCT FROM r.inventory_item_name OR i.inventory_category IS DISTINCT FROM r.inventory_category
+        OR i.base_unit IS DISTINCT FROM r.base_unit OR i.price_snapshot_id IS DISTINCT FROM r.price_snapshot_id
+        OR i.planned_quantity IS DISTINCT FROM r.planned_quantity
+    ) THEN RAISE EXCEPTION 'consumption registration requires the exact snapshot item set'; END IF;
+  IF EXISTS (
+    WITH required AS (SELECT * FROM consumption_snapshot_requirements(c.owner_id, c.planning_snapshot_id)),
+    checked AS (SELECT * FROM cycle_inventory_counts WHERE owner_id = c.owner_id AND bake_cycle_id = c.bake_cycle_id AND planning_snapshot_id = c.planning_snapshot_id)
+    SELECT 1 FROM required r FULL JOIN checked n ON n.inventory_item_id = r.inventory_item_id
+    WHERE r.inventory_item_id IS NULL OR n.inventory_item_id IS NULL
+      OR n.required_quantity IS DISTINCT FROM r.planned_quantity OR n.price_snapshot_id IS DISTINCT FROM r.price_snapshot_id
+  ) THEN RAISE EXCEPTION 'consumption requires the exact initial stock check'; END IF;
+END;
+$$ LANGUAGE plpgsql;--> statement-breakpoint
+
+CREATE FUNCTION check_consumption_registration_complete() RETURNS trigger AS $$
+DECLARE context_id uuid; c cycle_consumption_contexts%ROWTYPE;
+BEGIN
+  IF TG_TABLE_NAME = 'cycle_consumption_contexts' THEN context_id := NEW.id;
+  ELSE context_id := NEW.context_id; END IF;
+  SELECT * INTO c FROM cycle_consumption_contexts WHERE owner_id = NEW.owner_id AND id = context_id;
+  PERFORM validate_consumption_registration(c.owner_id, c.id);
+  IF NOT EXISTS (SELECT 1 FROM bake_cycles WHERE owner_id = c.owner_id AND id = c.bake_cycle_id AND status IN ('IN_PRODUCTION', 'COMPLETED')) THEN
+    RAISE EXCEPTION 'consumption registration must start production atomically';
+  END IF;
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;--> statement-breakpoint
+CREATE CONSTRAINT TRIGGER consumption_context_complete AFTER INSERT ON cycle_consumption_contexts
+DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION check_consumption_registration_complete();--> statement-breakpoint
+CREATE CONSTRAINT TRIGGER consumption_source_complete AFTER INSERT ON cycle_consumption_items
+DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION check_consumption_registration_complete();--> statement-breakpoint
+
+CREATE FUNCTION check_cycle_consumption_context() RETURNS trigger AS $$
+DECLARE context_id uuid;
+BEGIN
+  IF NEW.consumption_policy = 'CONSUMPTION_V1' AND NEW.status IN ('IN_PRODUCTION', 'COMPLETED') THEN
+    SELECT id INTO context_id FROM cycle_consumption_contexts WHERE owner_id = NEW.owner_id AND bake_cycle_id = NEW.id AND planning_snapshot_id = NEW.active_planning_snapshot_id;
+    IF context_id IS NULL THEN RAISE EXCEPTION 'V1 production requires registered consumption'; END IF;
+    PERFORM validate_consumption_registration(NEW.owner_id, context_id);
+  END IF;
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;--> statement-breakpoint
+CREATE CONSTRAINT TRIGGER cycle_consumption_context_complete AFTER INSERT OR UPDATE ON bake_cycles
+DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION check_cycle_consumption_context();--> statement-breakpoint
+
+-- Ordinary COUNT has no bypass. Settlement authority is implemented separately
+-- when complete operation/revision/item links become available (Task 7).
+CREATE OR REPLACE FUNCTION lock_inventory_movement_item() RETURNS trigger AS $$
+BEGIN
+  PERFORM 1 FROM inventory_items WHERE owner_id = NEW.owner_id AND id = NEW.inventory_item_id FOR UPDATE NOWAIT;
+  IF NOT FOUND THEN RAISE EXCEPTION 'inventory movement requires an owned item'; END IF;
+  IF NEW.type = 'COUNT' AND EXISTS (
+    SELECT 1 FROM cycle_consumption_contexts c
+    WHERE c.owner_id = NEW.owner_id AND c.current_revision_id IS NULL AND (
+      EXISTS (SELECT 1 FROM cycle_consumption_items i WHERE i.owner_id = c.owner_id AND i.context_id = c.id AND i.inventory_item_id = NEW.inventory_item_id)
+      -- Also cover the creation transaction before its exact source children
+      -- have been inserted. Persisted membership remains the audit authority.
+      OR EXISTS (SELECT 1 FROM consumption_snapshot_requirements(c.owner_id, c.planning_snapshot_id) r WHERE r.inventory_item_id = NEW.inventory_item_id)
+    )
+  ) THEN RAISE EXCEPTION 'PENDING_USE: record pending consumption before counting stock'; END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;

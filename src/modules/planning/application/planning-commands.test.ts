@@ -1,4 +1,5 @@
 import { and, count, eq, sql } from "drizzle-orm";
+import { confirmConsumptionStock } from "@tests/fixtures/consumption";
 import type { Logger } from "drizzle-orm/logger";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OTHER_OWNER_ID, OWNER_ID } from "@tests/fixtures/owner";
@@ -571,6 +572,7 @@ describe("planning command service", () => {
       lockRequestId: "30303030-3030-4030-8030-303030303030",
       overrides: [],
     });
+    await confirmConsumptionStock(context.db, OWNER_ID, scenario.cycleId);
     await createCycleOperationsCommandService(context.db).startCycle(
       OWNER_ID, { cycleId: scenario.cycleId },
     );
@@ -611,6 +613,7 @@ describe("planning command service", () => {
         lockedId = completedScenario.planningSnapshotId;
         const cycles = createCycleOperationsCommandService(context.db);
         const operations = createOrderOperationsCommandService(context.db);
+        await confirmConsumptionStock(context.db, OWNER_ID, scenario.cycleId);
         await cycles.startCycle(OWNER_ID, { cycleId: scenario.cycleId });
         const orderIds = scenario.orderIds.slice(0, 2);
         await operations.startOrders(OWNER_ID, { cycleId: scenario.cycleId, orderIds });

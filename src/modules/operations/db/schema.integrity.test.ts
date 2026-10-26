@@ -1,4 +1,5 @@
 import { sql } from "drizzle-orm";
+import { confirmConsumptionStock } from "@tests/fixtures/consumption";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createTestDatabase } from "@tests/helpers/test-db";
 import type { DatabaseClient } from "@/lib/db/types";
@@ -41,7 +42,7 @@ async function expectTriggerRejection(operation: () => Promise<unknown>, marker:
   expect((rejection as Error & { cause?: Error }).cause?.message).toContain(marker);
 }
 
-async function seedPackingFixture(
+async function seedLegacyPackingRows(
   db: DatabaseClient,
   options: Readonly<{
     cycleStatus?: "LOCKED" | "IN_PRODUCTION";
@@ -111,6 +112,11 @@ async function insertProgress(
 describe("Phase 4B packing integrity", () => {
   let context: Awaited<ReturnType<typeof createTestDatabase>>;
 
+  async function seedPackingFixture(_db: DatabaseClient, options: Parameters<typeof seedLegacyPackingRows>[1] = {}) {
+    await context.close();
+    context = await createTestDatabase({ beforeConsumptionCutover: (db) => seedLegacyPackingRows(db, options) });
+  }
+
   beforeEach(async () => {
     context = await createTestDatabase();
     const tableResult = await context.db.execute(sql`
@@ -171,6 +177,7 @@ describe("Phase 4B packing integrity", () => {
 
   it("rejects direct completion while current work is unfinished", async () => {
     const scenario = await seedLockedPlanningScenario(context.db);
+    await confirmConsumptionStock(context.db, PLANNING_OWNER_ID, scenario.cycleId);
     await createCycleOperationsCommandService(context.db).startCycle(
       PLANNING_OWNER_ID, { cycleId: scenario.cycleId },
     );
@@ -182,6 +189,7 @@ describe("Phase 4B packing integrity", () => {
 
   it("rejects direct unlock after an Order starts production", async () => {
     const scenario = await seedLockedPlanningScenario(context.db);
+    await confirmConsumptionStock(context.db, PLANNING_OWNER_ID, scenario.cycleId);
     await createCycleOperationsCommandService(context.db).startCycle(
       PLANNING_OWNER_ID, { cycleId: scenario.cycleId },
     );

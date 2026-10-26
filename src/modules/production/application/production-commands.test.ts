@@ -1,4 +1,5 @@
 import { eq } from "drizzle-orm";
+import { confirmConsumptionStock } from "@tests/fixtures/consumption";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Logger } from "drizzle-orm/logger";
 import { OTHER_OWNER_ID, OWNER_ID } from "@tests/fixtures/owner";
@@ -263,6 +264,7 @@ describe("production task command service", () => {
     const cycles = createCycleOperationsCommandService(context.db);
     const operations = createOrderOperationsCommandService(context.db);
     const orderIds = value.orderIds.slice(0, 2);
+    await confirmConsumptionStock(context.db, OWNER_ID, value.cycleId);
     await cycles.startCycle(OWNER_ID, { cycleId: value.cycleId });
     await operations.startOrders(OWNER_ID, { cycleId: value.cycleId, orderIds });
     for (const orderId of orderIds) {

@@ -3,6 +3,8 @@ import { z } from "zod";
 import { lockOwnedBakeCycle, lockOwnedCycleTask, lockOwnedOrderItems, lockOwnedOrders } from "@/lib/db/row-locks";
 import type { DatabaseClient } from "@/lib/db/types";
 import { bakeCycles } from "@/modules/cycles/db/schema";
+import { registerPendingConsumption } from "@/modules/consumption/application/consumption-lifecycle";
+import { rethrowConsumptionLockError } from "@/modules/consumption/application/count-barrier";
 import { orderItems, orders } from "@/modules/orders/db/schema";
 import { calculateOrderTotals } from "@/modules/orders/domain/totals";
 import { buildOperationsCompletion } from "@/modules/operations/domain/rules";
@@ -115,9 +117,12 @@ export function createCycleOperationsCommandService(db: DatabaseClient, clock: O
       const parsed = cycleOperationInputSchema.safeParse(input);
       if (!parsed.success) notFound();
       return db.transaction(async (tx) => {
-        const { cycle, snapshot } = await lockCurrentGeneration(tx, verifiedOwner, parsed.data.cycleId);
+        const { cycle, snapshot, generation } = await lockCurrentGeneration(tx, verifiedOwner, parsed.data.cycleId);
         if (cycle.status === "IN_PRODUCTION") return cycle;
         if (cycle.status !== "LOCKED") invalidCycle();
+        if (cycle.consumptionPolicy === "CONSUMPTION_V1") await registerPendingConsumption(tx, verifiedOwner, {
+          cycleId: cycle.id, planningSnapshotId: snapshot.id, taskGenerationId: generation.id,
+        });
         const [updated] = await tx.update(bakeCycles).set({ status: "IN_PRODUCTION", updatedAt: clock.now() })
           .where(and(
             eq(bakeCycles.ownerId, verifiedOwner), eq(bakeCycles.id, cycle.id),
@@ -125,7 +130,7 @@ export function createCycleOperationsCommandService(db: DatabaseClient, clock: O
           )).returning();
         if (!updated) stale();
         return updated;
-      });
+      }).catch(rethrowConsumptionLockError);
     },
     async completeCycle(ownerId: string, input: CompleteInput) {
       const verifiedOwner = owner(ownerId);

@@ -1,4 +1,5 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
+import { confirmConsumptionStock } from "@tests/fixtures/consumption";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { OTHER_OWNER_ID, OWNER_ID } from "@tests/fixtures/owner";
 import { seedLockedPlanningScenario, seedPlanningScenario } from "@tests/fixtures/planning";
@@ -23,8 +24,9 @@ describe("cycle operations commands", () => {
   beforeEach(async () => { context = await createTestDatabase(); });
   afterEach(async () => context.close());
 
-  async function scenario() {
-    const value = await seedLockedPlanningScenario(context.db);
+  async function scenario(reusePreCutoverCycle = false) {
+    const value = await seedLockedPlanningScenario(context.db, { reusePreCutoverCycle });
+    await confirmConsumptionStock(context.db, OWNER_ID, value.cycleId, value.planningSnapshotId);
     const [generation] = await context.db.select().from(cycleTaskGenerations).where(and(
       eq(cycleTaskGenerations.ownerId, OWNER_ID),
       eq(cycleTaskGenerations.planningSnapshotId, value.planningSnapshotId),
@@ -142,7 +144,12 @@ describe("cycle operations commands", () => {
   });
 
   it("rejects wrong and superseded task generations, including after unlock and re-lock", async () => {
-    const s = await scenario();
+    await context.close();
+    context = await createTestDatabase({ beforeConsumptionCutover: async (db) => {
+      await db.execute(sql`INSERT INTO bake_cycles (id, owner_id, name, status, target_production_date, primary_delivery_date)
+        VALUES ('10000000-0000-4000-8000-000000000009', ${OWNER_ID}, 'Legacy replan', 'OPEN', '2026-08-29', '2026-08-30')`);
+    } });
+    const s = await scenario(true);
     const cycles = createCycleOperationsCommandService(context.db, CLOCK);
     await cycles.startCycle(OWNER_ID, { cycleId: s.cycleId });
     await expect(cycles.completeCycle(OWNER_ID, { ...completionInput(s), expectedTaskGenerationId: WRONG_GENERATION_ID }))

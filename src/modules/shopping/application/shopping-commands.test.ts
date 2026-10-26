@@ -1,4 +1,9 @@
 import { and, eq, sql } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
+import { createPlanningQueryService } from "@/modules/planning/application/planning-queries";
+import { createPlanningCommandService } from "@/modules/planning/application/planning-commands";
+import { loadShoppingSource } from "./load-shopping-source";
+import { orders } from "@/modules/orders/db/schema";
 import type { Logger } from "drizzle-orm/logger";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OTHER_OWNER_ID, OWNER_ID } from "@tests/fixtures/owner";
@@ -159,6 +164,46 @@ describe("shopping command service", () => {
   }, 30_000);
 
   afterEach(async () => context.close(), 30_000);
+
+  it("replays an exact prior stock check without writing while its use is pending", async () => {
+    const fixture = await seedLockedPlanningScenario(context.db);
+    const service = createShoppingCommandService(context.db, CLOCK);
+    await service.confirmStock(OWNER_ID, confirmInput(fixture));
+    await createCycleOperationsCommandService(context.db).startCycle(OWNER_ID, { cycleId: fixture.cycleId });
+    const before = await persistedRows(context.db);
+    await expect(service.confirmStock(OWNER_ID, confirmInput(fixture))).resolves.toMatchObject({ kind: "SHOPPING" });
+    expect(await persistedRows(context.db)).toEqual(before);
+  });
+
+  it("rejects an entire new count batch when a source item belongs to pending use", async () => {
+    const fixture = await seedLockedPlanningScenario(context.db);
+    const service = createShoppingCommandService(context.db, CLOCK);
+    await service.confirmStock(OWNER_ID, confirmInput(fixture));
+    await createCycleOperationsCommandService(context.db).startCycle(OWNER_ID, { cycleId: fixture.cycleId });
+    const [nextCycle] = await context.db.insert(bakeCycles).values({ ownerId: OWNER_ID, name: "Next cycle", status: "OPEN", targetProductionDate: "2026-08-29", primaryDeliveryDate: "2026-08-30" }).returning();
+    const [order] = await context.db.select().from(orders).where(eq(orders.id, fixture.orderIds[0]!));
+    const [item] = await context.db.select().from(orderItems).where(eq(orderItems.orderId, order!.id));
+    const nextOrderId = randomUUID();
+    await context.db.insert(orders).values({ ...order!, id: nextOrderId, bakeCycleId: nextCycle!.id });
+    await context.db.insert(orderItems).values({ ...item!, id: randomUUID(), orderId: nextOrderId });
+    const preview = await createPlanningQueryService(context.db, CLOCK).preview(OWNER_ID, nextCycle!.id);
+    const snapshot = await createPlanningCommandService(context.db, CLOCK).lock(OWNER_ID, { cycleId: nextCycle!.id, lockRequestId: randomUUID(), inputFingerprint: preview.inputFingerprint, overrides: [] });
+    const source = await loadShoppingSource(context.db, OWNER_ID, snapshot.id);
+    const before = await persistedRows(context.db);
+    await expect(service.confirmStock(OWNER_ID, { cycleId: nextCycle!.id, planningSnapshotId: snapshot.id, confirmationRequestId: randomUUID(), countedAt: COUNTED_AT,
+      counts: source.map((row) => ({ inventoryItemId: row.inventoryItemId, countedQuantity: "25" })),
+    })).rejects.toMatchObject({ kind: "PENDING_USE", details: { blockerCycleIds: [fixture.cycleId] } });
+    expect(await persistedRows(context.db)).toEqual(before);
+  });
+
+  it("maps guard lock contention to safe STALE_DATA and rolls back the whole count batch", async () => {
+    const fixture = await seedLockedPlanningScenario(context.db);
+    await context.db.execute(sql`CREATE FUNCTION test_count_contention() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'private SQL detail' USING ERRCODE = '55P03'; END; $$ LANGUAGE plpgsql`);
+    await context.db.execute(sql`CREATE TRIGGER test_count_contention BEFORE INSERT ON inventory_movements FOR EACH ROW EXECUTE FUNCTION test_count_contention()`);
+    await expect(createShoppingCommandService(context.db).confirmStock(OWNER_ID, confirmInput(fixture)))
+      .rejects.toMatchObject({ kind: "STALE_DATA", message: "Stock changed; refresh and try again" });
+    expect(await persistedRows(context.db)).toEqual({ countMovements: [], persistedCounts: [], shoppingRows: [] });
+  });
 
   it("locks owned inventory items in deterministic ID order and omits another owner's item", async () => {
     const fixture = await seedLockedPlanningScenario(context.db);
@@ -505,6 +550,7 @@ describe("shopping command service", () => {
     await context.db.update(bakeCycles).set({ status: "OPEN" }).where(eq(bakeCycles.id, fixture.cycleId));
     await expect(service.confirmStock(OWNER_ID, confirmInput(fixture))).rejects.toBeInstanceOf(ShoppingStateError);
     await context.db.update(bakeCycles).set({ status: "LOCKED" }).where(eq(bakeCycles.id, fixture.cycleId));
+    await service.confirmStock(OWNER_ID, confirmInput(fixture));
     await createCycleOperationsCommandService(context.db, CLOCK).startCycle(OWNER_ID, { cycleId: fixture.cycleId });
     await expect(service.confirmStock(OWNER_ID, confirmInput(fixture))).resolves.toMatchObject({ kind: "SHOPPING" });
     await completeOperations(context.db, fixture);

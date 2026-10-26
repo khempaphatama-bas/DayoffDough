@@ -1,4 +1,5 @@
 import { eq } from "drizzle-orm";
+import { confirmConsumptionStock } from "@tests/fixtures/consumption";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { OTHER_OWNER_ID, OWNER_ID } from "@tests/fixtures/owner";
 import { seedLockedPlanningScenario, seedPlanningScenario } from "@tests/fixtures/planning";
@@ -21,6 +22,7 @@ describe("operations unlock guard", () => {
       const orderId = scenario.orderIds[1]!;
       const cycles = createCycleOperationsCommandService(context.db);
       const orderCommands = createOrderOperationsCommandService(context.db);
+      await confirmConsumptionStock(context.db, OWNER_ID, scenario.cycleId);
       await cycles.startCycle(OWNER_ID, { cycleId: scenario.cycleId });
       await orderCommands.startOrders(OWNER_ID, { cycleId: scenario.cycleId, orderIds: [orderId] });
       if (status === "PACKED" || status === "DELIVERED") {
@@ -51,6 +53,7 @@ describe("operations unlock guard", () => {
     const foreign = await seedLockedPlanningScenario(context.db, {
       ownerId: OTHER_OWNER_ID, idSet: "SECONDARY",
     });
+    await confirmConsumptionStock(context.db, OTHER_OWNER_ID, foreign.cycleId);
     await createCycleOperationsCommandService(context.db).startCycle(
       OTHER_OWNER_ID, { cycleId: foreign.cycleId },
     );

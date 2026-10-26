@@ -1,4 +1,5 @@
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
+import { confirmConsumptionStock } from "@tests/fixtures/consumption";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { OTHER_OWNER_ID, OWNER_ID } from "@tests/fixtures/owner";
 import {
@@ -57,6 +58,7 @@ describe("cycle operations query", () => {
   async function finishOrders(scenario: Awaited<ReturnType<typeof seedLockedPlanningScenario>>) {
     const cycles = createCycleOperationsCommandService(context.db);
     const commands = createOrderOperationsCommandService(context.db);
+    await confirmConsumptionStock(context.db, OWNER_ID, scenario.cycleId);
     await cycles.startCycle(OWNER_ID, { cycleId: scenario.cycleId });
     const activeOrderIds = scenario.orderIds.slice(0, 2);
     await commands.startOrders(OWNER_ID, { cycleId: scenario.cycleId, orderIds: activeOrderIds });
@@ -140,6 +142,7 @@ describe("cycle operations query", () => {
 
   it("coalesces missing packing progress to zero and reads a present row", async () => {
     const scenario = await seedLockedPlanningScenario(context.db);
+    await confirmConsumptionStock(context.db, OWNER_ID, scenario.cycleId);
     await createCycleOperationsCommandService(context.db).startCycle(OWNER_ID, { cycleId: scenario.cycleId });
     await createOrderOperationsCommandService(context.db).startOrders(OWNER_ID, {
       cycleId: scenario.cycleId, orderIds: [scenario.orderIds[1]!],
@@ -262,16 +265,13 @@ describe("cycle operations query", () => {
   });
 
   it("sorts in-production switcher choices before locked ones and keeps a terminal selection", async () => {
-    const first = await seedLockedPlanningScenario(context.db);
     const secondId = "60000000-0000-4000-8000-000000000121";
-    await context.db.insert(bakeCycles).values({
-      id: secondId,
-      ownerId: OWNER_ID,
-      name: "Second active cycle",
-      status: "IN_PRODUCTION",
-      targetProductionDate: "2026-08-28",
-      primaryDeliveryDate: "2026-08-29",
-    });
+    await context.close();
+    context = await createTestDatabase({ beforeConsumptionCutover: async (db) => {
+      await db.execute(sql`INSERT INTO bake_cycles (id, owner_id, name, status, target_production_date, primary_delivery_date)
+        VALUES (${secondId}, ${OWNER_ID}, 'Second active cycle', 'IN_PRODUCTION', '2026-08-28', '2026-08-29')`);
+    } });
+    const first = await seedLockedPlanningScenario(context.db);
     let view = await readyView(first.cycleId);
     expect(view.cycleOptions.map(({ id }) => id)).toEqual([secondId, first.cycleId]);
 
