@@ -421,3 +421,185 @@ BEGIN
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
+
+--> statement-breakpoint
+-- Only the two forward event links are deferred. All owner/item identity and
+-- RESTRICT protections remain intact, and completeness is checked at commit.
+ALTER TABLE consumption_revision_items ALTER CONSTRAINT consumption_revision_items_movement_fk DEFERRABLE INITIALLY DEFERRED;--> statement-breakpoint
+ALTER TABLE consumption_revision_items ALTER CONSTRAINT consumption_revision_items_settlement_count_fk DEFERRABLE INITIALLY DEFERRED;--> statement-breakpoint
+
+-- Match the compact, sorted-object JSON representation used by the domain.
+-- ECMAScript String.trim whitespace, matching the strict input schemas rather
+-- than PostgreSQL btrim's default ASCII-space-only behavior.
+CREATE FUNCTION consumption_trim_reason(value text) RETURNS text AS $$
+  SELECT btrim(value, U&'\0009\000A\000B\000C\000D\0020\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000\FEFF');
+$$ LANGUAGE sql IMMUTABLE STRICT;--> statement-breakpoint
+
+CREATE FUNCTION consumption_canonical_json(value jsonb) RETURNS text AS $$
+  SELECT CASE jsonb_typeof(value)
+    WHEN 'object' THEN '{' || coalesce((SELECT string_agg(to_jsonb(key)::text || ':' || consumption_canonical_json(val), ',' ORDER BY key COLLATE "C") FROM jsonb_each(value) AS e(key, val)), '') || '}'
+    WHEN 'array' THEN '[' || coalesce((SELECT string_agg(consumption_canonical_json(val), ',' ORDER BY ordinal) FROM jsonb_array_elements(value) WITH ORDINALITY AS e(val, ordinal)), '') || ']'
+    ELSE value::text END;
+$$ LANGUAGE sql IMMUTABLE STRICT;--> statement-breakpoint
+
+CREATE FUNCTION lock_consumption_revision_source() RETURNS trigger AS $$
+DECLARE c cycle_consumption_contexts%ROWTYPE; o consumption_operations%ROWTYPE; cycle_status bake_cycle_status;
+BEGIN
+  SELECT * INTO c FROM cycle_consumption_contexts WHERE owner_id = NEW.owner_id AND id = NEW.context_id;
+  IF c.id IS NULL THEN RAISE EXCEPTION 'consumption context is missing'; END IF;
+  -- Direct child writers may hold tuples already: upstream locks never wait.
+  PERFORM lock_consumption_registration_source(c.owner_id, c.bake_cycle_id, c.planning_snapshot_id, c.task_generation_id);
+  SELECT * INTO c FROM cycle_consumption_contexts WHERE owner_id = NEW.owner_id AND id = NEW.context_id FOR UPDATE NOWAIT;
+  SELECT * INTO o FROM consumption_operations WHERE owner_id = NEW.owner_id AND id = NEW.operation_id;
+  -- Let the owned composite FK report missing/foreign operation identity.
+  IF o.id IS NULL THEN RETURN NEW; END IF;
+  IF o.kind <> 'CONFIRM' THEN RAISE EXCEPTION 'consumption operation kind is not yet supported'; END IF;
+  SELECT status INTO cycle_status FROM bake_cycles WHERE owner_id = c.owner_id AND id = c.bake_cycle_id;
+  IF cycle_status NOT IN ('IN_PRODUCTION', 'CANCELLED') OR c.current_revision_id IS NOT NULL
+    OR NEW.revision_number <> 1 OR NEW.previous_revision_id IS NOT NULL THEN
+    RAISE EXCEPTION 'initial consumption requires a pending production context';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;--> statement-breakpoint
+CREATE TRIGGER consumption_revision_source_guard BEFORE INSERT ON consumption_revisions
+FOR EACH ROW EXECUTE FUNCTION lock_consumption_revision_source();--> statement-breakpoint
+
+CREATE FUNCTION check_initial_consumption_item() RETURNS trigger AS $$
+DECLARE r consumption_revisions%ROWTYPE; o consumption_operations%ROWTYPE;
+  ledger inventory_ledger_states%ROWTYPE; token jsonb; planned numeric; cycle_status bake_cycle_status;
+BEGIN
+  SELECT * INTO r FROM consumption_revisions WHERE owner_id = NEW.owner_id AND context_id = NEW.context_id AND id = NEW.revision_id;
+  SELECT * INTO o FROM consumption_operations WHERE owner_id = NEW.owner_id AND id = r.operation_id;
+  IF o.id IS NULL THEN RETURN NEW; END IF;
+  IF o.kind <> 'CONFIRM' THEN RAISE EXCEPTION 'consumption operation kind is not yet supported'; END IF;
+  PERFORM 1 FROM inventory_items WHERE owner_id = NEW.owner_id AND id = NEW.inventory_item_id FOR UPDATE NOWAIT;
+  SELECT * INTO ledger FROM inventory_ledger_states WHERE owner_id = NEW.owner_id AND inventory_item_id = NEW.inventory_item_id FOR UPDATE NOWAIT;
+  SELECT val INTO token FROM jsonb_array_elements(o.manifest::jsonb->'expectedLedger') AS e(val)
+    WHERE val->>'inventoryItemId' = NEW.inventory_item_id::text;
+  IF token IS NULL OR token->>'ledgerRevision' IS DISTINCT FROM ledger.ledger_revision::text
+    OR token->>'countMovementId' IS DISTINCT FROM ledger.latest_count_movement_id::text
+    OR NEW.initial_count_movement_id IS DISTINCT FROM ledger.latest_count_movement_id THEN
+    RAISE EXCEPTION 'consumption requires current applied ledger tokens';
+  END IF;
+  SELECT planned_quantity INTO planned FROM cycle_consumption_items WHERE owner_id = NEW.owner_id AND context_id = NEW.context_id AND inventory_item_id = NEW.inventory_item_id;
+  SELECT b.status INTO cycle_status FROM cycle_consumption_contexts c JOIN bake_cycles b ON b.owner_id = c.owner_id AND b.id = c.bake_cycle_id
+    WHERE c.owner_id = NEW.owner_id AND c.id = NEW.context_id;
+  IF (cycle_status = 'CANCELLED' AND NEW.basis <> 'OWNER_REPORTED')
+    OR (NEW.used_quantity IS DISTINCT FROM planned AND (NEW.basis <> 'OWNER_REPORTED' OR nullif(btrim(NEW.reason), '') IS NULL))
+    OR NEW.mode <> 'DIRECT' OR NEW.quantity_delta <> -NEW.used_quantity OR NEW.settlement_count_movement_id IS NOT NULL THEN
+    RAISE EXCEPTION 'initial consumption requires exact usage provenance and direct delta';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;--> statement-breakpoint
+CREATE TRIGGER consumption_initial_item_guard BEFORE INSERT ON consumption_revision_items
+FOR EACH ROW EXECUTE FUNCTION check_initial_consumption_item();--> statement-breakpoint
+
+-- This event guard checks the live balance at application time, not a final SUM
+-- that a later PURCHASE/COUNT in the same transaction could use to mask shortage.
+CREATE FUNCTION check_consumption_movement() RETURNS trigger AS $$
+DECLARE i consumption_revision_items%ROWTYPE; r consumption_revisions%ROWTYPE; balance numeric;
+  ledger inventory_ledger_states%ROWTYPE; token jsonb;
+BEGIN
+  IF NEW.type <> 'CONSUMPTION' AND NEW.reference_type IS DISTINCT FROM 'CONSUMPTION_REVISION' THEN RETURN NEW; END IF;
+  PERFORM 1 FROM inventory_items WHERE owner_id = NEW.owner_id AND id = NEW.inventory_item_id FOR UPDATE NOWAIT;
+  SELECT * INTO i FROM consumption_revision_items WHERE owner_id = NEW.owner_id AND inventory_item_id = NEW.inventory_item_id AND movement_id = NEW.id;
+  SELECT * INTO r FROM consumption_revisions WHERE owner_id = i.owner_id AND id = i.revision_id;
+  IF i.id IS NULL OR r.id IS NULL OR NEW.type <> 'CONSUMPTION' OR NEW.reference_type IS DISTINCT FROM 'CONSUMPTION_REVISION'
+    OR NEW.reference_id IS DISTINCT FROM i.revision_id OR NEW.quantity_delta_in_base_unit <> i.quantity_delta
+    OR NEW.counted_quantity_in_base_unit IS NOT NULL OR NEW.occurred_at IS DISTINCT FROM r.confirmed_at
+    OR NEW.notes IS DISTINCT FROM i.reason THEN RAISE EXCEPTION 'consumption movement requires exact owned revision lineage'; END IF;
+  SELECT * INTO ledger FROM inventory_ledger_states WHERE owner_id = NEW.owner_id AND inventory_item_id = NEW.inventory_item_id FOR UPDATE NOWAIT;
+  SELECT val INTO token FROM consumption_operations o,
+    LATERAL jsonb_array_elements(o.manifest::jsonb->'expectedLedger') AS e(val)
+    WHERE o.owner_id = r.owner_id AND o.id = r.operation_id AND val->>'inventoryItemId' = NEW.inventory_item_id::text;
+  -- Preparing rows does not apply stock. Recheck at the event boundary so a
+  -- raw interleaved PURCHASE/COUNT cannot make the recorded initial fence stale.
+  IF token IS NULL OR token->>'ledgerRevision' IS DISTINCT FROM ledger.ledger_revision::text
+    OR i.initial_count_movement_id IS DISTINCT FROM ledger.latest_count_movement_id THEN
+    RAISE EXCEPTION 'consumption requires current applied ledger tokens';
+  END IF;
+  SELECT coalesce(sum(quantity_delta_in_base_unit), 0) INTO balance FROM inventory_movements WHERE owner_id = NEW.owner_id AND inventory_item_id = NEW.inventory_item_id;
+  IF balance + NEW.quantity_delta_in_base_unit < 0 THEN RAISE EXCEPTION 'consumption cannot make stock negative'; END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;--> statement-breakpoint
+CREATE TRIGGER consumption_movement_guard BEFORE INSERT ON inventory_movements
+FOR EACH ROW EXECUTE FUNCTION check_consumption_movement();--> statement-breakpoint
+
+CREATE FUNCTION validate_consumption_operation(p_owner uuid, p_operation uuid) RETURNS void AS $$
+DECLARE o consumption_operations%ROWTYPE; r consumption_revisions%ROWTYPE; c cycle_consumption_contexts%ROWTYPE;
+  manifest jsonb; expected jsonb; items jsonb; tokens jsonb; actual_ids uuid[];
+BEGIN
+  SELECT * INTO o FROM consumption_operations WHERE owner_id = p_owner AND id = p_operation;
+  IF o.id IS NULL THEN RAISE EXCEPTION 'consumption operation is missing'; END IF;
+  IF o.kind <> 'CONFIRM' THEN RAISE EXCEPTION 'consumption operation kind is not yet supported'; END IF;
+  manifest := o.manifest::jsonb;
+  SELECT array_agg(id ORDER BY context_id) INTO actual_ids FROM consumption_revisions WHERE owner_id = o.owner_id AND operation_id = o.id;
+  IF cardinality(o.revision_ids) <> 1 OR o.revision_ids IS DISTINCT FROM actual_ids OR cardinality(o.count_movement_ids) <> 0 THEN
+    RAISE EXCEPTION 'consumption receipt requires the complete exact result set';
+  END IF;
+  SELECT * INTO r FROM consumption_revisions WHERE owner_id = o.owner_id AND id = o.revision_ids[1];
+  SELECT * INTO c FROM cycle_consumption_contexts WHERE owner_id = r.owner_id AND id = r.context_id;
+  IF r.revision_number <> 1 OR r.previous_revision_id IS NOT NULL OR c.current_revision_id IS DISTINCT FROM r.id
+    OR r.confirmed_at IS DISTINCT FROM o.created_at THEN RAISE EXCEPTION 'consumption requires a complete current initial revision'; END IF;
+  IF EXISTS (
+    WITH source AS (SELECT inventory_item_id FROM cycle_consumption_items WHERE owner_id = r.owner_id AND context_id = r.context_id),
+    used AS (SELECT inventory_item_id FROM consumption_revision_items WHERE owner_id = r.owner_id AND revision_id = r.id)
+    SELECT 1 FROM source FULL JOIN used USING (inventory_item_id) WHERE source.inventory_item_id IS NULL OR used.inventory_item_id IS NULL
+  ) THEN RAISE EXCEPTION 'consumption requires the complete exact source item set'; END IF;
+  IF EXISTS (SELECT 1 FROM consumption_revision_items i LEFT JOIN inventory_movements m
+      ON m.owner_id = i.owner_id AND m.inventory_item_id = i.inventory_item_id AND m.id = i.movement_id
+      WHERE i.owner_id = r.owner_id AND i.revision_id = r.id AND (m.id IS NULL OR m.type <> 'CONSUMPTION'
+        OR m.reference_type IS DISTINCT FROM 'CONSUMPTION_REVISION' OR m.reference_id IS DISTINCT FROM r.id
+        OR m.quantity_delta_in_base_unit <> i.quantity_delta OR m.occurred_at IS DISTINCT FROM r.confirmed_at
+        OR m.notes IS DISTINCT FROM i.reason OR m.counted_quantity_in_base_unit IS NOT NULL)) THEN
+    RAISE EXCEPTION 'consumption requires every exact owned audit movement';
+  END IF;
+  SELECT coalesce(jsonb_agg(jsonb_build_object('inventoryItemId', inventory_item_id::text,
+    'usedQuantity', trim_scale(used_quantity)::text, 'basis', basis::text, 'reason', reason) ORDER BY inventory_item_id), '[]'::jsonb)
+    INTO items FROM consumption_revision_items WHERE owner_id = r.owner_id AND revision_id = r.id;
+  SELECT coalesce(jsonb_agg(jsonb_build_object('inventoryItemId', i.inventory_item_id::text,
+    'ledgerRevision', t.val->>'ledgerRevision', 'countMovementId', i.initial_count_movement_id::text) ORDER BY i.inventory_item_id), '[]'::jsonb)
+    INTO tokens FROM consumption_revision_items i LEFT JOIN LATERAL (
+      SELECT val FROM jsonb_array_elements(manifest->'expectedLedger') AS e(val) WHERE val->>'inventoryItemId' = i.inventory_item_id::text
+    ) t ON true WHERE i.owner_id = r.owner_id AND i.revision_id = r.id;
+  expected := jsonb_build_object('kind', 'CONFIRM', 'requestId', o.request_id::text,
+    'cycleId', c.bake_cycle_id::text, 'planningSnapshotId', c.planning_snapshot_id::text, 'contextId', c.id::text,
+    'items', items, 'expectedLedger', tokens, 'confirmTakenOutOfUse', true,
+    'confirmEmpty', manifest->'confirmEmpty', 'reason', r.reason);
+  IF jsonb_typeof(manifest->'confirmEmpty') IS DISTINCT FROM 'boolean'
+    OR jsonb_array_length(manifest->'expectedLedger') IS DISTINCT FROM jsonb_array_length(items)
+    OR (items = '[]'::jsonb AND (manifest->'confirmEmpty' <> 'true'::jsonb OR nullif(btrim(r.reason), '') IS NULL))
+    OR (r.reason IS NOT NULL AND r.reason <> consumption_trim_reason(r.reason))
+    OR EXISTS (SELECT 1 FROM consumption_revision_items WHERE owner_id = r.owner_id AND revision_id = r.id AND reason IS NOT NULL AND reason <> consumption_trim_reason(reason))
+    OR o.manifest IS DISTINCT FROM consumption_canonical_json(expected) THEN
+    RAISE EXCEPTION 'consumption requires the canonical complete confirmed payload';
+  END IF;
+END;
+$$ LANGUAGE plpgsql;--> statement-breakpoint
+
+CREATE FUNCTION check_consumption_operation_complete() RETURNS trigger AS $$
+DECLARE operation_id uuid;
+BEGIN
+  IF TG_TABLE_NAME = 'consumption_operations' THEN operation_id := NEW.id;
+  ELSIF TG_TABLE_NAME = 'consumption_revisions' THEN operation_id := NEW.operation_id;
+  ELSIF TG_TABLE_NAME = 'consumption_revision_items' THEN
+    SELECT r.operation_id INTO operation_id FROM consumption_revisions r WHERE r.owner_id = NEW.owner_id AND r.id = NEW.revision_id;
+  ELSE
+    IF NEW.current_revision_id IS NOT DISTINCT FROM OLD.current_revision_id THEN RETURN NULL; END IF;
+    SELECT r.operation_id INTO operation_id FROM consumption_revisions r WHERE r.owner_id = NEW.owner_id AND r.id = NEW.current_revision_id;
+  END IF;
+  PERFORM validate_consumption_operation(NEW.owner_id, operation_id);
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;--> statement-breakpoint
+CREATE CONSTRAINT TRIGGER consumption_operation_complete AFTER INSERT ON consumption_operations
+DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION check_consumption_operation_complete();--> statement-breakpoint
+CREATE CONSTRAINT TRIGGER consumption_revision_complete AFTER INSERT ON consumption_revisions
+DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION check_consumption_operation_complete();--> statement-breakpoint
+CREATE CONSTRAINT TRIGGER consumption_revision_items_complete AFTER INSERT ON consumption_revision_items
+DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION check_consumption_operation_complete();--> statement-breakpoint
+CREATE CONSTRAINT TRIGGER consumption_pointer_complete AFTER UPDATE ON cycle_consumption_contexts
+DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION check_consumption_operation_complete();

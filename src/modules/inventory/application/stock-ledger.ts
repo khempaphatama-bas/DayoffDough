@@ -1,7 +1,7 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
 import type { DatabaseClient, DatabaseTransaction } from "@/lib/db/types";
 import type { LedgerExpectation } from "@/modules/consumption/domain/types";
-import { inventoryLedgerStates, inventoryMovements } from "@/modules/inventory/db/schema";
+import { inventoryLedgerStates } from "@/modules/inventory/db/schema";
 
 export type StockLedgerState = LedgerExpectation & Readonly<{ balance: string }>;
 type Tx = DatabaseTransaction;
@@ -13,10 +13,12 @@ function ledgerQuery(reader: Pick<DatabaseClient, "select">, ownerId: string, in
     inventoryItemId: inventoryLedgerStates.inventoryItemId,
     ledgerRevision: sql<string>`${inventoryLedgerStates.ledgerRevision}::text`,
     countMovementId: inventoryLedgerStates.latestCountMovementId,
-    balance: sql<string>`trim_scale(coalesce((SELECT sum(${inventoryMovements.quantityDeltaInBaseUnit})
-      FROM ${inventoryMovements}
-      WHERE ${inventoryMovements.ownerId} = ${inventoryLedgerStates.ownerId}
-        AND ${inventoryMovements.inventoryItemId} = ${inventoryLedgerStates.inventoryItemId}), 0))::text`,
+    // Drizzle dequalifies interpolated columns in single-table SELECT fields.
+    // Keep these constant identifiers explicit so the subquery stays correlated.
+    balance: sql<string>`trim_scale(coalesce((SELECT sum("movement"."quantity_delta_in_base_unit")
+      FROM "inventory_movements" AS "movement"
+      WHERE "movement"."owner_id" = "inventory_ledger_states"."owner_id"
+        AND "movement"."inventory_item_id" = "inventory_ledger_states"."inventory_item_id"), 0))::text`,
   }).from(inventoryLedgerStates).where(and(
     eq(inventoryLedgerStates.ownerId, ownerId),
     inArray(inventoryLedgerStates.inventoryItemId, [...inventoryItemIds]),
