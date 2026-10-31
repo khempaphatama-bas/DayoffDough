@@ -443,7 +443,7 @@ CREATE FUNCTION consumption_canonical_json(value jsonb) RETURNS text AS $$
 $$ LANGUAGE sql IMMUTABLE STRICT;--> statement-breakpoint
 
 CREATE FUNCTION lock_consumption_revision_source() RETURNS trigger AS $$
-DECLARE c cycle_consumption_contexts%ROWTYPE; o consumption_operations%ROWTYPE; cycle_status bake_cycle_status;
+DECLARE c cycle_consumption_contexts%ROWTYPE; o consumption_operations%ROWTYPE; cycle_status bake_cycle_status; previous_number integer;
 BEGIN
   SELECT * INTO c FROM cycle_consumption_contexts WHERE owner_id = NEW.owner_id AND id = NEW.context_id;
   IF c.id IS NULL THEN RAISE EXCEPTION 'consumption context is missing'; END IF;
@@ -453,11 +453,21 @@ BEGIN
   SELECT * INTO o FROM consumption_operations WHERE owner_id = NEW.owner_id AND id = NEW.operation_id;
   -- Let the owned composite FK report missing/foreign operation identity.
   IF o.id IS NULL THEN RETURN NEW; END IF;
-  IF o.kind <> 'CONFIRM' THEN RAISE EXCEPTION 'consumption operation kind is not yet supported'; END IF;
+  IF o.kind NOT IN ('CONFIRM', 'CORRECT') THEN RAISE EXCEPTION 'consumption operation kind is not yet supported'; END IF;
   SELECT status INTO cycle_status FROM bake_cycles WHERE owner_id = c.owner_id AND id = c.bake_cycle_id;
-  IF cycle_status NOT IN ('IN_PRODUCTION', 'CANCELLED') OR c.current_revision_id IS NOT NULL
-    OR NEW.revision_number <> 1 OR NEW.previous_revision_id IS NOT NULL THEN
-    RAISE EXCEPTION 'initial consumption requires a pending production context';
+  IF o.kind = 'CONFIRM' THEN
+    IF cycle_status NOT IN ('IN_PRODUCTION', 'CANCELLED') OR c.current_revision_id IS NOT NULL
+      OR NEW.revision_number <> 1 OR NEW.previous_revision_id IS NOT NULL THEN
+      RAISE EXCEPTION 'initial consumption requires a pending production context';
+    END IF;
+  ELSE
+    SELECT revision_number INTO previous_number FROM consumption_revisions
+      WHERE owner_id = c.owner_id AND context_id = c.id AND id = c.current_revision_id FOR UPDATE NOWAIT;
+    IF cycle_status NOT IN ('IN_PRODUCTION', 'CANCELLED', 'COMPLETED') OR c.current_revision_id IS NULL
+      OR NEW.previous_revision_id IS DISTINCT FROM c.current_revision_id OR NEW.revision_number IS DISTINCT FROM previous_number + 1
+      OR nullif(consumption_trim_reason(NEW.reason), '') IS NULL THEN
+      RAISE EXCEPTION 'correction requires a current immediate predecessor and reason';
+    END IF;
   END IF;
   RETURN NEW;
 END;
@@ -468,27 +478,47 @@ FOR EACH ROW EXECUTE FUNCTION lock_consumption_revision_source();--> statement-b
 CREATE FUNCTION check_initial_consumption_item() RETURNS trigger AS $$
 DECLARE r consumption_revisions%ROWTYPE; o consumption_operations%ROWTYPE;
   ledger inventory_ledger_states%ROWTYPE; token jsonb; planned numeric; cycle_status bake_cycle_status;
+  previous_item consumption_revision_items%ROWTYPE; initial_fence uuid; expected_mode stock_effect_mode; expected_delta numeric;
 BEGIN
   SELECT * INTO r FROM consumption_revisions WHERE owner_id = NEW.owner_id AND context_id = NEW.context_id AND id = NEW.revision_id;
   SELECT * INTO o FROM consumption_operations WHERE owner_id = NEW.owner_id AND id = r.operation_id;
   IF o.id IS NULL THEN RETURN NEW; END IF;
-  IF o.kind <> 'CONFIRM' THEN RAISE EXCEPTION 'consumption operation kind is not yet supported'; END IF;
+  IF o.kind NOT IN ('CONFIRM', 'CORRECT') THEN RAISE EXCEPTION 'consumption operation kind is not yet supported'; END IF;
   PERFORM 1 FROM inventory_items WHERE owner_id = NEW.owner_id AND id = NEW.inventory_item_id FOR UPDATE NOWAIT;
   SELECT * INTO ledger FROM inventory_ledger_states WHERE owner_id = NEW.owner_id AND inventory_item_id = NEW.inventory_item_id FOR UPDATE NOWAIT;
   SELECT val INTO token FROM jsonb_array_elements(o.manifest::jsonb->'expectedLedger') AS e(val)
     WHERE val->>'inventoryItemId' = NEW.inventory_item_id::text;
   IF token IS NULL OR token->>'ledgerRevision' IS DISTINCT FROM ledger.ledger_revision::text
-    OR token->>'countMovementId' IS DISTINCT FROM ledger.latest_count_movement_id::text
-    OR NEW.initial_count_movement_id IS DISTINCT FROM ledger.latest_count_movement_id THEN
+    OR token->>'countMovementId' IS DISTINCT FROM ledger.latest_count_movement_id::text THEN
     RAISE EXCEPTION 'consumption requires current applied ledger tokens';
   END IF;
+  IF o.kind = 'CONFIRM' THEN
+    initial_fence := ledger.latest_count_movement_id;
+    expected_mode := 'DIRECT'; expected_delta := -NEW.used_quantity;
+  ELSE
+    SELECT * INTO previous_item FROM consumption_revision_items
+      WHERE owner_id = NEW.owner_id AND context_id = NEW.context_id AND revision_id = r.previous_revision_id AND inventory_item_id = NEW.inventory_item_id;
+    SELECT i.initial_count_movement_id INTO initial_fence FROM consumption_revision_items i JOIN consumption_revisions first_use
+      ON first_use.owner_id = i.owner_id AND first_use.id = i.revision_id AND first_use.context_id = i.context_id
+      WHERE i.owner_id = NEW.owner_id AND i.context_id = NEW.context_id AND first_use.revision_number = 1 AND i.inventory_item_id = NEW.inventory_item_id;
+    IF previous_item.id IS NULL OR previous_item.initial_count_movement_id IS DISTINCT FROM initial_fence THEN
+      RAISE EXCEPTION 'correction requires immutable first-use lineage';
+    END IF;
+    IF initial_fence IS DISTINCT FROM ledger.latest_count_movement_id THEN
+      expected_mode := 'HISTORY_ONLY'; expected_delta := 0;
+    ELSE
+      expected_mode := 'DIRECT'; expected_delta := previous_item.used_quantity - NEW.used_quantity;
+    END IF;
+  END IF;
+  IF NEW.initial_count_movement_id IS DISTINCT FROM initial_fence THEN RAISE EXCEPTION 'consumption requires immutable initial fence'; END IF;
   SELECT planned_quantity INTO planned FROM cycle_consumption_items WHERE owner_id = NEW.owner_id AND context_id = NEW.context_id AND inventory_item_id = NEW.inventory_item_id;
   SELECT b.status INTO cycle_status FROM cycle_consumption_contexts c JOIN bake_cycles b ON b.owner_id = c.owner_id AND b.id = c.bake_cycle_id
     WHERE c.owner_id = NEW.owner_id AND c.id = NEW.context_id;
   IF (cycle_status = 'CANCELLED' AND NEW.basis <> 'OWNER_REPORTED')
     OR (NEW.used_quantity IS DISTINCT FROM planned AND (NEW.basis <> 'OWNER_REPORTED' OR nullif(btrim(NEW.reason), '') IS NULL))
-    OR NEW.mode <> 'DIRECT' OR NEW.quantity_delta <> -NEW.used_quantity OR NEW.settlement_count_movement_id IS NOT NULL THEN
-    RAISE EXCEPTION 'initial consumption requires exact usage provenance and direct delta';
+    OR NEW.mode <> expected_mode OR NEW.quantity_delta <> expected_delta OR NEW.settlement_count_movement_id IS NOT NULL THEN
+    IF o.kind = 'CONFIRM' THEN RAISE EXCEPTION 'initial consumption requires exact usage provenance and direct delta'; END IF;
+    RAISE EXCEPTION 'correction requires exact usage provenance and fenced delta';
   END IF;
   RETURN NEW;
 END;
@@ -499,25 +529,26 @@ FOR EACH ROW EXECUTE FUNCTION check_initial_consumption_item();--> statement-bre
 -- This event guard checks the live balance at application time, not a final SUM
 -- that a later PURCHASE/COUNT in the same transaction could use to mask shortage.
 CREATE FUNCTION check_consumption_movement() RETURNS trigger AS $$
-DECLARE i consumption_revision_items%ROWTYPE; r consumption_revisions%ROWTYPE; balance numeric;
+DECLARE i consumption_revision_items%ROWTYPE; r consumption_revisions%ROWTYPE; o consumption_operations%ROWTYPE; balance numeric;
   ledger inventory_ledger_states%ROWTYPE; token jsonb;
 BEGIN
   IF NEW.type <> 'CONSUMPTION' AND NEW.reference_type IS DISTINCT FROM 'CONSUMPTION_REVISION' THEN RETURN NEW; END IF;
   PERFORM 1 FROM inventory_items WHERE owner_id = NEW.owner_id AND id = NEW.inventory_item_id FOR UPDATE NOWAIT;
   SELECT * INTO i FROM consumption_revision_items WHERE owner_id = NEW.owner_id AND inventory_item_id = NEW.inventory_item_id AND movement_id = NEW.id;
   SELECT * INTO r FROM consumption_revisions WHERE owner_id = i.owner_id AND id = i.revision_id;
-  IF i.id IS NULL OR r.id IS NULL OR NEW.type <> 'CONSUMPTION' OR NEW.reference_type IS DISTINCT FROM 'CONSUMPTION_REVISION'
+  SELECT * INTO o FROM consumption_operations WHERE owner_id = r.owner_id AND id = r.operation_id;
+  IF i.id IS NULL OR r.id IS NULL OR o.id IS NULL OR o.kind NOT IN ('CONFIRM', 'CORRECT')
+    OR NEW.type IS DISTINCT FROM (CASE WHEN o.kind = 'CONFIRM' THEN 'CONSUMPTION' ELSE 'CORRECTION' END)::inventory_movement_type OR NEW.reference_type IS DISTINCT FROM 'CONSUMPTION_REVISION'
     OR NEW.reference_id IS DISTINCT FROM i.revision_id OR NEW.quantity_delta_in_base_unit <> i.quantity_delta
     OR NEW.counted_quantity_in_base_unit IS NOT NULL OR NEW.occurred_at IS DISTINCT FROM r.confirmed_at
     OR NEW.notes IS DISTINCT FROM i.reason THEN RAISE EXCEPTION 'consumption movement requires exact owned revision lineage'; END IF;
   SELECT * INTO ledger FROM inventory_ledger_states WHERE owner_id = NEW.owner_id AND inventory_item_id = NEW.inventory_item_id FOR UPDATE NOWAIT;
-  SELECT val INTO token FROM consumption_operations o,
-    LATERAL jsonb_array_elements(o.manifest::jsonb->'expectedLedger') AS e(val)
-    WHERE o.owner_id = r.owner_id AND o.id = r.operation_id AND val->>'inventoryItemId' = NEW.inventory_item_id::text;
+  SELECT val INTO token FROM jsonb_array_elements(o.manifest::jsonb->'expectedLedger') AS e(val)
+    WHERE val->>'inventoryItemId' = NEW.inventory_item_id::text;
   -- Preparing rows does not apply stock. Recheck at the event boundary so a
   -- raw interleaved PURCHASE/COUNT cannot make the recorded initial fence stale.
   IF token IS NULL OR token->>'ledgerRevision' IS DISTINCT FROM ledger.ledger_revision::text
-    OR i.initial_count_movement_id IS DISTINCT FROM ledger.latest_count_movement_id THEN
+    OR token->>'countMovementId' IS DISTINCT FROM ledger.latest_count_movement_id::text THEN
     RAISE EXCEPTION 'consumption requires current applied ledger tokens';
   END IF;
   SELECT coalesce(sum(quantity_delta_in_base_unit), 0) INTO balance FROM inventory_movements WHERE owner_id = NEW.owner_id AND inventory_item_id = NEW.inventory_item_id;
@@ -534,7 +565,7 @@ DECLARE o consumption_operations%ROWTYPE; r consumption_revisions%ROWTYPE; c cyc
 BEGIN
   SELECT * INTO o FROM consumption_operations WHERE owner_id = p_owner AND id = p_operation;
   IF o.id IS NULL THEN RAISE EXCEPTION 'consumption operation is missing'; END IF;
-  IF o.kind <> 'CONFIRM' THEN RAISE EXCEPTION 'consumption operation kind is not yet supported'; END IF;
+  IF o.kind NOT IN ('CONFIRM', 'CORRECT') THEN RAISE EXCEPTION 'consumption operation kind is not yet supported'; END IF;
   manifest := o.manifest::jsonb;
   SELECT array_agg(id ORDER BY context_id) INTO actual_ids FROM consumption_revisions WHERE owner_id = o.owner_id AND operation_id = o.id;
   IF cardinality(o.revision_ids) <> 1 OR o.revision_ids IS DISTINCT FROM actual_ids OR cardinality(o.count_movement_ids) <> 0 THEN
@@ -542,7 +573,9 @@ BEGIN
   END IF;
   SELECT * INTO r FROM consumption_revisions WHERE owner_id = o.owner_id AND id = o.revision_ids[1];
   SELECT * INTO c FROM cycle_consumption_contexts WHERE owner_id = r.owner_id AND id = r.context_id;
-  IF r.revision_number <> 1 OR r.previous_revision_id IS NOT NULL OR c.current_revision_id IS DISTINCT FROM r.id
+  IF (o.kind = 'CONFIRM' AND (r.revision_number <> 1 OR r.previous_revision_id IS NOT NULL))
+    OR (o.kind = 'CORRECT' AND (r.revision_number <= 1 OR r.previous_revision_id IS NULL OR nullif(consumption_trim_reason(r.reason), '') IS NULL))
+    OR c.current_revision_id IS DISTINCT FROM r.id
     OR r.confirmed_at IS DISTINCT FROM o.created_at THEN RAISE EXCEPTION 'consumption requires a complete current initial revision'; END IF;
   IF EXISTS (
     WITH source AS (SELECT inventory_item_id FROM cycle_consumption_items WHERE owner_id = r.owner_id AND context_id = r.context_id),
@@ -551,7 +584,7 @@ BEGIN
   ) THEN RAISE EXCEPTION 'consumption requires the complete exact source item set'; END IF;
   IF EXISTS (SELECT 1 FROM consumption_revision_items i LEFT JOIN inventory_movements m
       ON m.owner_id = i.owner_id AND m.inventory_item_id = i.inventory_item_id AND m.id = i.movement_id
-      WHERE i.owner_id = r.owner_id AND i.revision_id = r.id AND (m.id IS NULL OR m.type <> 'CONSUMPTION'
+      WHERE i.owner_id = r.owner_id AND i.revision_id = r.id AND (m.id IS NULL OR m.type IS DISTINCT FROM (CASE WHEN o.kind = 'CONFIRM' THEN 'CONSUMPTION' ELSE 'CORRECTION' END)::inventory_movement_type
         OR m.reference_type IS DISTINCT FROM 'CONSUMPTION_REVISION' OR m.reference_id IS DISTINCT FROM r.id
         OR m.quantity_delta_in_base_unit <> i.quantity_delta OR m.occurred_at IS DISTINCT FROM r.confirmed_at
         OR m.notes IS DISTINCT FROM i.reason OR m.counted_quantity_in_base_unit IS NOT NULL)) THEN
@@ -561,17 +594,21 @@ BEGIN
     'usedQuantity', trim_scale(used_quantity)::text, 'basis', basis::text, 'reason', reason) ORDER BY inventory_item_id), '[]'::jsonb)
     INTO items FROM consumption_revision_items WHERE owner_id = r.owner_id AND revision_id = r.id;
   SELECT coalesce(jsonb_agg(jsonb_build_object('inventoryItemId', i.inventory_item_id::text,
-    'ledgerRevision', t.val->>'ledgerRevision', 'countMovementId', i.initial_count_movement_id::text) ORDER BY i.inventory_item_id), '[]'::jsonb)
+    'ledgerRevision', t.val->>'ledgerRevision', 'countMovementId', CASE WHEN o.kind = 'CONFIRM' THEN to_jsonb(i.initial_count_movement_id::text) ELSE t.val->'countMovementId' END) ORDER BY i.inventory_item_id), '[]'::jsonb)
     INTO tokens FROM consumption_revision_items i LEFT JOIN LATERAL (
       SELECT val FROM jsonb_array_elements(manifest->'expectedLedger') AS e(val) WHERE val->>'inventoryItemId' = i.inventory_item_id::text
     ) t ON true WHERE i.owner_id = r.owner_id AND i.revision_id = r.id;
-  expected := jsonb_build_object('kind', 'CONFIRM', 'requestId', o.request_id::text,
+  expected := jsonb_build_object('kind', o.kind::text, 'requestId', o.request_id::text,
     'cycleId', c.bake_cycle_id::text, 'planningSnapshotId', c.planning_snapshot_id::text, 'contextId', c.id::text,
-    'items', items, 'expectedLedger', tokens, 'confirmTakenOutOfUse', true,
-    'confirmEmpty', manifest->'confirmEmpty', 'reason', r.reason);
-  IF jsonb_typeof(manifest->'confirmEmpty') IS DISTINCT FROM 'boolean'
+    'items', items, 'expectedLedger', tokens, 'reason', r.reason);
+  IF o.kind = 'CONFIRM' THEN
+    expected := expected || jsonb_build_object('confirmTakenOutOfUse', true, 'confirmEmpty', manifest->'confirmEmpty');
+  ELSE
+    expected := expected || jsonb_build_object('expectedRevisionId', r.previous_revision_id::text);
+  END IF;
+  IF (o.kind = 'CONFIRM' AND (jsonb_typeof(manifest->'confirmEmpty') IS DISTINCT FROM 'boolean'
+      OR (items = '[]'::jsonb AND (manifest->'confirmEmpty' <> 'true'::jsonb OR nullif(btrim(r.reason), '') IS NULL))))
     OR jsonb_array_length(manifest->'expectedLedger') IS DISTINCT FROM jsonb_array_length(items)
-    OR (items = '[]'::jsonb AND (manifest->'confirmEmpty' <> 'true'::jsonb OR nullif(btrim(r.reason), '') IS NULL))
     OR (r.reason IS NOT NULL AND r.reason <> consumption_trim_reason(r.reason))
     OR EXISTS (SELECT 1 FROM consumption_revision_items WHERE owner_id = r.owner_id AND revision_id = r.id AND reason IS NOT NULL AND reason <> consumption_trim_reason(reason))
     OR o.manifest IS DISTINCT FROM consumption_canonical_json(expected) THEN

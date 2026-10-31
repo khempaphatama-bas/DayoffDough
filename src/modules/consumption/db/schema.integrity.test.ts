@@ -1,4 +1,5 @@
-import { sql } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
+import { eq, sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createTestDatabase } from "@tests/helpers/test-db";
 import { inventoryItems, inventoryMovements } from "@/modules/inventory/db/schema";
@@ -8,7 +9,10 @@ import { seedLockedPlanningScenario } from "@tests/fixtures/planning";
 import { createCycleOperationsCommandService } from "@/modules/operations/application/cycle-commands";
 import { loadConsumptionSource } from "../application/load-consumption-source";
 import { consumptionOperations, consumptionRevisions, consumptionRevisionItems, cycleConsumptionContexts, cycleConsumptionItems } from "./schema";
-import { writeConsumptionOperation } from "../application/command-support";
+import { writeConsumptionOperation, type PreparedConsumptionOperation } from "../application/command-support";
+import { createConsumptionCommandService } from "../application/consumption-commands";
+import { readStockLedger } from "@/modules/inventory/application/stock-ledger";
+import { canonicalizeUseRequest } from "../domain/request-manifest";
 
 const owner = "81000000-0000-4000-8000-000000000001";
 describe("ledger persistence integrity", () => {
@@ -29,6 +33,115 @@ describe("ledger persistence integrity", () => {
     await expect(fixture.db.execute(sql`INSERT INTO consumption_operations (owner_id, request_id, kind, manifest, revision_ids, count_movement_ids)
       VALUES (${owner}, gen_random_uuid(), 'CONFIRM', '{}', '{}', '{}')`)).rejects.toThrow();
     expect(await rows(sql`SELECT id FROM consumption_operations`)).toEqual([]);
+  });
+
+  // Start with a real CONFIRM. Every attack below mutates a complete, legitimate
+  // successor; no dangling rows, disabled triggers or fake predecessor fixture.
+  const prepareCorrection = async (counted = false) => {
+    const s = await seedConsumptionScenario(fixture.db);
+    const initial = await prepareConsumptionFixture(fixture.db, OWNER_ID, s.cycleId);
+    const service = createConsumptionCommandService(fixture.db, { now: () => initial.confirmedAt });
+    const first = await service.confirmUse(OWNER_ID, initial.input);
+    if (counted) await fixture.db.insert(inventoryMovements).values({ ownerId: OWNER_ID, inventoryItemId: s.itemIds[0]!, type: "COUNT", quantityDeltaInBaseUnit: "25", countedQuantityInBaseUnit: "25", occurredAt: initial.confirmedAt });
+    const ledger = await readStockLedger(fixture.db, OWNER_ID, s.itemIds);
+    const operationId = randomUUID();
+    const revisionId = randomUUID();
+    const input = { cycleId: s.cycleId, planningSnapshotId: s.planningSnapshotId, contextId: initial.input.contextId,
+      requestId: randomUUID(), expectedRevisionId: first.revisionIds[0]!, reason: "Measured again",
+      expectedLedger: ledger.map(({ inventoryItemId, ledgerRevision, countMovementId }) => ({ inventoryItemId, ledgerRevision, countMovementId })),
+      items: initial.input.items.map((i) => ({ ...i, usedQuantity: "1", basis: "OWNER_REPORTED" as const, reason: "Measured again" })),
+    };
+    const revisionItems = initial.prepared.revisionItems.map((i) => ({ ...i, revisionId, usedQuantity: "1", basis: "OWNER_REPORTED" as const, reason: "Measured again", movementId: randomUUID(),
+      mode: counted && i.inventoryItemId === s.itemIds[0] ? "HISTORY_ONLY" as const : "DIRECT" as const,
+      quantityDelta: i.inventoryItemId === s.itemIds[0] ? (counted ? "0" : "2199") : "13" }));
+    const prepared: PreparedConsumptionOperation = {
+      operation: { id: operationId, ownerId: OWNER_ID, requestId: input.requestId, kind: "CORRECT", canonicalManifest: canonicalizeUseRequest("CORRECT", input), resultRevisionIds: [revisionId], resultCountMovementIds: [] },
+      revisions: [{ id: revisionId, ownerId: OWNER_ID, contextId: input.contextId, operationId, revisionNumber: 2, previousRevisionId: input.expectedRevisionId, reason: input.reason }], revisionItems,
+      usageMovements: revisionItems.map((i) => ({ id: i.movementId, ownerId: OWNER_ID, inventoryItemId: i.inventoryItemId, type: "CORRECTION", quantityDeltaInBaseUnit: i.quantityDelta,
+        referenceType: "CONSUMPTION_REVISION", referenceId: revisionId, occurredAt: initial.confirmedAt, notes: i.reason })),
+      countMovements: [], pointerUpdates: [{ contextId: input.contextId, expectedRevisionId: input.expectedRevisionId, newRevisionId: revisionId }],
+    };
+    return { s, input, prepared, confirmedAt: initial.confirmedAt, service };
+  };
+
+  it.each(["skip", "predecessor", "fence", "delta", "mode", "movement type", "missing movement", "missing item", "missing pointer", "absolute target", "reason", "SETTLE"])("rejects raw CORRECT %s without moving the predecessor pointer", async (attack) => {
+    const { prepared, confirmedAt } = await prepareCorrection();
+    const before = await rows(sql`SELECT * FROM consumption_revisions ORDER BY id`);
+    const movements = await rows(sql`SELECT * FROM inventory_movements ORDER BY id`);
+    let bad = prepared;
+    if (attack === "skip") bad = { ...bad, revisions: bad.revisions.map((r) => ({ ...r, revisionNumber: 3 })) };
+    if (attack === "predecessor") bad = { ...bad, revisions: bad.revisions.map((r) => ({ ...r, previousRevisionId: randomUUID() })) };
+    if (attack === "fence") bad = { ...bad, revisionItems: bad.revisionItems.map((i) => ({ ...i, initialCountMovementId: null })) };
+    if (attack === "delta") bad = { ...bad, revisionItems: bad.revisionItems.map((i) => ({ ...i, quantityDelta: "0" })), usageMovements: bad.usageMovements.map((m) => ({ ...m, quantityDeltaInBaseUnit: "0" })) };
+    if (attack === "mode") bad = { ...bad, revisionItems: bad.revisionItems.map((i) => ({ ...i, mode: "HISTORY_ONLY", quantityDelta: "0" })), usageMovements: bad.usageMovements.map((m) => ({ ...m, quantityDeltaInBaseUnit: "0" })) };
+    if (attack === "movement type") bad = { ...bad, usageMovements: bad.usageMovements.map((m) => ({ ...m, type: "CONSUMPTION" })) };
+    if (attack === "missing movement") bad = { ...bad, usageMovements: bad.usageMovements.slice(1) };
+    if (attack === "missing item") bad = { ...bad, revisionItems: bad.revisionItems.slice(1), usageMovements: bad.usageMovements.slice(1) };
+    if (attack === "missing pointer") bad = { ...bad, pointerUpdates: [] };
+    if (attack === "absolute target") bad = { ...bad, operation: { ...bad.operation, canonicalManifest: bad.operation.canonicalManifest.replace('"usedQuantity":"1"', '"usedQuantity":"2"') } };
+    if (attack === "reason") bad = { ...bad, revisions: bad.revisions.map((r) => ({ ...r, reason: "\t" })) };
+    if (attack === "SETTLE") bad = { ...bad, operation: { ...bad.operation, kind: "SETTLE" } };
+    await expect(fixture.db.transaction((tx) => writeConsumptionOperation(tx, OWNER_ID, bad, confirmedAt))).rejects.toThrow();
+    expect(await rows(sql`SELECT * FROM consumption_revisions ORDER BY id`)).toEqual(before);
+    expect(await rows(sql`SELECT * FROM inventory_movements ORDER BY id`)).toEqual(movements);
+    expect((await fixture.db.select().from(cycleConsumptionContexts))[0]!.currentRevisionId).toBe(prepared.revisions[0]!.previousRevisionId);
+    expect(await fixture.db.select().from(consumptionOperations)).toHaveLength(1);
+  });
+
+  it.each(["reset fence", "direct recut"])("rejects raw CORRECT %s after an applied COUNT", async (attack) => {
+    const { s, prepared, confirmedAt } = await prepareCorrection(true);
+    const [current] = await readStockLedger(fixture.db, OWNER_ID, [s.itemIds[0]!]);
+    const bad = { ...prepared, revisionItems: prepared.revisionItems.map((i) => i.inventoryItemId !== s.itemIds[0] ? i : {
+      ...i, ...(attack === "reset fence" ? { initialCountMovementId: current!.countMovementId } : { mode: "DIRECT" as const, quantityDelta: "2199" }),
+    }), usageMovements: prepared.usageMovements.map((m) => attack === "direct recut" && m.inventoryItemId === s.itemIds[0] ? { ...m, quantityDeltaInBaseUnit: "2199" } : m) };
+    await expect(fixture.db.transaction((tx) => writeConsumptionOperation(tx, OWNER_ID, bad, confirmedAt))).rejects.toThrow();
+    expect((await readStockLedger(fixture.db, OWNER_ID, [s.itemIds[0]!]))[0]!.balance).toBe("25");
+  });
+
+  it.each(["COUNT", "PURCHASE"] as const)("rejects a raw %s interleaved between correction preparation and application", async (type) => {
+    const { s, prepared, confirmedAt } = await prepareCorrection();
+    await expect(fixture.db.transaction(async (tx) => {
+      const { canonicalManifest, resultRevisionIds, resultCountMovementIds, ...operation } = prepared.operation;
+      await tx.insert(consumptionOperations).values({ ...operation, manifest: canonicalManifest, revisionIds: [...resultRevisionIds], countMovementIds: [...resultCountMovementIds], createdAt: confirmedAt });
+      await tx.insert(consumptionRevisions).values(prepared.revisions.map((r) => ({ ...r, confirmedAt })));
+      await tx.insert(consumptionRevisionItems).values([...prepared.revisionItems]);
+      await tx.insert(inventoryMovements).values({ ownerId: OWNER_ID, inventoryItemId: s.itemIds[0]!, type,
+        quantityDeltaInBaseUnit: "0", countedQuantityInBaseUnit: type === "COUNT" ? "0" : null, occurredAt: confirmedAt });
+      await tx.insert(inventoryMovements).values([...prepared.usageMovements]);
+      await tx.update(cycleConsumptionContexts).set({ currentRevisionId: resultRevisionIds[0]! }).where(eq(cycleConsumptionContexts.id, prepared.pointerUpdates[0]!.contextId));
+    })).rejects.toMatchObject({ cause: { message: "consumption requires current applied ledger tokens" } });
+    expect(await fixture.db.select().from(consumptionOperations)).toHaveLength(1);
+    expect((await fixture.db.select().from(cycleConsumptionContexts))[0]!.currentRevisionId).toBe(prepared.revisions[0]!.previousRevisionId);
+  });
+
+  it("rejects raw correction shortage before a later PURCHASE could conceal it", async () => {
+    const { s, input, prepared, confirmedAt } = await prepareCorrection();
+    const changedInput = { ...input, items: input.items.map((i) => i.inventoryItemId === s.itemIds[0] ? { ...i, usedQuantity: "2201" } : i) };
+    const bad = { ...prepared, operation: { ...prepared.operation, canonicalManifest: canonicalizeUseRequest("CORRECT", changedInput) },
+      revisionItems: prepared.revisionItems.map((i) => i.inventoryItemId === s.itemIds[0] ? { ...i, usedQuantity: "2201", quantityDelta: "-1" } : i),
+      usageMovements: prepared.usageMovements.map((m) => m.inventoryItemId === s.itemIds[0] ? { ...m, quantityDeltaInBaseUnit: "-1" } : m),
+    };
+    await expect(fixture.db.transaction(async (tx) => {
+      await writeConsumptionOperation(tx, OWNER_ID, bad, confirmedAt);
+      await tx.insert(inventoryMovements).values({ ownerId: OWNER_ID, inventoryItemId: s.itemIds[0]!, type: "PURCHASE", quantityDeltaInBaseUnit: "1", occurredAt: confirmedAt });
+    })).rejects.toMatchObject({ cause: { message: "consumption cannot make stock negative" } });
+    expect(await fixture.db.select().from(consumptionOperations)).toHaveLength(1);
+    expect((await readStockLedger(fixture.db, OWNER_ID, [s.itemIds[0]!]))[0]!.balance).toBe("0");
+  });
+
+  it("advances a real CORRECT successor, rejects rewind, and keeps original history immutable", async () => {
+    const { input, service } = await prepareCorrection();
+    const before = await rows(sql`SELECT * FROM consumption_revisions ORDER BY id`);
+    const oldItems = await fixture.db.select().from(consumptionRevisionItems);
+    const result = await service.correctUse(OWNER_ID, input);
+    expect((await fixture.db.select().from(cycleConsumptionContexts))[0]!.currentRevisionId).toBe(result.revisionIds[0]);
+    await expect(fixture.db.execute(sql`UPDATE cycle_consumption_contexts SET current_revision_id = ${input.expectedRevisionId} WHERE id = ${input.contextId}`))
+      .rejects.toMatchObject({ cause: { message: "consumption pointer requires an immediate owned successor" } });
+    await expect(fixture.db.execute(sql`UPDATE consumption_revision_items SET used_quantity = 2 WHERE revision_id = ${input.expectedRevisionId}`)).rejects.toThrow();
+    expect(await rows(sql`SELECT * FROM consumption_revisions WHERE id = ${input.expectedRevisionId} ORDER BY id`)).toEqual(before);
+    expect(await fixture.db.select().from(consumptionRevisionItems).where(eq(consumptionRevisionItems.revisionId, input.expectedRevisionId))).toEqual(oldItems);
+    // The failed rewind leaves the legitimate successor current.
+    expect((await fixture.db.select().from(cycleConsumptionContexts))[0]!.currentRevisionId).toBe(result.revisionIds[0]);
   });
 
   it.each(["missing item", "missing movement", "wrong movement delta", "wrong movement source", "wrong movement type", "wrong initial fence", "wrong direct delta", "missing pointer", "wrong receipt IDs", "noncanonical manifest", "changed manifest source", "unconfirmed use", "duplicate ledger token"])("rejects raw %s atomically", async (attack) => {

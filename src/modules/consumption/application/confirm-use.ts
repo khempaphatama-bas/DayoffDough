@@ -8,9 +8,9 @@ import { StorageDecimal } from "@/modules/shopping/domain/storage";
 import { cycleConsumptionContexts, cycleConsumptionItems } from "../db/schema";
 import { confirmUseInputSchema } from "../domain/forms";
 import { canonicalizeUseRequest } from "../domain/request-manifest";
-import { calculateUseEffect, canonicalQuantity } from "../domain/rules";
+import { calculateUseEffect } from "../domain/rules";
 import { ConsumptionStateError, type ConfirmUseInput, type ConsumptionClock, type ConsumptionWriteResult } from "../domain/types";
-import { assertExpectedLedger, findExistingOperation, lockConsumptionContexts, writeConsumptionOperation, type PreparedConsumptionOperation } from "./command-support";
+import { assertExpectedLedger, assertUsageProvenance, findExistingOperation, lockConsumptionContexts, writeConsumptionOperation, type PreparedConsumptionOperation } from "./command-support";
 import { rethrowConsumptionLockError } from "./count-barrier";
 
 export async function confirmUse(db: DatabaseClient, clock: ConsumptionClock, ownerId: string, input: ConfirmUseInput): Promise<ConsumptionWriteResult> {
@@ -32,14 +32,7 @@ export async function confirmUse(db: DatabaseClient, clock: ConsumptionClock, ow
       if (cycle.activePlanningSnapshotId !== intent.planningSnapshotId || snapshot!.status !== "ACTIVE" || context!.currentRevisionId !== null)
         throw new ConsumptionStateError("STALE_DATA", "Consumption source is stale");
       const source = await tx.select().from(cycleConsumptionItems).where(and(eq(cycleConsumptionItems.ownerId, ownerId), eq(cycleConsumptionItems.contextId, intent.contextId))).orderBy(cycleConsumptionItems.inventoryItemId);
-      if (source.length !== intent.items.length || source.some((row) => !intent.items.some((item) => item.inventoryItemId === row.inventoryItemId)))
-        throw new ConsumptionStateError("INVALID_INPUT", "Confirm the exact consumption item set");
-      for (const item of intent.items) {
-        const planned = canonicalQuantity(source.find((row) => row.inventoryItemId === item.inventoryItemId)!.plannedQuantity);
-        if ((cycle.status === "CANCELLED" && item.basis !== "OWNER_REPORTED") ||
-          (item.usedQuantity !== planned && (item.basis !== "OWNER_REPORTED" || !item.reason)))
-          throw new ConsumptionStateError("INVALID_INPUT", "Changed or cancelled use requires owner-reported quantities and a reason for changes");
-      }
+      assertUsageProvenance(source, intent.items, cycle.status);
       const itemIds = source.map((row) => row.inventoryItemId);
       if ((await lockOwnedInventoryItems(tx, ownerId, itemIds)).length !== itemIds.length)
         throw new ConsumptionStateError("NOT_FOUND", "Consumption record not found");

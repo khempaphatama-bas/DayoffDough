@@ -4,7 +4,8 @@ import type { StockLedgerState } from "@/modules/inventory/application/stock-led
 import { inventoryMovements } from "@/modules/inventory/db/schema";
 import { cyclePlanningSnapshots } from "@/modules/planning/db/schema";
 import { consumptionOperations, consumptionRevisions, consumptionRevisionItems, cycleConsumptionContexts } from "../db/schema";
-import { ConsumptionStateError, type ConsumptionSource, type ConsumptionWriteResult, type LedgerExpectation } from "../domain/types";
+import { canonicalQuantity } from "../domain/rules";
+import { ConsumptionStateError, type ConsumptionSource, type ConsumptionWriteResult, type LedgerExpectation, type UsageItemInput } from "../domain/types";
 
 type Tx = DatabaseTransaction;
 type OperationInsert = typeof consumptionOperations.$inferInsert;
@@ -48,6 +49,17 @@ export function assertExpectedLedger(actual: readonly StockLedgerState[], expect
   if (actual.length !== expected.length || actual.some((row) => !expected.some((token) =>
     token.inventoryItemId === row.inventoryItemId && token.ledgerRevision === row.ledgerRevision && token.countMovementId === row.countMovementId))) {
     throw new ConsumptionStateError("STALE_DATA", "Stock changed; refresh and try again");
+  }
+}
+
+export function assertUsageProvenance(source: readonly { inventoryItemId: string; plannedQuantity: string }[], items: readonly UsageItemInput[], cycleStatus: string): void {
+  if (source.length !== items.length || source.some((row) => !items.some((item) => item.inventoryItemId === row.inventoryItemId)))
+    throw new ConsumptionStateError("INVALID_INPUT", "Confirm the exact consumption item set");
+  for (const item of items) {
+    const planned = canonicalQuantity(source.find((row) => row.inventoryItemId === item.inventoryItemId)!.plannedQuantity);
+    if ((cycleStatus === "CANCELLED" && item.basis !== "OWNER_REPORTED") ||
+      (item.usedQuantity !== planned && (item.basis !== "OWNER_REPORTED" || !item.reason)))
+      throw new ConsumptionStateError("INVALID_INPUT", "Changed or cancelled use requires owner-reported quantities and a reason for changes");
   }
 }
 
