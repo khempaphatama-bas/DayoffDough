@@ -1,5 +1,6 @@
 import { and, count, eq, sql } from "drizzle-orm";
 import { confirmConsumptionStock } from "@tests/fixtures/consumption";
+import { recordOperationsConsumption } from "@tests/fixtures/operations";
 import type { Logger } from "drizzle-orm/logger";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OTHER_OWNER_ID, OWNER_ID } from "@tests/fixtures/owner";
@@ -557,7 +558,7 @@ describe("planning command service", () => {
     expect(first.id).not.toBe(second.id);
   });
 
-  it("unlocks an in-production cycle and records its source status", async () => {
+  it("unlocks an in-production zero-use cycle and records its source status", async () => {
     const scenario = await seedPlanningScenario(context.db);
     const preview = await createPlanningQueryService(context.db, {
       now: () => new Date(LOCKED_AT),
@@ -576,6 +577,7 @@ describe("planning command service", () => {
     await createCycleOperationsCommandService(context.db).startCycle(
       OWNER_ID, { cycleId: scenario.cycleId },
     );
+    await recordOperationsConsumption(context.db, OWNER_ID, scenario.cycleId, true);
 
     await expect(
       commands.unlock(OWNER_ID, {
@@ -615,6 +617,7 @@ describe("planning command service", () => {
         const operations = createOrderOperationsCommandService(context.db);
         await confirmConsumptionStock(context.db, OWNER_ID, scenario.cycleId);
         await cycles.startCycle(OWNER_ID, { cycleId: scenario.cycleId });
+        await recordOperationsConsumption(context.db, OWNER_ID, scenario.cycleId);
         const orderIds = scenario.orderIds.slice(0, 2);
         await operations.startOrders(OWNER_ID, { cycleId: scenario.cycleId, orderIds });
         for (const orderId of orderIds) {
@@ -799,7 +802,12 @@ describe("planning command service", () => {
         query.sql.includes('from "bake_cycles"') &&
         query.sql.includes("for update"),
     );
-    expect(cycleLocks).toHaveLength(1);
+    // The independent consumption predicate re-acquires the same owned locks.
+    expect(cycleLocks).toHaveLength(2);
+    for (const query of cycleLocks) {
+      expectBoundEquality(query, query.sql.split(" where ")[1]!, "bake_cycles", "owner_id", OWNER_ID);
+      expectBoundEquality(query, query.sql.split(" where ")[1]!, "bake_cycles", "id", scenario.cycleId);
+    }
     expectBoundEquality(
       cycleLocks[0]!,
       cycleLocks[0]!.sql.split(" where ")[1]!,
@@ -820,7 +828,12 @@ describe("planning command service", () => {
         query.sql.includes('from "cycle_planning_snapshots"') &&
         query.sql.includes("for update"),
     );
-    expect(snapshotLocks).toHaveLength(1);
+    expect(snapshotLocks).toHaveLength(2);
+    for (const query of snapshotLocks) {
+      expectBoundEquality(query, query.sql.split(" where ")[1]!, "cycle_planning_snapshots", "owner_id", OWNER_ID);
+      expectBoundEquality(query, query.sql.split(" where ")[1]!, "cycle_planning_snapshots", "bake_cycle_id", scenario.cycleId);
+      expectBoundEquality(query, query.sql.split(" where ")[1]!, "cycle_planning_snapshots", "id", locked.id);
+    }
     const snapshotLockWhere = snapshotLocks[0]!.sql.split(" where ")[1]!;
     expectBoundEquality(
       snapshotLocks[0]!,

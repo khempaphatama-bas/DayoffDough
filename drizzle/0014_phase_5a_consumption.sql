@@ -403,6 +403,76 @@ $$ LANGUAGE plpgsql;--> statement-breakpoint
 CREATE CONSTRAINT TRIGGER cycle_consumption_context_complete AFTER INSERT OR UPDATE ON bake_cycles
 DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION check_cycle_consumption_context();--> statement-breakpoint
 
+-- Additive to Phase 4B: never replace task/order/packing lifecycle protections.
+-- Direct child updates already hold a tuple, so upstream locks use NOWAIT.
+CREATE FUNCTION assert_consumption_unlock_allowed(p_owner uuid, p_cycle uuid, p_snapshot uuid) RETURNS void AS $$
+DECLARE c bake_cycles%ROWTYPE; context_row cycle_consumption_contexts%ROWTYPE;
+BEGIN
+  SELECT * INTO c FROM bake_cycles WHERE owner_id = p_owner AND id = p_cycle FOR UPDATE NOWAIT;
+  IF c.consumption_policy <> 'CONSUMPTION_V1' THEN RETURN; END IF;
+  IF c.status IN ('COMPLETED', 'CANCELLED') THEN
+    RAISE EXCEPTION 'terminal V1 consumption source is immutable';
+  END IF;
+  PERFORM 1 FROM cycle_planning_snapshots WHERE owner_id = p_owner AND bake_cycle_id = p_cycle AND id = p_snapshot FOR UPDATE NOWAIT;
+  SELECT * INTO context_row FROM cycle_consumption_contexts
+    WHERE owner_id = p_owner AND bake_cycle_id = p_cycle AND planning_snapshot_id = p_snapshot FOR UPDATE NOWAIT;
+  IF context_row.id IS NULL AND c.status = 'LOCKED' THEN RETURN; END IF;
+  IF context_row.current_revision_id IS NULL THEN
+    RAISE EXCEPTION 'UNLOCK_BLOCKED: record pending consumption before unlocking';
+  END IF;
+  IF EXISTS (SELECT 1 FROM consumption_revision_items
+    WHERE owner_id = p_owner AND context_id = context_row.id AND used_quantity > 0) THEN
+    RAISE EXCEPTION 'UNLOCK_BLOCKED: historical positive use prevents unlocking';
+  END IF;
+END;
+$$ LANGUAGE plpgsql;--> statement-breakpoint
+
+CREATE FUNCTION enforce_cycle_consumption_lifecycle() RETURNS trigger AS $$
+DECLARE context_row cycle_consumption_contexts%ROWTYPE;
+BEGIN
+  IF NEW.consumption_policy <> 'CONSUMPTION_V1' THEN RETURN NEW; END IF;
+  IF OLD.status IN ('COMPLETED', 'CANCELLED') AND (
+    NEW.status IS DISTINCT FROM OLD.status OR NEW.active_planning_snapshot_id IS DISTINCT FROM OLD.active_planning_snapshot_id
+  ) THEN
+    RAISE EXCEPTION 'terminal V1 consumption source is immutable';
+  END IF;
+  IF OLD.status = 'IN_PRODUCTION' AND NEW.status = 'COMPLETED' THEN
+    PERFORM 1 FROM cycle_planning_snapshots WHERE owner_id = OLD.owner_id AND id = OLD.active_planning_snapshot_id FOR UPDATE NOWAIT;
+    SELECT * INTO context_row FROM cycle_consumption_contexts WHERE owner_id = OLD.owner_id
+      AND bake_cycle_id = OLD.id AND planning_snapshot_id = OLD.active_planning_snapshot_id FOR UPDATE NOWAIT;
+    IF context_row.current_revision_id IS NULL THEN
+      RAISE EXCEPTION 'PENDING_USE: record consumption before completing';
+    END IF;
+  END IF;
+  IF OLD.status IN ('LOCKED', 'IN_PRODUCTION') AND (
+    NEW.status = 'OPEN' OR NEW.active_planning_snapshot_id IS DISTINCT FROM OLD.active_planning_snapshot_id
+  ) THEN
+    PERFORM assert_consumption_unlock_allowed(OLD.owner_id, OLD.id, OLD.active_planning_snapshot_id);
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;--> statement-breakpoint
+-- PostgreSQL runs same-kind triggers by name. Keep Phase 4B's existing
+-- cycle_operations_lifecycle_guard first, preserving unfinished-work and
+-- operational-unlock blocker precedence before the additional V1 predicates.
+CREATE TRIGGER cycle_v1_consumption_lifecycle_guard BEFORE UPDATE OF status, active_planning_snapshot_id ON bake_cycles
+FOR EACH ROW EXECUTE FUNCTION enforce_cycle_consumption_lifecycle();--> statement-breakpoint
+
+CREATE FUNCTION enforce_consumption_snapshot_supersession() RETURNS trigger AS $$
+DECLARE c bake_cycles%ROWTYPE;
+BEGIN
+  IF OLD.status = 'ACTIVE' AND NEW.status <> 'ACTIVE' THEN
+    SELECT * INTO c FROM bake_cycles WHERE owner_id = OLD.owner_id AND id = OLD.bake_cycle_id FOR UPDATE NOWAIT;
+    IF c.active_planning_snapshot_id = OLD.id THEN
+      PERFORM assert_consumption_unlock_allowed(OLD.owner_id, OLD.bake_cycle_id, OLD.id);
+    END IF;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;--> statement-breakpoint
+CREATE TRIGGER consumption_snapshot_supersession_guard BEFORE UPDATE OF status ON cycle_planning_snapshots
+FOR EACH ROW EXECUTE FUNCTION enforce_consumption_snapshot_supersession();--> statement-breakpoint
+
 -- Ordinary COUNT has no bypass. Settlement authority is implemented separately
 -- when complete operation/revision/item links become available (Task 7).
 CREATE OR REPLACE FUNCTION lock_inventory_movement_item() RETURNS trigger AS $$

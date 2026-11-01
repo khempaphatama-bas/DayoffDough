@@ -1,5 +1,7 @@
 import { and, eq, sql } from "drizzle-orm";
-import { confirmConsumptionStock } from "@tests/fixtures/consumption";
+import { confirmConsumptionStock, prepareConsumptionFixture } from "@tests/fixtures/consumption";
+import { createConsumptionCommandService } from "@/modules/consumption/application/consumption-commands";
+import { cycleConsumptionContexts } from "@/modules/consumption/db/schema";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { OTHER_OWNER_ID, OWNER_ID } from "@tests/fixtures/owner";
 import { seedLockedPlanningScenario, seedPlanningScenario } from "@tests/fixtures/planning";
@@ -26,7 +28,7 @@ describe("cycle operations commands", () => {
 
   async function scenario(reusePreCutoverCycle = false) {
     const value = await seedLockedPlanningScenario(context.db, { reusePreCutoverCycle });
-    await confirmConsumptionStock(context.db, OWNER_ID, value.cycleId, value.planningSnapshotId);
+    if (!reusePreCutoverCycle) await confirmConsumptionStock(context.db, OWNER_ID, value.cycleId, value.planningSnapshotId);
     const [generation] = await context.db.select().from(cycleTaskGenerations).where(and(
       eq(cycleTaskGenerations.ownerId, OWNER_ID),
       eq(cycleTaskGenerations.planningSnapshotId, value.planningSnapshotId),
@@ -34,10 +36,15 @@ describe("cycle operations commands", () => {
     return { ...value, taskGenerationId: generation!.id };
   }
 
-  async function finishWork(s: Awaited<ReturnType<typeof scenario>>, options: { leavePaymentPartial?: boolean; skipped?: boolean } = {}) {
+  async function finishWork(s: Awaited<ReturnType<typeof scenario>>, options: { leavePaymentPartial?: boolean; skipped?: boolean; pendingUse?: boolean } = {}) {
     const commands = createOrderOperationsCommandService(context.db, CLOCK);
     const cycles = createCycleOperationsCommandService(context.db, CLOCK);
     await cycles.startCycle(OWNER_ID, { cycleId: s.cycleId });
+    const [cycle] = await context.db.select().from(bakeCycles).where(eq(bakeCycles.id, s.cycleId));
+    if (!options.pendingUse && cycle!.consumptionPolicy === "CONSUMPTION_V1") {
+      const { input } = await prepareConsumptionFixture(context.db, OWNER_ID, s.cycleId);
+      await createConsumptionCommandService(context.db).confirmUse(OWNER_ID, input);
+    }
     await commands.startOrders(OWNER_ID, { cycleId: s.cycleId, orderIds: s.orderIds.slice(0, 2) });
     for (const orderId of s.orderIds.slice(0, 2)) {
       const [item] = await context.db.select().from(orderItems).where(eq(orderItems.orderId, orderId!));
@@ -118,6 +125,50 @@ describe("cycle operations commands", () => {
     });
     const [cycle] = await context.db.select().from(bakeCycles).where(eq(bakeCycles.id, s.cycleId));
     expect(cycle).toMatchObject({ status: "COMPLETED", updatedAt: CLOCK.now() });
+  });
+
+  it("blocks completed tasks and delivered orders until V1 use is recorded", async () => {
+    const s = await scenario();
+    await finishWork(s, { pendingUse: true, leavePaymentPartial: true });
+    const cycles = createCycleOperationsCommandService(context.db);
+    await expect(cycles.completeCycle(OWNER_ID, completionInput(s))).rejects.toMatchObject({ kind: "PENDING_USE" });
+    expect((await context.db.select().from(bakeCycles).where(eq(bakeCycles.id, s.cycleId)))[0]!.status).toBe("IN_PRODUCTION");
+    const { input } = await prepareConsumptionFixture(context.db, OWNER_ID, s.cycleId);
+    await createConsumptionCommandService(context.db).confirmUse(OWNER_ID, input);
+    await expect(cycles.completeCycle(OWNER_ID, completionInput(s))).resolves.toMatchObject({ cycleStatus: "COMPLETED", unpaidOrderCount: 1, outstandingSatang: 42_000 });
+  });
+
+  it("preserves pre-cutover LEGACY start and completion without stock checks or consumption", async () => {
+    await context.close();
+    context = await createTestDatabase({ beforeConsumptionCutover: async (db) => {
+      await db.execute(sql`INSERT INTO bake_cycles (id, owner_id, name, status, target_production_date, primary_delivery_date)
+        VALUES ('10000000-0000-4000-8000-000000000009', ${OWNER_ID}, 'Legacy complete', 'OPEN', '2026-08-29', '2026-08-30')`);
+    } });
+    const s = await scenario(true);
+    await finishWork(s, { leavePaymentPartial: true });
+    await expect(createCycleOperationsCommandService(context.db).completeCycle(OWNER_ID, completionInput(s)))
+      .resolves.toMatchObject({ cycleStatus: "COMPLETED", unpaidOrderCount: 1, outstandingSatang: 42_000 });
+    expect((await createOperationsQueryService(context.db).getCycleOperations(OWNER_ID, s.cycleId)))
+      .toMatchObject({ consumption: { required: false, recorded: false, startBlockedByStockCheck: false } });
+  });
+
+  it("allows consumption correction after completion without reopening Operations or task mutations", async () => {
+    const s = await scenario();
+    await finishWork(s);
+    const cycles = createCycleOperationsCommandService(context.db);
+    await cycles.completeCycle(OWNER_ID, completionInput(s));
+    const [consumption] = await context.db.select().from(cycleConsumptionContexts);
+    const { input } = await prepareConsumptionFixture(context.db, OWNER_ID, s.cycleId);
+    await createConsumptionCommandService(context.db).correctUse(OWNER_ID, {
+      cycleId: input.cycleId, planningSnapshotId: input.planningSnapshotId, contextId: input.contextId,
+      requestId: MANUAL_ID, expectedRevisionId: consumption!.currentRevisionId!, reason: "Measured remaining stock",
+      expectedLedger: input.expectedLedger,
+      items: input.items.map((i) => ({ ...i, usedQuantity: "0", basis: "OWNER_REPORTED", reason: "Unused stock" })),
+    });
+    expect((await context.db.select().from(bakeCycles))[0]!.status).toBe("COMPLETED");
+    await expect(cycles.startCycle(OWNER_ID, { cycleId: s.cycleId })).rejects.toMatchObject({ kind: "INVALID_CYCLE_STATE" });
+    await expect(createOrderOperationsCommandService(context.db).startOrders(OWNER_ID, { cycleId: s.cycleId, orderIds: [s.orderIds[0]!] })).rejects.toMatchObject({ kind: "INVALID_CYCLE_STATE" });
+    await expect(context.db.update(cycleTasks).set({ status: "PENDING" }).where(eq(cycleTasks.cycleTaskGenerationId, s.taskGenerationId))).rejects.toThrow();
   });
 
   it("excludes soft-deleted manual tasks and cancelled orders from completion blockers", async () => {

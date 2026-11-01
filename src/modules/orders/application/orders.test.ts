@@ -1,5 +1,6 @@
 import { and, eq, sql } from "drizzle-orm";
 import { confirmConsumptionStock } from "@tests/fixtures/consumption";
+import { recordOperationsConsumption } from "@tests/fixtures/operations";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Logger } from "drizzle-orm/logger";
 import { OTHER_OWNER_ID, OWNER_ID } from "@tests/fixtures/owner";
@@ -575,6 +576,7 @@ describe("order service", () => {
             .where(eq(cycleTaskGenerations.planningSnapshotId, scenario.planningSnapshotId));
           await context.db.update(cycleTasks).set({ status: "DONE" })
             .where(eq(cycleTasks.cycleTaskGenerationId, generation!.id));
+          await recordOperationsConsumption(context.db, OWNER_ID, scenario.cycleId, true);
           await cycles.completeCycle(OWNER_ID, {
             cycleId: scenario.cycleId, expectedTaskGenerationId: generation!.id, confirmation: true,
           });

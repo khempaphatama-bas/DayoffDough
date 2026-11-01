@@ -1,5 +1,6 @@
 import { eq } from "drizzle-orm";
 import { confirmConsumptionStock } from "@tests/fixtures/consumption";
+import { recordOperationsConsumption } from "@tests/fixtures/operations";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { OTHER_OWNER_ID, OWNER_ID } from "@tests/fixtures/owner";
 import { seedLockedPlanningScenario } from "@tests/fixtures/planning";
@@ -116,6 +117,7 @@ describe("payment operations commands", () => {
     const [generation] = await context.db.select().from(cycleTaskGenerations)
       .where(eq(cycleTaskGenerations.planningSnapshotId, s.planningSnapshotId));
     await context.db.update(cycleTasks).set({ status: "DONE" }).where(eq(cycleTasks.cycleTaskGenerationId, generation!.id));
+    await recordOperationsConsumption(context.db, OWNER_ID, s.cycleId, true);
     await cycles.completeCycle(OWNER_ID, { cycleId: s.cycleId, expectedTaskGenerationId: generation!.id, confirmation: true });
     expect(await payment.setOrderAmountPaid(OWNER_ID, { orderId: s.orderId, targetAmountPaidSatang: 65_000, expectedAmountPaidSatang: 20_000 }))
       .toMatchObject({ amountPaidSatang: 65_000, paymentStatus: "PAID" });

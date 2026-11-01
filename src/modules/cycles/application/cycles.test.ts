@@ -1,6 +1,7 @@
 import { eq, sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { confirmConsumptionStock } from "@tests/fixtures/consumption";
+import { recordOperationsConsumption } from "@tests/fixtures/operations";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Logger } from "drizzle-orm/logger";
 import { OTHER_OWNER_ID, OWNER_ID } from "@tests/fixtures/owner";
@@ -339,6 +340,7 @@ describe("cycle service", () => {
           .where(eq(cycleTaskGenerations.planningSnapshotId, locked.id));
         await context.db.update(cycleTasks).set({ status: "DONE" })
           .where(eq(cycleTasks.cycleTaskGenerationId, generation!.id));
+        await recordOperationsConsumption(context.db, OWNER_ID, scenario.cycleId, true);
         await createCycleOperationsCommandService(context.db).completeCycle(OWNER_ID, {
           cycleId: scenario.cycleId, expectedTaskGenerationId: generation!.id, confirmation: true,
         });

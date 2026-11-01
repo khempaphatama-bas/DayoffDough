@@ -3,7 +3,7 @@ import { z } from "zod";
 import { lockOwnedBakeCycle, lockOwnedCycleTask, lockOwnedOrderItems, lockOwnedOrders } from "@/lib/db/row-locks";
 import type { DatabaseClient } from "@/lib/db/types";
 import { bakeCycles } from "@/modules/cycles/db/schema";
-import { registerPendingConsumption } from "@/modules/consumption/application/consumption-lifecycle";
+import { assertConsumptionCompleteAllowed, registerPendingConsumption } from "@/modules/consumption/application/consumption-lifecycle";
 import { rethrowConsumptionLockError } from "@/modules/consumption/application/count-barrier";
 import { orderItems, orders } from "@/modules/orders/db/schema";
 import { calculateOrderTotals } from "@/modules/orders/domain/totals";
@@ -147,6 +147,7 @@ export function createCycleOperationsCommandService(db: DatabaseClient, clock: O
             remainingOrderCount: completion.remainingOrderCount,
           });
         }
+        await assertConsumptionCompleteAllowed(tx, verifiedOwner, cycle.id, snapshot.id);
         if (cycle.status === "COMPLETED") return { cycleStatus: "COMPLETED" as const, ...completion };
         const [updated] = await tx.update(bakeCycles).set({ status: "COMPLETED", updatedAt: clock.now() })
           .where(and(
@@ -155,7 +156,7 @@ export function createCycleOperationsCommandService(db: DatabaseClient, clock: O
           )).returning();
         if (!updated) stale();
         return { cycleStatus: updated.status, ...completion };
-      });
+      }).catch(rethrowConsumptionLockError);
     },
   };
 }

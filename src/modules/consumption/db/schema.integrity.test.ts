@@ -13,6 +13,12 @@ import { writeConsumptionOperation, type PreparedConsumptionOperation } from "..
 import { createConsumptionCommandService } from "../application/consumption-commands";
 import { readStockLedger } from "@/modules/inventory/application/stock-ledger";
 import { canonicalizeUseRequest } from "../domain/request-manifest";
+import { cycleTasks } from "@/modules/production/db/schema";
+import { orderItems, orders } from "@/modules/orders/db/schema";
+import { createOrderOperationsCommandService } from "@/modules/operations/application/order-commands";
+import { bakeCycles } from "@/modules/cycles/db/schema";
+import { cyclePlanningSnapshots } from "@/modules/planning/db/schema";
+import { recordOperationsConsumption } from "@tests/fixtures/operations";
 
 const owner = "81000000-0000-4000-8000-000000000001";
 describe("ledger persistence integrity", () => {
@@ -28,6 +34,73 @@ describe("ledger persistence integrity", () => {
     movement = count!.id;
   });
   afterEach(async () => fixture?.close());
+
+  async function finishWork(s: Awaited<ReturnType<typeof seedConsumptionScenario>>) {
+    const operationalOrders = await fixture.db.select().from(orders).where(eq(orders.bakeCycleId, s.cycleId));
+    const ids = operationalOrders.filter((o) => o.fulfillmentStatus !== "CANCELLED").map((o) => o.id);
+    const commands = createOrderOperationsCommandService(fixture.db);
+    await commands.startOrders(OWNER_ID, { cycleId: s.cycleId, orderIds: ids });
+    for (const id of ids) {
+      const [item] = await fixture.db.select().from(orderItems).where(eq(orderItems.orderId, id));
+      await commands.setPackedQuantity(OWNER_ID, { cycleId: s.cycleId, orderItemId: item!.id, packedQuantity: item!.quantity, expectedPackedQuantity: 0 });
+      await commands.confirmOrderPacked(OWNER_ID, { cycleId: s.cycleId, orderId: id });
+    }
+    await commands.deliverOrders(OWNER_ID, { cycleId: s.cycleId, orderIds: ids });
+    await fixture.db.update(cycleTasks).set({ status: "DONE" }).where(eq(cycleTasks.cycleTaskGenerationId, s.taskGenerationId));
+  }
+
+  it("rejects raw completion of finished V1 work while consumption is pending", async () => {
+    const s = await seedConsumptionScenario(fixture.db);
+    await finishWork(s);
+    await expect(fixture.db.execute(sql`UPDATE bake_cycles SET status = 'COMPLETED' WHERE id = ${s.cycleId}`))
+      .rejects.toMatchObject({ cause: { message: expect.stringContaining("PENDING_USE") } });
+    const { input } = await prepareConsumptionFixture(fixture.db, OWNER_ID, s.cycleId);
+    await createConsumptionCommandService(fixture.db).confirmUse(OWNER_ID, input);
+    await fixture.db.execute(sql`UPDATE bake_cycles SET status = 'COMPLETED' WHERE id = ${s.cycleId}`);
+  });
+
+  it.each([
+    ["COMPLETED", "status"], ["COMPLETED", "pointer"], ["COMPLETED", "snapshot"],
+    ["CANCELLED", "status"], ["CANCELLED", "pointer"], ["CANCELLED", "snapshot"],
+  ] as const)("protects the V1 terminal %s %s after explicit zero use", async (status, target) => {
+    const s = await seedConsumptionScenario(fixture.db);
+    await recordOperationsConsumption(fixture.db, OWNER_ID, s.cycleId, true);
+    if (status === "COMPLETED") {
+      await finishWork(s);
+      await createCycleOperationsCommandService(fixture.db).completeCycle(OWNER_ID, {
+        cycleId: s.cycleId, expectedTaskGenerationId: s.taskGenerationId, confirmation: true,
+      });
+    } else await fixture.db.update(bakeCycles).set({ status }).where(eq(bakeCycles.id, s.cycleId));
+    const contextBefore = await fixture.db.select().from(cycleConsumptionContexts);
+    const movementsBefore = await fixture.db.select().from(inventoryMovements);
+    const mutation = target === "status" ? sql`UPDATE bake_cycles SET status = 'OPEN' WHERE id = ${s.cycleId}`
+      : target === "pointer" ? sql`UPDATE bake_cycles SET active_planning_snapshot_id = NULL WHERE id = ${s.cycleId}`
+      : sql`UPDATE cycle_planning_snapshots SET status = 'SUPERSEDED', unlocked_at = now(), unlock_reason = 'raw terminal bypass', unlocked_from_status = 'IN_PRODUCTION' WHERE id = ${s.planningSnapshotId}`;
+    await expect(fixture.db.execute(mutation)).rejects.toThrow();
+    expect((await fixture.db.select().from(bakeCycles).where(eq(bakeCycles.id, s.cycleId)))[0])
+      .toMatchObject({ status, activePlanningSnapshotId: s.planningSnapshotId });
+    expect((await fixture.db.select().from(cyclePlanningSnapshots).where(eq(cyclePlanningSnapshots.id, s.planningSnapshotId)))[0]!.status).toBe("ACTIVE");
+    expect(await fixture.db.select().from(cycleConsumptionContexts)).toEqual(contextBefore);
+    expect(await fixture.db.select().from(inventoryMovements)).toEqual(movementsBefore);
+    // The guard protects lifecycle identity, not unrelated terminal metadata.
+    await fixture.db.update(bakeCycles).set({ notes: "Historical note" }).where(eq(bakeCycles.id, s.cycleId));
+  });
+
+  it("keeps pending cancelled contexts protected from source supersession", async () => {
+    const s = await seedConsumptionScenario(fixture.db);
+    await fixture.db.update(bakeCycles).set({ status: "CANCELLED" }).where(eq(bakeCycles.id, s.cycleId));
+    await expect(fixture.db.execute(sql`UPDATE cycle_planning_snapshots SET status = 'SUPERSEDED', unlocked_at = now(), unlock_reason = 'pending terminal bypass', unlocked_from_status = 'IN_PRODUCTION' WHERE id = ${s.planningSnapshotId}`)).rejects.toThrow();
+    expect((await fixture.db.select().from(cycleConsumptionContexts))[0]!.currentRevisionId).toBeNull();
+  });
+
+  it.each(["cycle", "snapshot"])("rejects raw pending unlock through %s without dropping the current context", async (target) => {
+    const s = await seedConsumptionScenario(fixture.db);
+    const mutation = target === "cycle"
+      ? sql`UPDATE bake_cycles SET status = 'OPEN', active_planning_snapshot_id = NULL WHERE id = ${s.cycleId}`
+      : sql`UPDATE cycle_planning_snapshots SET status = 'SUPERSEDED', unlocked_at = now(), unlock_reason = 'raw bypass', unlocked_from_status = 'IN_PRODUCTION' WHERE id = ${s.planningSnapshotId}`;
+    await expect(fixture.db.execute(mutation)).rejects.toMatchObject({ cause: { message: expect.stringContaining("UNLOCK_BLOCKED") } });
+    expect((await fixture.db.select().from(cycleConsumptionContexts))[0]!.currentRevisionId).toBeNull();
+  });
 
   it("rejects an incomplete initial-use receipt at commit", async () => {
     await expect(fixture.db.execute(sql`INSERT INTO consumption_operations (owner_id, request_id, kind, manifest, revision_ids, count_movement_ids)
@@ -63,6 +136,14 @@ describe("ledger persistence integrity", () => {
     };
     return { s, input, prepared, confirmedAt: initial.confirmedAt, service };
   };
+
+  it("rejects raw unlock of historical positive use corrected to zero", async () => {
+    const { s, input, service } = await prepareCorrection();
+    const result = await service.correctUse(OWNER_ID, { ...input, items: input.items.map((i) => ({ ...i, usedQuantity: "0" })) });
+    expect((await fixture.db.select().from(consumptionRevisionItems).where(eq(consumptionRevisionItems.revisionId, result.revisionIds[0]!))).map((i) => i.usedQuantity)).toEqual(["0.000000", "0.000000"]);
+    await expect(fixture.db.execute(sql`UPDATE bake_cycles SET status = 'OPEN', active_planning_snapshot_id = NULL WHERE id = ${s.cycleId}`))
+      .rejects.toMatchObject({ cause: { message: expect.stringContaining("UNLOCK_BLOCKED") } });
+  });
 
   it.each(["skip", "predecessor", "fence", "delta", "mode", "movement type", "missing movement", "missing item", "missing pointer", "absolute target", "reason", "SETTLE"])("rejects raw CORRECT %s without moving the predecessor pointer", async (attack) => {
     const { prepared, confirmedAt } = await prepareCorrection();

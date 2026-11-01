@@ -117,6 +117,11 @@ export type CycleOperationsView =
       orders: readonly OperationsOrder[];
       cancelledOrders: readonly OperationsOrder[];
       completion: OperationsCompletion;
+      consumption: Readonly<{
+        required: boolean;
+        recorded: boolean;
+        startBlockedByStockCheck: boolean;
+      }>;
     }>
   | Readonly<{
       kind: "NO_GENERATION";

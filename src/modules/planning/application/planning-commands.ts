@@ -20,6 +20,8 @@ import type {
 } from "./planning-queries";
 import { persistPlanningSnapshot } from "./snapshot-writer";
 import { assertCycleOperationsUnlockAllowed } from "@/modules/operations/application/unlock-guard";
+import { assertConsumptionUnlockAllowed } from "@/modules/consumption/application/consumption-lifecycle";
+import { rethrowConsumptionLockError } from "@/modules/consumption/application/count-barrier";
 import {
   persistCycleTaskGeneration,
   type PersistCycleTaskGeneration,
@@ -110,6 +112,7 @@ export function createPlanningCommandService(
         }
 
         await assertUnlockAllowed(tx, verifiedOwnerId, cycle.id);
+        await assertConsumptionUnlockAllowed(tx, verifiedOwnerId, cycle.id, activeSnapshot.id);
 
         const unlockedAt = clock.now();
         const [superseded] = await tx
@@ -157,7 +160,7 @@ export function createPlanningCommandService(
           throw new PlanningStateError("Cycle changed while unlocking");
         }
         return toGenerationSummary(superseded);
-      });
+      }).catch(rethrowConsumptionLockError);
     },
 
     async lock(

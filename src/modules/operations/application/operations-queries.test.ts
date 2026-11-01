@@ -1,5 +1,7 @@
 import { eq, sql } from "drizzle-orm";
-import { confirmConsumptionStock } from "@tests/fixtures/consumption";
+import { confirmConsumptionStock, prepareConsumptionFixture } from "@tests/fixtures/consumption";
+import { createConsumptionCommandService } from "@/modules/consumption/application/consumption-commands";
+import { cycleInventoryCounts } from "@/modules/shopping/db/schema";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { OTHER_OWNER_ID, OWNER_ID } from "@tests/fixtures/owner";
 import {
@@ -60,6 +62,8 @@ describe("cycle operations query", () => {
     const commands = createOrderOperationsCommandService(context.db);
     await confirmConsumptionStock(context.db, OWNER_ID, scenario.cycleId);
     await cycles.startCycle(OWNER_ID, { cycleId: scenario.cycleId });
+    const { input } = await prepareConsumptionFixture(context.db, OWNER_ID, scenario.cycleId);
+    await createConsumptionCommandService(context.db).confirmUse(OWNER_ID, input);
     const activeOrderIds = scenario.orderIds.slice(0, 2);
     await commands.startOrders(OWNER_ID, { cycleId: scenario.cycleId, orderIds: activeOrderIds });
     for (const orderId of activeOrderIds) {
@@ -70,6 +74,26 @@ describe("cycle operations query", () => {
     }
     await commands.deliverOrders(OWNER_ID, { cycleId: scenario.cycleId, orderIds: activeOrderIds });
   }
+
+  it("reports exact V1 stock-check and recorded-use metadata without changing completion counters", async () => {
+    const s = await seedLockedPlanningScenario(context.db);
+    const before = await readyView(s.cycleId);
+    expect(before).toMatchObject({ consumption: { required: true, recorded: false, startBlockedByStockCheck: true } });
+    await confirmConsumptionStock(context.db, OWNER_ID, s.cycleId);
+    expect(await readyView(s.cycleId)).toMatchObject({ consumption: { required: true, recorded: false, startBlockedByStockCheck: false }, completion: before.completion });
+    await createCycleOperationsCommandService(context.db).startCycle(OWNER_ID, { cycleId: s.cycleId });
+    expect(await readyView(s.cycleId)).toMatchObject({ consumption: { required: true, recorded: false, startBlockedByStockCheck: false } });
+    const { input } = await prepareConsumptionFixture(context.db, OWNER_ID, s.cycleId);
+    await createConsumptionCommandService(context.db).confirmUse(OWNER_ID, input);
+    expect(await readyView(s.cycleId)).toMatchObject({ consumption: { required: true, recorded: true, startBlockedByStockCheck: false }, completion: before.completion });
+  });
+
+  it("reports a partial current-generation stock check as start-blocked", async () => {
+    const s = await seedLockedPlanningScenario(context.db);
+    await confirmConsumptionStock(context.db, OWNER_ID, s.cycleId);
+    await context.db.delete(cycleInventoryCounts).where(eq(cycleInventoryCounts.inventoryItemId, s.ingredientItemId));
+    expect(await readyView(s.cycleId)).toMatchObject({ consumption: { required: true, recorded: false, startBlockedByStockCheck: true } });
+  });
 
   it("supplies all owner-scoped active products for task editing, not only task products", async () => {
     const scenario = await seedLockedPlanningScenario(context.db);

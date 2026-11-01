@@ -25,6 +25,9 @@ import {
 } from "@/modules/planning/db/schema";
 import { products } from "@/modules/products/db/schema";
 import { cycleTaskGenerations, cycleTasks } from "@/modules/production/db/schema";
+import { cycleConsumptionContexts } from "@/modules/consumption/db/schema";
+import { loadConsumptionSource } from "@/modules/consumption/application/load-consumption-source";
+import { cycleInventoryCounts } from "@/modules/shopping/db/schema";
 
 const uuidSchema = z.string().uuid();
 const SYSTEM_CLOCK: OperationsClock = { now: () => new Date() };
@@ -312,6 +315,21 @@ export function createOperationsQueryService(
           };
         }).sort(compareOperationsOrders);
 
+      const consumptionRequired = cycle.consumptionPolicy === "CONSUMPTION_V1";
+      const [consumptionContext] = consumptionRequired ? await db.select().from(cycleConsumptionContexts).where(and(
+        eq(cycleConsumptionContexts.ownerId, verifiedOwnerId), eq(cycleConsumptionContexts.bakeCycleId, cycle.id),
+        eq(cycleConsumptionContexts.planningSnapshotId, snapshot.id),
+      )).limit(1) : [];
+      let startBlockedByStockCheck = false;
+      if (consumptionRequired && cycle.status === "LOCKED") {
+        const source = await loadConsumptionSource(db, verifiedOwnerId, snapshot.id);
+        const counts = await db.select().from(cycleInventoryCounts).where(and(
+          eq(cycleInventoryCounts.ownerId, verifiedOwnerId), eq(cycleInventoryCounts.bakeCycleId, cycle.id),
+          eq(cycleInventoryCounts.planningSnapshotId, snapshot.id),
+        ));
+        startBlockedByStockCheck = !sameIds(source.map((i) => i.inventoryItemId), counts.map((i) => i.inventoryItemId));
+      }
+
       return {
         kind: "READY",
         cycle: toHeader(cycle, snapshot),
@@ -327,6 +345,7 @@ export function createOperationsQueryService(
         orders: activeOrders,
         cancelledOrders,
         completion: buildOperationsCompletion(tasks, activeOrders),
+        consumption: { required: consumptionRequired, recorded: consumptionContext?.currentRevisionId != null, startBlockedByStockCheck },
       };
     },
   };

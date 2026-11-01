@@ -8,6 +8,7 @@ import type { Logger } from "drizzle-orm/logger";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OTHER_OWNER_ID, OWNER_ID } from "@tests/fixtures/owner";
 import { seedLockedPlanningScenario } from "@tests/fixtures/planning";
+import { recordOperationsConsumption } from "@tests/fixtures/operations";
 import { createTestDatabase } from "@tests/helpers/test-db";
 import { lockOwnedInventoryItems } from "@/lib/db/row-locks";
 import { bakeCycles } from "@/modules/cycles/db/schema";
@@ -70,6 +71,8 @@ async function completeOperations(db: Context["db"], fixture: Fixture) {
     .where(eq(cycleTaskGenerations.planningSnapshotId, fixture.planningSnapshotId));
   await db.update(cycleTasks).set({ status: "DONE" })
     .where(eq(cycleTasks.cycleTaskGenerationId, generation!.id));
+  const [cycle] = await db.select().from(bakeCycles).where(eq(bakeCycles.id, fixture.cycleId));
+  if (cycle!.consumptionPolicy === "CONSUMPTION_V1") await recordOperationsConsumption(db, OWNER_ID, fixture.cycleId, true);
   await cycles.completeCycle(OWNER_ID, {
     cycleId: fixture.cycleId, expectedTaskGenerationId: generation!.id, confirmation: true,
   });
@@ -536,7 +539,15 @@ describe("shopping command service", () => {
   });
 
   it("rejects ownership, snapshot, and non-writable cycle lifecycle mismatches", async () => {
-    const fixture = await seedLockedPlanningScenario(context.db);
+    // This historical case intentionally supersedes an already terminal source.
+    // New V1 terminal sources are immutable; retain the old compatibility proof
+    // through the real migration boundary, not a runtime policy opt-out.
+    await context.close();
+    context = await createTestDatabase({ beforeConsumptionCutover: async (db) => {
+      await db.execute(sql`INSERT INTO bake_cycles (id, owner_id, name, status, target_production_date, primary_delivery_date)
+        VALUES ('10000000-0000-4000-8000-000000000009', ${OWNER_ID}, 'Legacy shopping lifecycle', 'OPEN', '2026-08-29', '2026-08-30')`);
+    } });
+    const fixture = await seedLockedPlanningScenario(context.db, { reusePreCutoverCycle: true });
     const service = createShoppingCommandService(context.db, CLOCK);
 
     await expect(service.confirmStock(OTHER_OWNER_ID, confirmInput(fixture))).rejects.toBeInstanceOf(ShoppingStateError);
