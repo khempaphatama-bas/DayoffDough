@@ -6,10 +6,13 @@ import { requireOwner } from "@/lib/auth/require-owner";
 import { db } from "@/lib/db/client";
 import { createInventoryService } from "@/modules/inventory/application/inventory";
 import { parseBahtToSatang } from "@/modules/money/domain/money";
+import { createConsumptionActionSupport } from "@/modules/consumption/application/action-support";
+import { ConsumptionStateError, type ConsumptionBlocker } from "@/modules/consumption/domain/types";
 
 export type InventoryActionState = Readonly<{
   error: string | null;
   saved: boolean;
+  blockers?: readonly ConsumptionBlocker[];
 }>;
 
 const itemSchema = z.object({
@@ -118,7 +121,13 @@ export async function recordInventoryCountAction(
     revalidatePath(`/inventory/${parsed.data.itemId}`);
     revalidatePath("/inventory");
     return { error: null, saved: true };
-  } catch {
+  } catch (error) {
+    if (error instanceof ConsumptionStateError) {
+      try {
+        const safe = await createConsumptionActionSupport(db).mapError(owner.id, error);
+        if (safe) return { error: safe.error, saved: false, blockers: safe.blockers };
+      } catch { /* Keep database errors private. */ }
+    }
     return { error: "บันทึกยอดนับไม่สำเร็จ กรุณาตรวจสอบจำนวน", saved: false };
   }
 }

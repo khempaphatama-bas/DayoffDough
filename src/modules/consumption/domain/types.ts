@@ -36,6 +36,15 @@ export type ConsumptionWriteResult = Readonly<{
   operationId: string; revisionIds: readonly string[];
   countMovementIds: readonly string[]; replayed: boolean;
 }>;
+export type ConsumptionBlocker = Readonly<{ cycleId: string; cycleName: string }>;
+export type ConsumptionActionState = Readonly<{
+  error: string | null;
+  fieldErrors: Readonly<Record<string, string>>;
+  saved: boolean;
+  stale: boolean;
+  result: ConsumptionWriteResult | null;
+  blockers: readonly ConsumptionBlocker[];
+}>;
 export type ConsumptionClock = Readonly<{ now(): Date }>;
 export type ConsumptionRequirement = Pick<SnapshotRequirementInput,
   "inventoryItemId" | "inventoryItemName" | "inventoryCategory" | "baseUnit"
