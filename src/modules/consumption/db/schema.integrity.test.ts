@@ -3,7 +3,7 @@ import { eq, sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createTestDatabase } from "@tests/helpers/test-db";
 import { inventoryItems, inventoryMovements } from "@/modules/inventory/db/schema";
-import { confirmConsumptionStock, prepareConsumptionFixture, seedConsumptionScenario } from "@tests/fixtures/consumption";
+import { confirmConsumptionStock, prepareConsumptionFixture, seedConsumptionScenario, seedSharedConsumptionScenario } from "@tests/fixtures/consumption";
 import { OWNER_ID } from "@tests/fixtures/owner";
 import { seedLockedPlanningScenario } from "@tests/fixtures/planning";
 import { createCycleOperationsCommandService } from "@/modules/operations/application/cycle-commands";
@@ -19,6 +19,7 @@ import { createOrderOperationsCommandService } from "@/modules/operations/applic
 import { bakeCycles } from "@/modules/cycles/db/schema";
 import { cyclePlanningSnapshots } from "@/modules/planning/db/schema";
 import { recordOperationsConsumption } from "@tests/fixtures/operations";
+import { StorageDecimal } from "@/modules/shopping/domain/storage";
 
 const owner = "81000000-0000-4000-8000-000000000001";
 describe("ledger persistence integrity", () => {
@@ -34,6 +35,92 @@ describe("ledger persistence integrity", () => {
     movement = count!.id;
   });
   afterEach(async () => fixture?.close());
+
+  async function prepareSettlement(cycleId?: string) {
+    const s = cycleId ? { cycleId, itemIds: ["10000000-0000-4000-8000-000000000001", "10000000-0000-4000-8000-000000000002"] } : await seedConsumptionScenario(fixture.db);
+    const { input, prepared, confirmedAt } = await prepareConsumptionFixture(fixture.db, OWNER_ID, s.cycleId);
+    const countId = randomUUID();
+    const counted = s.itemIds[0]!;
+    const ledger = await readStockLedger(fixture.db, OWNER_ID, s.itemIds);
+    const settlement = { requestId: input.requestId, contexts: [{ cycleId: input.cycleId,
+      planningSnapshotId: input.planningSnapshotId, contextId: input.contextId, items: input.items, confirmTakenOutOfUse: true as const }],
+      counts: [{ inventoryItemId: counted, remainingQuantity: "25" }], expectedLedger: input.expectedLedger, reason: "Measured remainder" };
+    const valid: PreparedConsumptionOperation = { ...prepared,
+      operation: { ...prepared.operation, kind: "SETTLE", canonicalManifest: canonicalizeUseRequest("SETTLE", settlement), resultCountMovementIds: [countId] },
+      revisions: prepared.revisions.map((r) => ({ ...r, reason: settlement.reason })),
+      revisionItems: prepared.revisionItems.map((i) => i.inventoryItemId === counted ? { ...i, mode: "COUNT_SETTLED", quantityDelta: "0", settlementCountMovementId: countId } : i),
+      usageMovements: prepared.usageMovements.map((m) => m.inventoryItemId === counted ? { ...m, quantityDeltaInBaseUnit: "0" } : m),
+      countMovements: [{ id: countId, ownerId: OWNER_ID, inventoryItemId: counted, type: "COUNT", countedQuantityInBaseUnit: "25",
+        quantityDeltaInBaseUnit: new StorageDecimal(25).minus(ledger.find((l) => l.inventoryItemId === counted)!.balance).toFixed(),
+        referenceType: "CONSUMPTION_OPERATION", referenceId: prepared.operation.id, occurredAt: confirmedAt, notes: settlement.reason }],
+    };
+    return { valid, counted, countId, confirmedAt };
+  }
+
+  it("accepts complete structural selective settlement without a bypass flag", async () => {
+    const { valid, counted, countId, confirmedAt } = await prepareSettlement();
+    const result = await fixture.db.transaction((tx) => writeConsumptionOperation(tx, OWNER_ID, valid, confirmedAt));
+    expect(result.countMovementIds).toEqual([countId]);
+    expect((await readStockLedger(fixture.db, OWNER_ID, [counted]))[0]!.balance).toBe("25");
+  });
+
+  it.each(["missing COUNT", "wrong delta", "wrong remaining", "wrong operation link", "wrong item link", "missing source line", "missing pointer", "wrong receipt", "uncounted zero effect", "unconfirmed context", "duplicate token"])("rejects raw settlement %s atomically", async (attack) => {
+    const { valid, confirmedAt, counted } = await prepareSettlement();
+    let bad = valid;
+    if (attack === "missing COUNT") bad = { ...bad, countMovements: [] };
+    if (attack === "wrong delta") bad = { ...bad, countMovements: bad.countMovements.map((m) => ({ ...m, quantityDeltaInBaseUnit: "0" })) };
+    if (attack === "wrong remaining") bad = { ...bad, countMovements: bad.countMovements.map((m) => ({ ...m, countedQuantityInBaseUnit: "26" })) };
+    if (attack === "wrong operation link") bad = { ...bad, countMovements: bad.countMovements.map((m) => ({ ...m, referenceId: randomUUID() })) };
+    if (attack === "wrong item link") bad = { ...bad, revisionItems: bad.revisionItems.map((i) => i.inventoryItemId === counted ? { ...i, settlementCountMovementId: randomUUID() } : i) };
+    if (attack === "missing source line") bad = { ...bad, revisionItems: bad.revisionItems.filter((i) => i.inventoryItemId === counted), usageMovements: bad.usageMovements.filter((m) => m.inventoryItemId === counted) };
+    if (attack === "missing pointer") bad = { ...bad, pointerUpdates: [] };
+    if (attack === "wrong receipt") bad = { ...bad, operation: { ...bad.operation, resultCountMovementIds: [...bad.operation.resultCountMovementIds, randomUUID()] } };
+    if (attack === "uncounted zero effect") bad = { ...bad, revisionItems: bad.revisionItems.map((i) => i.inventoryItemId !== counted ? { ...i, quantityDelta: "0" } : i), usageMovements: bad.usageMovements.map((m) => m.inventoryItemId !== counted ? { ...m, quantityDeltaInBaseUnit: "0" } : m) };
+    if (["unconfirmed context", "duplicate token"].includes(attack)) {
+      const manifest = JSON.parse(bad.operation.canonicalManifest);
+      if (attack === "unconfirmed context") manifest.contexts[0].confirmTakenOutOfUse = false;
+      else manifest.expectedLedger.push(manifest.expectedLedger[0]);
+      bad = { ...bad, operation: { ...bad.operation, canonicalManifest: JSON.stringify(manifest) } };
+    }
+    const before = await fixture.db.select().from(inventoryMovements);
+    await expect(fixture.db.transaction((tx) => writeConsumptionOperation(tx, OWNER_ID, bad, confirmedAt))).rejects.toThrow();
+    expect(await fixture.db.select().from(consumptionOperations)).toEqual([]);
+    expect(await fixture.db.select().from(inventoryMovements)).toEqual(before);
+  });
+
+  it("rejects raw omission of another pending counted context", async () => {
+    const shared = await seedSharedConsumptionScenario(fixture.db, "20");
+    const { valid, confirmedAt } = await prepareSettlement(shared.contexts[0]!.cycleId);
+    await expect(fixture.db.transaction((tx) => writeConsumptionOperation(tx, OWNER_ID, valid, confirmedAt)))
+      .rejects.toMatchObject({ cause: { message: "COUNT requires the exact complete pending settlement" } });
+    expect(await fixture.db.select().from(consumptionOperations)).toEqual([]);
+  });
+
+  it("rejects fake settlement flags and orphan operation references on ordinary COUNT", async () => {
+    const s = await seedConsumptionScenario(fixture.db);
+    await expect(fixture.db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT set_config('app.consumption_settlement', 'true', true)`);
+      await tx.insert(inventoryMovements).values({ ownerId: OWNER_ID, inventoryItemId: s.itemIds[0]!, type: "COUNT",
+        quantityDeltaInBaseUnit: "0", countedQuantityInBaseUnit: "2200", occurredAt: new Date() });
+    })).rejects.toMatchObject({ cause: { message: "PENDING_USE: record pending consumption before counting stock" } });
+    await expect(fixture.db.insert(inventoryMovements).values({ ownerId: OWNER_ID, inventoryItemId: s.itemIds[0]!, type: "COUNT",
+      quantityDeltaInBaseUnit: "0", countedQuantityInBaseUnit: "2200", occurredAt: new Date(), referenceType: "CONSUMPTION_OPERATION", referenceId: randomUUID() }))
+      .rejects.toMatchObject({ cause: { message: "COUNT requires complete owned settlement authority" } });
+  });
+
+  it("rejects an unrelated event between settlement audits and COUNT", async () => {
+    const { valid, counted, confirmedAt } = await prepareSettlement();
+    await expect(fixture.db.transaction(async (tx) => {
+      const { canonicalManifest, resultRevisionIds, resultCountMovementIds, ...operation } = valid.operation;
+      await tx.insert(consumptionOperations).values({ ...operation, manifest: canonicalManifest, revisionIds: [...resultRevisionIds], countMovementIds: [...resultCountMovementIds], createdAt: confirmedAt });
+      await tx.insert(consumptionRevisions).values(valid.revisions.map((r) => ({ ...r, confirmedAt })));
+      await tx.insert(consumptionRevisionItems).values([...valid.revisionItems]);
+      for (const m of valid.usageMovements) await tx.insert(inventoryMovements).values(m);
+      await tx.insert(inventoryMovements).values({ ownerId: OWNER_ID, inventoryItemId: counted, type: "PURCHASE", quantityDeltaInBaseUnit: "0", occurredAt: confirmedAt });
+      await tx.insert(inventoryMovements).values([...valid.countMovements]);
+    })).rejects.toMatchObject({ cause: { message: "consumption requires current applied ledger tokens" } });
+    expect(await fixture.db.select().from(consumptionOperations)).toEqual([]);
+  });
 
   async function finishWork(s: Awaited<ReturnType<typeof seedConsumptionScenario>>) {
     const operationalOrders = await fixture.db.select().from(orders).where(eq(orders.bakeCycleId, s.cycleId));

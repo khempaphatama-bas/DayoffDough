@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import type { DatabaseClient } from "@/lib/db/types";
 import { createCycleOperationsCommandService } from "@/modules/operations/application/cycle-commands";
-import { cycleTaskGenerations } from "@/modules/production/db/schema";
+import { cycleTaskGenerations, productionTemplates, productionTemplateActivities } from "@/modules/production/db/schema";
 import { bakeCycles } from "@/modules/cycles/db/schema";
 import { loadShoppingSource } from "@/modules/shopping/application/load-shopping-source";
 import { createShoppingCommandService } from "@/modules/shopping/application/shopping-commands";
@@ -14,6 +14,13 @@ import type { ConfirmUseInput } from "@/modules/consumption/domain/types";
 import { canonicalQuantity } from "@/modules/consumption/domain/rules";
 import { canonicalizeUseRequest } from "@/modules/consumption/domain/request-manifest";
 import type { PreparedConsumptionOperation } from "@/modules/consumption/application/command-support";
+import { orders, orderItems } from "@/modules/orders/db/schema";
+import { products, recipes, recipeVersions } from "@/modules/products/db/schema";
+import { productPackagingRules } from "@/modules/delivery/db/schema";
+import { createPlanningQueryService } from "@/modules/planning/application/planning-queries";
+import { createPlanningCommandService } from "@/modules/planning/application/planning-commands";
+import { inventoryMovements } from "@/modules/inventory/db/schema";
+import { StorageDecimal } from "@/modules/shopping/domain/storage";
 
 // Complete legitimate initial-use rows for raw SQL integrity tests. Quantities
 // follow the immutable source, and callers mutate only the attack under test.
@@ -69,4 +76,47 @@ export async function seedConsumptionScenario(db: DatabaseClient, input: {
   if (input.start !== false) await createCycleOperationsCommandService(db).startCycle(ownerId, { cycleId: s.cycleId });
   return { cycleId: s.cycleId, planningSnapshotId: s.planningSnapshotId, taskGenerationId: generation!.id,
     itemIds: [s.ingredientItemId, s.packagingItemId] };
+}
+
+// Three real locked sources: two share flour+boxes; a packaging-only product
+// gives the third a boxes-only source. All initial checks happen before start.
+export async function seedSharedConsumptionScenario(db: DatabaseClient, boxesBalance = "12") {
+  const first = await seedConsumptionScenario(db, { start: false });
+  const [order] = await db.select().from(orders).where(eq(orders.bakeCycleId, first.cycleId));
+  const [line] = await db.select().from(orderItems).where(eq(orderItems.orderId, order!.id));
+  const [packProduct] = await db.insert(products).values({ ownerId: OWNER_ID, name: "Packaging-only product", sellingUnit: "piece", defaultUnitPriceSatang: 100 }).returning();
+  const [recipe] = await db.insert(recipes).values({ ownerId: OWNER_ID, productId: packProduct!.id, name: "Packaging-only recipe" }).returning();
+  const [version] = await db.insert(recipeVersions).values({ ownerId: OWNER_ID, recipeId: recipe!.id, versionCode: "v1",
+    baseYieldQuantity: "1", yieldUnit: "piece", laborMinutesPerBatch: 0, utilityCostSatangPerBatch: 0, instructions: "Pack prepared product" }).returning();
+  await db.update(products).set({ activeRecipeVersionId: version!.id }).where(eq(products.id, packProduct!.id));
+  const [template] = await db.insert(productionTemplates).values({ ownerId: OWNER_ID, name: "Packaging-only production", scope: "PRODUCT", productId: packProduct!.id, active: true }).returning();
+  await db.insert(productionTemplateActivities).values({ ownerId: OWNER_ID, productionTemplateId: template!.id,
+    name: "Pack prepared product", offsetDaysFromDelivery: 1, defaultTime: "05:00", estimatedDurationMinutes: 10, sequence: 1, active: true });
+  await db.insert(productPackagingRules).values({ ownerId: OWNER_ID, scope: "PRODUCT", productId: packProduct!.id,
+    inventoryItemId: first.itemIds[1]!, consumptionBasis: "PER_PRODUCT_UNIT", quantityInBaseUnit: "1" });
+  async function addCycle(productId: string, name: string) {
+    const [cycle] = await db.insert(bakeCycles).values({ ownerId: OWNER_ID, name, status: "OPEN",
+      targetProductionDate: "2026-08-29", primaryDeliveryDate: "2026-08-30" }).returning();
+    const [added] = await db.insert(orders).values({ ownerId: OWNER_ID, bakeCycleId: cycle!.id, customerId: order!.customerId,
+      confirmedDeliveryDate: "2026-08-30", deliveryMethodId: order!.deliveryMethodId, deliveryLocation: order!.deliveryLocation,
+      fulfillmentStatus: "CONFIRMED" }).returning();
+    await db.insert(orderItems).values({ ownerId: OWNER_ID, orderId: added!.id, productId, quantity: 1, unitPriceSatang: 100, position: 0 });
+    const preview = await createPlanningQueryService(db).preview(OWNER_ID, cycle!.id);
+    if (preview.blockers.length) throw new Error(`Shared fixture ${name}: ${JSON.stringify(preview.blockers)}`);
+    await createPlanningCommandService(db).lock(OWNER_ID, { cycleId: cycle!.id, lockRequestId: randomUUID(), inputFingerprint: preview.inputFingerprint, overrides: [] });
+    await confirmConsumptionStock(db, OWNER_ID, cycle!.id);
+    return cycle!.id;
+  }
+  const second = await addCycle(line!.productId, "Second shared source");
+  const boxesOnly = await addCycle(packProduct!.id, "Uncounted-only source");
+  const ledger = await readStockLedger(db, OWNER_ID, first.itemIds);
+  for (const [index, inventoryItemId] of first.itemIds.entries()) {
+    const remaining = index === 0 ? "50" : boxesBalance;
+    await db.insert(inventoryMovements).values({ ownerId: OWNER_ID, inventoryItemId, type: "COUNT", countedQuantityInBaseUnit: remaining,
+      quantityDeltaInBaseUnit: new StorageDecimal(remaining).minus(ledger.find((l) => l.inventoryItemId === inventoryItemId)!.balance).toFixed(), occurredAt: new Date() });
+  }
+  for (const cycleId of [first.cycleId, second, boxesOnly]) await createCycleOperationsCommandService(db).startCycle(OWNER_ID, { cycleId });
+  const contexts = [];
+  for (const cycleId of [first.cycleId, second, boxesOnly]) contexts.push((await prepareConsumptionFixture(db, OWNER_ID, cycleId)).input);
+  return { itemIds: first.itemIds, contexts };
 }

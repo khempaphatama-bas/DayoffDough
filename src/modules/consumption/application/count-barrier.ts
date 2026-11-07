@@ -2,7 +2,14 @@ import { and, eq, inArray, isNull } from "drizzle-orm";
 import type { DatabaseClient, DatabaseTransaction } from "@/lib/db/types";
 import { bakeCycles } from "@/modules/cycles/db/schema";
 import { cycleConsumptionContexts, cycleConsumptionItems } from "../db/schema";
-import { ConsumptionStateError } from "../domain/types";
+import { ConsumptionStateError, type ConsumptionSource } from "../domain/types";
+
+export function assertExactPendingContexts(pending: readonly ConsumptionSource[], submitted: readonly ConsumptionSource[]): void {
+  if (pending.length !== submitted.length || pending.some((row) => !submitted.some((input) =>
+    input.contextId === row.contextId && input.cycleId === row.cycleId && input.planningSnapshotId === row.planningSnapshotId))) {
+    throw new ConsumptionStateError("STALE_DATA", "Pending consumption changed; refresh and try again");
+  }
+}
 
 // Drizzle wraps PostgreSQL errors in cause. Preserve unrelated/domain errors,
 // and never leak SQL or retry a non-idempotent write on upstream lock contention.

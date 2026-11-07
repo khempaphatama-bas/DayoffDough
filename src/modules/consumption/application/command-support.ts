@@ -79,7 +79,9 @@ export async function writeConsumptionOperation(tx: Tx, ownerId: string, prepare
   // Only movement FKs are deferred: the durable lineage is present before an
   // event is applied, including the future settlement COUNT authority check.
   if (prepared.revisionItems.length) await tx.insert(consumptionRevisionItems).values(prepared.revisionItems.map((row) => ({ ...row, ownerId })));
-  if (prepared.usageMovements.length) await tx.insert(inventoryMovements).values(prepared.usageMovements.map((row) => ({ ...row, ownerId, occurredAt: confirmedAt, createdAt: confirmedAt })));
+  // Apply each audit as a separate statement: its AFTER INSERT token must be
+  // visible to the next same-item audit's event-boundary check.
+  for (const row of prepared.usageMovements) await tx.insert(inventoryMovements).values({ ...row, ownerId, occurredAt: confirmedAt, createdAt: confirmedAt });
   if (prepared.countMovements.length) await tx.insert(inventoryMovements).values(prepared.countMovements.map((row) => ({ ...row, ownerId, occurredAt: confirmedAt, createdAt: confirmedAt })));
   for (const pointer of prepared.pointerUpdates) {
     const updated = await tx.update(cycleConsumptionContexts).set({ currentRevisionId: pointer.newRevisionId }).where(and(
