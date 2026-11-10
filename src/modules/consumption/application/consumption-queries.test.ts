@@ -141,14 +141,28 @@ describe("consumption read models", () => {
   });
 
   it("returns only counted-item closure with full contexts and one batched union ledger snapshot", async () => {
-    const s = await seedSharedConsumptionScenario(fixture.db);
+    const s = await seedSharedConsumptionScenario(fixture.db, "12", { secondCycleId: "00000000-0000-4000-8000-000000000009" });
     await seedConsumptionScenario(fixture.db, { ownerId: OTHER_OWNER_ID, idSet: "SECONDARY" });
     queries.length = 0;
     const view = await service.getSettlementPreview(OWNER_ID, [s.itemIds[0]!]);
     expect(view.countedItemIds).toEqual([s.itemIds[0]]);
     expect(view.contexts.map((context) => context.source.contextId).sort()).toEqual(s.contexts.slice(0, 2).map((context) => context.contextId).sort());
     expect(view.contexts.every((context) => context.items.length === 2)).toBe(true);
-    expect(view.contexts[0]!.items.map((item) => [item.inventoryItemId, item.mode, item.quantityDelta])).toEqual([[s.itemIds[0], "COUNT_SETTLED", "0"], [s.itemIds[1], "DIRECT", "-14"]]);
+    // Query order is Cycle UUID order, not fixture insertion order. Deliberately
+    // put the second source first and verify both associations by context ID.
+    expect(view.contexts.map((context) => context.source.cycleId)).toEqual([
+      "00000000-0000-4000-8000-000000000009", "10000000-0000-4000-8000-000000000009",
+    ]);
+    const original = view.contexts.find((context) => context.source.contextId === s.contexts[0]!.contextId);
+    const second = view.contexts.find((context) => context.source.contextId === s.contexts[1]!.contextId);
+    expect(original?.source).toEqual({ cycleId: "10000000-0000-4000-8000-000000000009", planningSnapshotId: s.contexts[0]!.planningSnapshotId, contextId: s.contexts[0]!.contextId });
+    expect(second?.source).toEqual({ cycleId: "00000000-0000-4000-8000-000000000009", planningSnapshotId: s.contexts[1]!.planningSnapshotId, contextId: s.contexts[1]!.contextId });
+    expect(original?.items.map((item) => [item.inventoryItemId, item.usedQuantity, item.mode, item.quantityDelta])).toEqual([
+      [s.itemIds[0], "2200", "COUNT_SETTLED", "0"], [s.itemIds[1], "14", "DIRECT", "-14"],
+    ]);
+    expect(second?.items.map((item) => [item.inventoryItemId, item.usedQuantity, item.mode, item.quantityDelta])).toEqual([
+      [s.itemIds[0], "1100", "COUNT_SETTLED", "0"], [s.itemIds[1], "7", "DIRECT", "-7"],
+    ]);
     expect(view.counts).toEqual([{ inventoryItemId: s.itemIds[0], remainingQuantity: null, mode: "COUNT", quantityDelta: null }]);
     expect(view.expectedLedger.map((item) => item.inventoryItemId)).toEqual(s.itemIds);
     expect(view.stock.map((item) => item.balance)).toEqual(["50", "12"]);

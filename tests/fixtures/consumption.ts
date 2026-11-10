@@ -80,7 +80,7 @@ export async function seedConsumptionScenario(db: DatabaseClient, input: {
 
 // Three real locked sources: two share flour+boxes; a packaging-only product
 // gives the third a boxes-only source. All initial checks happen before start.
-export async function seedSharedConsumptionScenario(db: DatabaseClient, boxesBalance = "12") {
+export async function seedSharedConsumptionScenario(db: DatabaseClient, boxesBalance = "12", ids: Readonly<{ secondCycleId?: string }> = {}) {
   const first = await seedConsumptionScenario(db, { start: false });
   const [order] = await db.select().from(orders).where(eq(orders.bakeCycleId, first.cycleId));
   const [line] = await db.select().from(orderItems).where(eq(orderItems.orderId, order!.id));
@@ -94,8 +94,8 @@ export async function seedSharedConsumptionScenario(db: DatabaseClient, boxesBal
     name: "Pack prepared product", offsetDaysFromDelivery: 1, defaultTime: "05:00", estimatedDurationMinutes: 10, sequence: 1, active: true });
   await db.insert(productPackagingRules).values({ ownerId: OWNER_ID, scope: "PRODUCT", productId: packProduct!.id,
     inventoryItemId: first.itemIds[1]!, consumptionBasis: "PER_PRODUCT_UNIT", quantityInBaseUnit: "1" });
-  async function addCycle(productId: string, name: string) {
-    const [cycle] = await db.insert(bakeCycles).values({ ownerId: OWNER_ID, name, status: "OPEN",
+  async function addCycle(productId: string, name: string, cycleId?: string) {
+    const [cycle] = await db.insert(bakeCycles).values({ ...(cycleId ? { id: cycleId } : {}), ownerId: OWNER_ID, name, status: "OPEN",
       targetProductionDate: "2026-08-29", primaryDeliveryDate: "2026-08-30" }).returning();
     const [added] = await db.insert(orders).values({ ownerId: OWNER_ID, bakeCycleId: cycle!.id, customerId: order!.customerId,
       confirmedDeliveryDate: "2026-08-30", deliveryMethodId: order!.deliveryMethodId, deliveryLocation: order!.deliveryLocation,
@@ -107,7 +107,7 @@ export async function seedSharedConsumptionScenario(db: DatabaseClient, boxesBal
     await confirmConsumptionStock(db, OWNER_ID, cycle!.id);
     return cycle!.id;
   }
-  const second = await addCycle(line!.productId, "Second shared source");
+  const second = await addCycle(line!.productId, "Second shared source", ids.secondCycleId);
   const boxesOnly = await addCycle(packProduct!.id, "Uncounted-only source");
   const ledger = await readStockLedger(db, OWNER_ID, first.itemIds);
   for (const [index, inventoryItemId] of first.itemIds.entries()) {
