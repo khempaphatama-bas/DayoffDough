@@ -187,6 +187,23 @@ describe("consumption read models", () => {
     await expect(service.getSettlementPreview(OWNER_ID, [])).rejects.toMatchObject({ kind: "INVALID_INPUT" });
   });
 
+  it("includes counted-only owned stock alongside the full pending context union", async () => {
+    const s = await seedConsumptionScenario(fixture.db);
+    const countedOnlyId = "40000000-0000-4000-8000-000000000001";
+    await fixture.db.insert(inventoryItems).values({ id: countedOnlyId, ownerId: OWNER_ID, name: "Counted only", category: "INGREDIENT", baseUnit: "g", purchaseUnitLabel: "bag", baseQuantityPerPurchasePack: "1" });
+    await fixture.db.insert(inventoryMovements).values({ ownerId: OWNER_ID, inventoryItemId: countedOnlyId, type: "PURCHASE", quantityDeltaInBaseUnit: "9.25", occurredAt: new Date() });
+    const view = await service.getSettlementPreview(OWNER_ID, [countedOnlyId, s.itemIds[0]!]);
+    expect(view.countedItemIds).toEqual([s.itemIds[0], countedOnlyId]);
+    expect(view.contexts).toHaveLength(1);
+    expect(view.contexts[0]!.source).toMatchObject({ cycleId: s.cycleId, planningSnapshotId: s.planningSnapshotId });
+    expect(view.contexts[0]!.items.map(item => [item.inventoryItemId, item.usedQuantity, item.mode])).toEqual([[s.itemIds[0], "2200", "COUNT_SETTLED"], [s.itemIds[1], "14", "DIRECT"]]);
+    expect(view.counts).toEqual([{ inventoryItemId: s.itemIds[0], remainingQuantity: null, mode: "COUNT", quantityDelta: null }, { inventoryItemId: countedOnlyId, remainingQuantity: null, mode: "COUNT", quantityDelta: null }]);
+    expect(view.stock.map(row => row.inventoryItemId)).toEqual([...s.itemIds, countedOnlyId]);
+    expect(view.expectedLedger.map(row => row.inventoryItemId)).toEqual([...s.itemIds, countedOnlyId]);
+    expect(view.stock[2]).toEqual({ inventoryItemId: countedOnlyId, balance: "9.25", ledgerRevision: "1", countMovementId: null });
+    expect(view.expectedLedger[2]).toEqual({ inventoryItemId: countedOnlyId, ledgerRevision: "1", countMovementId: null });
+  });
+
   it("projects mixed settlement history without changing recorded modes after later counts", async () => {
     const s = await seedSharedConsumptionScenario(fixture.db);
     const stock = await readStockLedger(fixture.db, OWNER_ID, s.itemIds);

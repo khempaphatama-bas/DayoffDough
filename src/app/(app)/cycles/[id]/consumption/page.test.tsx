@@ -1,14 +1,15 @@
-import { render } from "@testing-library/react";
+import { fireEvent, render, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { CONSUMPTION_IDS as ids, HISTORY_USAGE, LEGACY_USAGE, PENDING_USAGE, SETTLEMENT_PREVIEW } from "@tests/fixtures/consumption-views";
+import { CONSUMPTION_IDS as ids, HISTORY_USAGE, LEGACY_USAGE, MIXED_SETTLEMENT_PREVIEW, PENDING_USAGE, SETTLEMENT_PREVIEW } from "@tests/fixtures/consumption-views";
+import type { ConsumptionActionState, SettleUseInput } from "@/modules/consumption/domain/types";
 import { ConsumptionStateError } from "@/modules/consumption/domain/types";
 
-const mocks = vi.hoisted(() => ({ requireOwner: vi.fn(), getCycleConsumption: vi.fn(), getSettlementPreview: vi.fn(), notFound: vi.fn(() => { throw new Error("NEXT_NOT_FOUND"); }) }));
+const mocks = vi.hoisted(() => ({ requireOwner: vi.fn(), getCycleConsumption: vi.fn(), getSettlementPreview: vi.fn(), settleUseAction: vi.fn(), notFound: vi.fn(() => { throw new Error("NEXT_NOT_FOUND"); }) }));
 vi.mock("@/lib/auth/require-owner", () => ({ requireOwner: mocks.requireOwner }));
 vi.mock("@/lib/db/client", () => ({ db: {} }));
 vi.mock("@/modules/consumption/application/consumption-queries", () => ({ createConsumptionQueryService: () => ({ getCycleConsumption: mocks.getCycleConsumption, getSettlementPreview: mocks.getSettlementPreview }) }));
 vi.mock("next/navigation", () => ({ notFound: mocks.notFound }));
-vi.mock("./actions", () => ({ confirmUseAction: vi.fn(), correctUseAction: vi.fn(), settleUseAction: vi.fn() }));
+vi.mock("./actions", () => ({ confirmUseAction: vi.fn(), correctUseAction: vi.fn(), settleUseAction: mocks.settleUseAction }));
 import ConsumptionPage from "./page";
 
 describe("ConsumptionPage", () => {
@@ -17,6 +18,29 @@ describe("ConsumptionPage", () => {
     mocks.requireOwner.mockResolvedValue({ id: "owned-user" });
     mocks.getCycleConsumption.mockResolvedValue(PENDING_USAGE);
     mocks.getSettlementPreview.mockResolvedValue(SETTLEMENT_PREVIEW);
+  });
+  it("submits a valid mixed GET preview with complete counts, context and captured ledger", async () => {
+    const sent: SettleUseInput[] = [];
+    mocks.getSettlementPreview.mockResolvedValueOnce(MIXED_SETTLEMENT_PREVIEW);
+    mocks.settleUseAction.mockImplementationOnce(async (_: ConsumptionActionState, data: FormData): Promise<ConsumptionActionState> => {
+      expect(data.getAll("payload")).toHaveLength(1); sent.push(JSON.parse(String(data.get("payload"))));
+      return { error: null, fieldErrors: {}, saved: false, stale: false, result: null, blockers: [] };
+    });
+    const ui = render(await ConsumptionPage({ params: Promise.resolve({ id: ids.cycle }), searchParams: Promise.resolve({ mode: "settle", countItem: [ids.flour, ids.countedOnly] }) }));
+    expect(mocks.getSettlementPreview).toHaveBeenCalledWith("owned-user", [ids.flour, ids.countedOnly]);
+    expect(mocks.requireOwner.mock.invocationCallOrder[0]!).toBeLessThan(mocks.getSettlementPreview.mock.invocationCallOrder[0]!);
+    fireEvent.change(ui.getByLabelText("ของเหลือหลังใช้ แป้งขนมปังจากแผน"), { target: { value: "25" } });
+    fireEvent.change(ui.getByLabelText(`ของเหลือหลังใช้ ${ids.countedOnly}`), { target: { value: "7.125" } });
+    fireEvent.change(ui.getByLabelText("เหตุผลการนับและเคลียร์ยอดใช้"), { target: { value: "นับหลังอบ" } });
+    fireEvent.click(ui.getByLabelText("ยืนยันว่าของเหลือเป็นยอดหลังใช้ทุกรายการที่แสดง และผลิตเสร็จแล้ว"));
+    fireEvent.click(ui.getByRole("button", { name: "บันทึกยอดใช้และของเหลือพร้อมกัน" }));
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]!.counts).toEqual([{ inventoryItemId: ids.flour, remainingQuantity: "25" }, { inventoryItemId: ids.countedOnly, remainingQuantity: "7.125" }]);
+    expect(sent[0]!.expectedLedger).toEqual([{ inventoryItemId: ids.flour, ledgerRevision: "4", countMovementId: ids.count }, { inventoryItemId: ids.bag, ledgerRevision: "2", countMovementId: null }, { inventoryItemId: ids.countedOnly, ledgerRevision: "3", countMovementId: null }]);
+    expect(sent[0]!.contexts).toEqual([{ cycleId: ids.cycle, planningSnapshotId: ids.snapshot, contextId: ids.context, confirmTakenOutOfUse: true, items: [
+      { inventoryItemId: ids.flour, usedQuantity: "0.3", basis: "PLANNED", reason: null },
+      { inventoryItemId: ids.bag, usedQuantity: "2", basis: "PLANNED", reason: null },
+    ] }]);
   });
   it("authenticates before the owner-scoped read and renders the real confirmation form", async () => {
     const tree = await ConsumptionPage({ params: Promise.resolve({ id: ids.cycle }) });

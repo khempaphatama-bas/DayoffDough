@@ -1,11 +1,18 @@
 import { fireEvent, render } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { HISTORY_USAGE, LEGACY_USAGE, PENDING_USAGE, RECORDED_USAGE, RELATED_SETTLEMENT_CONTEXT, SETTLEMENT_PREVIEW } from "@tests/fixtures/consumption-views";
+import { CONSUMPTION_IDS as ids, HISTORY_USAGE, LEGACY_USAGE, MIXED_SETTLEMENT_PREVIEW, PENDING_USAGE, RECORDED_USAGE, RELATED_SETTLEMENT_CONTEXT, SETTLEMENT_PREVIEW } from "@tests/fixtures/consumption-views";
 import { ConsumptionView } from "./consumption-view";
 
 vi.mock("@/app/(app)/cycles/[id]/consumption/actions", () => ({ confirmUseAction: vi.fn(), correctUseAction: vi.fn(), settleUseAction: vi.fn() }));
 
 describe("ConsumptionView", () => {
+  it("keeps a mixed selection actionable without inventing counted-only use", () => {
+    const ui = render(<ConsumptionView view={PENDING_USAGE} settlement={MIXED_SETTLEMENT_PREVIEW} />);
+    expect(ui.getByLabelText(`ของเหลือหลังใช้ ${ids.countedOnly}`)).toHaveValue("");
+    expect(ui.queryByLabelText(`จำนวนใช้ ${ids.countedOnly}`)).toBeNull();
+    expect(ui.getByRole("button", { name: "บันทึกยอดใช้และของเหลือพร้อมกัน" })).toBeInTheDocument();
+    expect(ui.queryByRole("button", { name: "ยืนยันยอดใช้" })).toBeNull();
+  });
   it.each([HISTORY_USAGE, LEGACY_USAGE])("renders $kind read-only without mutation controls", (view) => {
     const container = document.createElement("div");
     document.body.append(container);

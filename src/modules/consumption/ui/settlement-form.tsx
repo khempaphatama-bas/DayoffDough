@@ -72,13 +72,14 @@ function SettlementIntentForm({ preview: incoming, action }: Props) {
   const preview = intent.preview;
   const selected = new Set(preview.countedItemIds);
   const allItems = preview.contexts.flatMap(row => row.items);
-  const union = new Set(allItems.map(row => row.inventoryItemId));
+  // Selected stock can have no pending usage of its own. Match the query's
+  // touched union without fabricating an item in any immutable context.
+  const union = new Set([...preview.countedItemIds, ...allItems.map(row => row.inventoryItemId)]);
   const exactSet = (ids: readonly string[], expected: Set<string>) => ids.length === expected.size && new Set(ids).size === ids.length && ids.every(id => expected.has(id));
   const coherent = selected.size > 0 && selected.size === preview.countedItemIds.length &&
     exactSet(preview.counts.map(row => row.inventoryItemId), selected) &&
     exactSet(preview.expectedLedger.map(row => row.inventoryItemId), union) &&
     exactSet(preview.stock.map(row => row.inventoryItemId), union) &&
-    preview.countedItemIds.every(id => union.has(id)) &&
     preview.contexts.every(row => row.context.id === row.source.contextId && row.cycle.cycleId === row.source.cycleId && row.cycle.planningSnapshotId === row.source.planningSnapshotId && row.context.currentRevisionId === null && row.items.some(item => selected.has(item.inventoryItemId)));
   const input = {
     requestId: intent.requestId, reason: intent.reason.trim(), expectedLedger: preview.expectedLedger,

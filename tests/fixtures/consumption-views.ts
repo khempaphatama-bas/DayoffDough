@@ -11,6 +11,7 @@ export const CONSUMPTION_IDS = {
   revision: "10000000-0000-4000-8000-000000000007",
   count: "10000000-0000-4000-8000-000000000008",
   operation: "10000000-0000-4000-8000-000000000009",
+  countedOnly: "10000000-0000-4000-8000-000000000010",
 } as const;
 const id = CONSUMPTION_IDS;
 const requirements = [
@@ -69,6 +70,15 @@ export const SETTLEMENT_PREVIEW: SettlementPreview = {
   counts: [{ inventoryItemId: id.flour, remainingQuantity: null, mode: "COUNT", quantityDelta: null }],
   contexts: [{ source: PENDING_USAGE.source!, cycle: PENDING_USAGE.cycle, context: PENDING_USAGE.context!, items: PENDING_USAGE.items.map(item => ({ ...item, mode: item.inventoryItemId === id.flour ? "COUNT_SETTLED" : "DIRECT", quantityDelta: item.inventoryItemId === id.flour ? "0" : "-2" })) }],
   stock: PENDING_USAGE.stock, expectedLedger: PENDING_USAGE.expectedLedger,
+};
+// An owned selected item may have no pending context at all. Its identity and
+// stock tokens are present without inventing a snapshot label or usage line.
+export const MIXED_SETTLEMENT_PREVIEW: SettlementPreview = {
+  ...SETTLEMENT_PREVIEW,
+  countedItemIds: [id.flour, id.countedOnly],
+  counts: [...SETTLEMENT_PREVIEW.counts, { inventoryItemId: id.countedOnly, remainingQuantity: null, mode: "COUNT", quantityDelta: null }],
+  stock: [...SETTLEMENT_PREVIEW.stock, { inventoryItemId: id.countedOnly, ledgerRevision: "3", countMovementId: null, balance: "9.25" }],
+  expectedLedger: [...SETTLEMENT_PREVIEW.expectedLedger, { inventoryItemId: id.countedOnly, ledgerRevision: "3", countMovementId: null }],
 };
 export const CANCELLED_SETTLEMENT: SettlementPreview = {
   ...SETTLEMENT_PREVIEW,
