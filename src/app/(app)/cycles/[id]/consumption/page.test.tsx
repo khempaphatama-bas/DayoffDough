@@ -1,14 +1,14 @@
 import { render } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { CONSUMPTION_IDS as ids, HISTORY_USAGE, LEGACY_USAGE, PENDING_USAGE } from "@tests/fixtures/consumption-views";
+import { CONSUMPTION_IDS as ids, HISTORY_USAGE, LEGACY_USAGE, PENDING_USAGE, SETTLEMENT_PREVIEW } from "@tests/fixtures/consumption-views";
 import { ConsumptionStateError } from "@/modules/consumption/domain/types";
 
-const mocks = vi.hoisted(() => ({ requireOwner: vi.fn(), getCycleConsumption: vi.fn(), notFound: vi.fn(() => { throw new Error("NEXT_NOT_FOUND"); }) }));
+const mocks = vi.hoisted(() => ({ requireOwner: vi.fn(), getCycleConsumption: vi.fn(), getSettlementPreview: vi.fn(), notFound: vi.fn(() => { throw new Error("NEXT_NOT_FOUND"); }) }));
 vi.mock("@/lib/auth/require-owner", () => ({ requireOwner: mocks.requireOwner }));
 vi.mock("@/lib/db/client", () => ({ db: {} }));
-vi.mock("@/modules/consumption/application/consumption-queries", () => ({ createConsumptionQueryService: () => ({ getCycleConsumption: mocks.getCycleConsumption }) }));
+vi.mock("@/modules/consumption/application/consumption-queries", () => ({ createConsumptionQueryService: () => ({ getCycleConsumption: mocks.getCycleConsumption, getSettlementPreview: mocks.getSettlementPreview }) }));
 vi.mock("next/navigation", () => ({ notFound: mocks.notFound }));
-vi.mock("./actions", () => ({ confirmUseAction: vi.fn(), correctUseAction: vi.fn() }));
+vi.mock("./actions", () => ({ confirmUseAction: vi.fn(), correctUseAction: vi.fn(), settleUseAction: vi.fn() }));
 import ConsumptionPage from "./page";
 
 describe("ConsumptionPage", () => {
@@ -16,6 +16,7 @@ describe("ConsumptionPage", () => {
     vi.clearAllMocks();
     mocks.requireOwner.mockResolvedValue({ id: "owned-user" });
     mocks.getCycleConsumption.mockResolvedValue(PENDING_USAGE);
+    mocks.getSettlementPreview.mockResolvedValue(SETTLEMENT_PREVIEW);
   });
   it("authenticates before the owner-scoped read and renders the real confirmation form", async () => {
     const tree = await ConsumptionPage({ params: Promise.resolve({ id: ids.cycle }) });
@@ -68,5 +69,41 @@ describe("ConsumptionPage", () => {
     const ui = render(await ConsumptionPage({ params: Promise.resolve({ id: ids.cycle }) }), { container, baseElement: container });
     expect(ui.getByText(/รอบเดิม.*อ่านอย่างเดียว/)).toBeInTheDocument();
     expect(ui.queryByRole("button")).toBeNull();
+  });
+  // Catches accidental ordinary COUNT/confirm routing or unowned GET preview reads.
+  it.each([{ countItem: ids.flour }, { countItem: [ids.flour, ids.bag] }])("loads an explicitly selected owner-first settlement preview $countItem", async ({ countItem }) => {
+    const selection: readonly string[] = typeof countItem === "string" ? [countItem] : countItem;
+    mocks.getSettlementPreview.mockResolvedValueOnce({ ...SETTLEMENT_PREVIEW, countedItemIds: selection, counts: selection.map(inventoryItemId => ({ inventoryItemId, remainingQuantity: null, mode: "COUNT", quantityDelta: null })), contexts: SETTLEMENT_PREVIEW.contexts.map(context => ({ ...context, items: context.items.map(item => selection.includes(item.inventoryItemId) ? { ...item, mode: "COUNT_SETTLED", quantityDelta: "0" } : item) })) });
+    const ui = render(await ConsumptionPage({ params: Promise.resolve({ id: ids.cycle }), searchParams: Promise.resolve({ mode: "settle", countItem }) }));
+    expect(mocks.getSettlementPreview).toHaveBeenCalledWith("owned-user", typeof countItem === "string" ? [countItem] : countItem);
+    expect(mocks.requireOwner.mock.invocationCallOrder[0]!).toBeLessThan(mocks.getSettlementPreview.mock.invocationCallOrder[0]!);
+    expect(ui.getByRole("button", { name: "บันทึกยอดใช้และของเหลือพร้อมกัน" })).toBeInTheDocument();
+    expect(ui.queryByRole("button", { name: "ยืนยันยอดใช้" })).toBeNull();
+  });
+  it("never opens a settlement mutation UI from a historical generation", async () => {
+    await expect(ConsumptionPage({ params: Promise.resolve({ id: ids.cycle }), searchParams: Promise.resolve({ generation: "1", mode: "settle", countItem: ids.flour }) })).rejects.toThrow("NEXT_NOT_FOUND");
+    expect(mocks.getSettlementPreview).not.toHaveBeenCalled();
+  });
+  it.each([undefined, "", "invalid", [], [ids.flour, ids.flour], [ids.flour, ids.flour.toUpperCase()]].map(countItem => ({ countItem })))("rejects invalid settlement selection $countItem before preview read", async ({ countItem }) => {
+    await expect(ConsumptionPage({ params: Promise.resolve({ id: ids.cycle }), searchParams: Promise.resolve({ mode: "settle", ...(countItem === undefined ? {} : { countItem }) }) })).rejects.toThrow("NEXT_NOT_FOUND");
+    expect(mocks.getSettlementPreview).not.toHaveBeenCalled();
+  });
+  it("keeps ordinary consumption separate even when countItem is present", async () => {
+    await ConsumptionPage({ params: Promise.resolve({ id: ids.cycle }), searchParams: Promise.resolve({ countItem: ids.flour }) });
+    expect(mocks.getSettlementPreview).not.toHaveBeenCalled();
+  });
+  it("does not read a settlement preview before auth or for an unavailable Cycle", async () => {
+    mocks.requireOwner.mockRejectedValueOnce(new Error("Unauthorized"));
+    await expect(ConsumptionPage({ params: Promise.resolve({ id: ids.cycle }), searchParams: Promise.resolve({ mode: "settle", countItem: ids.flour }) })).rejects.toThrow("Unauthorized");
+    expect(mocks.getSettlementPreview).not.toHaveBeenCalled();
+    mocks.getCycleConsumption.mockRejectedValueOnce(new ConsumptionStateError("NOT_FOUND", "Consumption record not found"));
+    await expect(ConsumptionPage({ params: Promise.resolve({ id: ids.cycle }), searchParams: Promise.resolve({ mode: "settle", countItem: ids.flour }) })).rejects.toThrow("NEXT_NOT_FOUND");
+    expect(mocks.getSettlementPreview).not.toHaveBeenCalled();
+  });
+  it("404s unknown/foreign counted IDs safely and propagates unexpected preview failures", async () => {
+    mocks.getSettlementPreview.mockRejectedValueOnce(new ConsumptionStateError("NOT_FOUND", "Consumption record not found"));
+    await expect(ConsumptionPage({ params: Promise.resolve({ id: ids.cycle }), searchParams: Promise.resolve({ mode: "settle", countItem: ids.flour }) })).rejects.toThrow("NEXT_NOT_FOUND");
+    mocks.getSettlementPreview.mockRejectedValueOnce(new Error("preview unavailable"));
+    await expect(ConsumptionPage({ params: Promise.resolve({ id: ids.cycle }), searchParams: Promise.resolve({ mode: "settle", countItem: ids.flour }) })).rejects.toThrow("preview unavailable");
   });
 });

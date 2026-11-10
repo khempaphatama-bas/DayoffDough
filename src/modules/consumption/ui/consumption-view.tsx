@@ -1,8 +1,9 @@
 import Link from "next/link";
-import { confirmUseAction, correctUseAction } from "@/app/(app)/cycles/[id]/consumption/actions";
-import type { CycleConsumptionView } from "../domain/types";
+import { confirmUseAction, correctUseAction, settleUseAction } from "@/app/(app)/cycles/[id]/consumption/actions";
+import type { CycleConsumptionView, SettlementPreview } from "../domain/types";
 import { UsageForm } from "./usage-form";
 import { UsageHistory } from "./usage-history";
+import { SettlementForm, SettlementSelection } from "./settlement-form";
 
 const READONLY_LABELS = {
   LEGACY: "รอบเดิม · อ่านอย่างเดียว ไม่มีการสร้างประวัติหักสต๊อกย้อนหลัง",
@@ -11,7 +12,7 @@ const READONLY_LABELS = {
   NOT_STARTED: "ยังไม่ได้เริ่มผลิต · อ่านอย่างเดียว",
 };
 
-export function ConsumptionView({ view }: Readonly<{ view: CycleConsumptionView }>) {
+export function ConsumptionView({ view, settlement }: Readonly<{ view: CycleConsumptionView; settlement?: SettlementPreview }>) {
   const matchingSource = view.source && view.context && view.source.contextId === view.context.id && view.source.cycleId === view.cycle.cycleId && view.source.planningSnapshotId === view.cycle.planningSnapshotId;
   const canConfirm = view.canConfirm && matchingSource && !view.currentRevision && !view.context?.currentRevisionId;
   const canCorrect = view.canCorrect && matchingSource && view.currentRevision && view.context?.currentRevisionId === view.currentRevision.id && view.currentRevision.contextId === view.context.id;
@@ -32,9 +33,12 @@ export function ConsumptionView({ view }: Readonly<{ view: CycleConsumptionView 
           })}</ul>
         </nav>
       ) : null}
-      {canConfirm ? <UsageForm view={view} mode="CONFIRM" action={confirmUseAction} /> : null}
-      {canCorrect ? <UsageForm view={view} mode="CORRECT" action={correctUseAction} /> : null}
-      {!readonlyLabel && !canConfirm && !canCorrect ? <p className="rounded-xl bg-amber-50 p-4 text-sm text-amber-950">ยังไม่พร้อมบันทึก กรุณาเปิดข้อมูลล่าสุด</p> : null}
+      {!settlement && canConfirm && view.items.length > 0 ? <SettlementSelection items={view.items} actionHref={`/cycles/${view.cycle.cycleId}/consumption`} /> : null}
+      {settlement ? <SettlementForm preview={settlement} action={settleUseAction} /> : <>
+        {canConfirm ? <UsageForm view={view} mode="CONFIRM" action={confirmUseAction} /> : null}
+        {canCorrect ? <UsageForm view={view} mode="CORRECT" action={correctUseAction} /> : null}
+        {!readonlyLabel && !canConfirm && !canCorrect ? <p className="rounded-xl bg-amber-50 p-4 text-sm text-amber-950">ยังไม่พร้อมบันทึก กรุณาเปิดข้อมูลล่าสุด</p> : null}
+      </>}
       <UsageHistory revisions={view.history} />
     </div>
   );

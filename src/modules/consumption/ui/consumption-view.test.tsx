@@ -1,9 +1,9 @@
-import { render } from "@testing-library/react";
+import { fireEvent, render } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { HISTORY_USAGE, LEGACY_USAGE, PENDING_USAGE, RECORDED_USAGE } from "@tests/fixtures/consumption-views";
+import { HISTORY_USAGE, LEGACY_USAGE, PENDING_USAGE, RECORDED_USAGE, RELATED_SETTLEMENT_CONTEXT, SETTLEMENT_PREVIEW } from "@tests/fixtures/consumption-views";
 import { ConsumptionView } from "./consumption-view";
 
-vi.mock("@/app/(app)/cycles/[id]/consumption/actions", () => ({ confirmUseAction: vi.fn(), correctUseAction: vi.fn() }));
+vi.mock("@/app/(app)/cycles/[id]/consumption/actions", () => ({ confirmUseAction: vi.fn(), correctUseAction: vi.fn(), settleUseAction: vi.fn() }));
 
 describe("ConsumptionView", () => {
   it.each([HISTORY_USAGE, LEGACY_USAGE])("renders $kind read-only without mutation controls", (view) => {
@@ -29,5 +29,20 @@ describe("ConsumptionView", () => {
     const ui = render(<ConsumptionView view={{ ...RECORDED_USAGE, context: { ...RECORDED_USAGE.context!, currentRevisionId: null } }} />);
     expect(ui.getByText(/ยังไม่พร้อมบันทึก/)).toBeInTheDocument();
     expect(ui.queryByRole("button")).toBeNull();
+  });
+  it("scopes ordinary use to one Cycle and offers explicit GET selection for settlement", () => {
+    const ui = render(<ConsumptionView view={PENDING_USAGE} />);
+    expect(ui.getByRole("form", { name: "เลือกรายการนับของเหลือ" })).toHaveAttribute("method", "get");
+    expect(ui.getAllByRole("checkbox", { name: /นับของเหลือ/ })).toHaveLength(2);
+    expect(ui.getByRole("button", { name: "ดูตัวอย่างและเริ่มรายการนับใหม่" })).toBeDisabled();
+    fireEvent.click(ui.getByRole("checkbox", { name: "นับของเหลือ แป้งขนมปังจากแผน" }));
+    expect(ui.getByRole("button", { name: "ดูตัวอย่างและเริ่มรายการนับใหม่" })).toBeEnabled();
+    expect(ui.getByRole("button", { name: "ยืนยันยอดใช้" })).toBeInTheDocument();
+  });
+  it("shows all related Cycle contexts for settlement instead of a parallel normal-use form", () => {
+    const preview = { ...SETTLEMENT_PREVIEW, contexts: [...SETTLEMENT_PREVIEW.contexts, RELATED_SETTLEMENT_CONTEXT] };
+    const ui = render(<ConsumptionView view={PENDING_USAGE} settlement={preview} />);
+    expect(ui.getByRole("link", { name: "รอบเกี่ยวข้อง" })).toHaveAttribute("href", "/cycles/20000000-0000-4000-8000-000000000001/consumption");
+    expect(ui.queryByRole("button", { name: "ยืนยันยอดใช้" })).toBeNull();
   });
 });

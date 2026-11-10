@@ -1,4 +1,4 @@
-import type { CycleConsumptionView, ConsumptionRevisionView } from "@/modules/consumption/domain/types";
+import type { CycleConsumptionView, ConsumptionRevisionView, SettlementContextView, SettlementPreview } from "@/modules/consumption/domain/types";
 
 // Browser-safe complete view data: deliberately no database/test-db imports.
 export const CONSUMPTION_IDS = {
@@ -62,4 +62,21 @@ export const LEGACY_USAGE: CycleConsumptionView = {
   ...PENDING_USAGE, kind: "LEGACY", canConfirm: false, canCorrect: false,
   cycle: { ...PENDING_USAGE.cycle, consumptionPolicy: "LEGACY" },
   source: null, context: null, currentRevision: null, history: [], requirements: [], items: [], stock: [], expectedLedger: [],
+};
+
+export const SETTLEMENT_PREVIEW: SettlementPreview = {
+  countedItemIds: [id.flour],
+  counts: [{ inventoryItemId: id.flour, remainingQuantity: null, mode: "COUNT", quantityDelta: null }],
+  contexts: [{ source: PENDING_USAGE.source!, cycle: PENDING_USAGE.cycle, context: PENDING_USAGE.context!, items: PENDING_USAGE.items.map(item => ({ ...item, mode: item.inventoryItemId === id.flour ? "COUNT_SETTLED" : "DIRECT", quantityDelta: item.inventoryItemId === id.flour ? "0" : "-2" })) }],
+  stock: PENDING_USAGE.stock, expectedLedger: PENDING_USAGE.expectedLedger,
+};
+export const CANCELLED_SETTLEMENT: SettlementPreview = {
+  ...SETTLEMENT_PREVIEW,
+  contexts: [{ ...SETTLEMENT_PREVIEW.contexts[0]!, cycle: CANCELLED_USAGE.cycle, items: CANCELLED_USAGE.items.map(item => ({ ...item, mode: item.inventoryItemId === id.flour ? "COUNT_SETTLED" : "DIRECT" })) }],
+};
+export const RELATED_SETTLEMENT_CONTEXT: SettlementContextView = {
+  source: { cycleId: "20000000-0000-4000-8000-000000000001", planningSnapshotId: "20000000-0000-4000-8000-000000000002", contextId: "20000000-0000-4000-8000-000000000003" },
+  context: { id: "20000000-0000-4000-8000-000000000003", taskGenerationId: "20000000-0000-4000-8000-000000000004", currentRevisionId: null, createdAt: new Date("2026-10-25T02:00:00Z") },
+  cycle: { ...PENDING_USAGE.cycle, cycleId: "20000000-0000-4000-8000-000000000001", planningSnapshotId: "20000000-0000-4000-8000-000000000002", cycleNumber: 13, cycleName: "รอบเกี่ยวข้อง" },
+  items: SETTLEMENT_PREVIEW.contexts[0]!.items.map(item => item.inventoryItemId === id.bag ? { ...item, plannedQuantity: "1.75", usedQuantity: "1.75", quantityDelta: "-1.75" } : item),
 };
