@@ -17,6 +17,13 @@ describe("0014 consumption cutover", () => {
         await db.execute(sql`INSERT INTO bake_cycles (owner_id, name, status, target_production_date, primary_delivery_date)
           VALUES (${owner}, ${status}, ${status}, '2026-10-24', '2026-10-25')`);
       }
+      await db.execute(sql`INSERT INTO cycle_planning_snapshots
+        (owner_id, bake_cycle_id, generation, status, lock_request_id, input_fingerprint,
+         cycle_number, cycle_name, target_production_date, primary_delivery_date,
+         labor_rate_satang_per_hour, default_waste_allowance_percent, timezone, currency, cost_complete, locked_at)
+        SELECT owner_id, id, 1, 'ACTIVE', gen_random_uuid(), ${"a".repeat(64)}, cycle_number, name,
+          target_production_date, primary_delivery_date, 0, 0, 'Asia/Bangkok', 'THB', true, now()
+        FROM bake_cycles WHERE name = 'LOCKED'`);
       await db.execute(sql`INSERT INTO inventory_items
         (id, owner_id, name, category, base_unit, purchase_unit_label, base_quantity_per_purchase_pack)
         VALUES (${item}, ${owner}, 'Legacy flour', 'INGREDIENT', 'g', 'bag', 1000)`);
@@ -27,9 +34,12 @@ describe("0014 consumption cutover", () => {
           (${owner}, ${item}, 'COUNT', -15, 0, '2026-10-01')`);
       const beforeMovements = (await db.execute(sql`SELECT * FROM inventory_movements ORDER BY id`)).rows;
       const beforeBalances = (await db.execute(sql`SELECT inventory_item_id, sum(quantity_delta_in_base_unit)::text AS balance FROM inventory_movements GROUP BY inventory_item_id`)).rows;
+      const beforeSnapshots = (await db.execute(sql`SELECT * FROM cycle_planning_snapshots ORDER BY id`)).rows;
+      expect(beforeSnapshots).toHaveLength(1);
       await applyMigrationRange(db, 14, 14);
       expect((await db.execute(sql`SELECT * FROM inventory_movements ORDER BY id`)).rows).toEqual(beforeMovements);
       expect((await db.execute(sql`SELECT inventory_item_id, sum(quantity_delta_in_base_unit)::text AS balance FROM inventory_movements GROUP BY inventory_item_id`)).rows).toEqual(beforeBalances);
+      expect((await db.execute(sql`SELECT * FROM cycle_planning_snapshots ORDER BY id`)).rows).toEqual(beforeSnapshots);
       expect((await db.execute(sql`SELECT consumption_policy FROM bake_cycles ORDER BY name`)).rows.map((row) => row.consumption_policy)).toEqual(Array(6).fill("LEGACY"));
       expect((await db.execute(sql`SELECT ledger_revision::text AS revision, latest_count_movement_id AS fence FROM inventory_ledger_states`)).rows).toEqual([{ revision: "0", fence: null }]);
       for (const table of ["cycle_consumption_contexts", "cycle_consumption_items", "consumption_operations", "consumption_revisions", "consumption_revision_items"]) {

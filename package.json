@@ -12,6 +12,7 @@
     "test": "vitest",
     "test:run": "vitest run",
     "test:postgres:race": "node --test tests/postgres/operations-lifecycle-concurrency.test.mjs",
+    "test:postgres:consumption": "node --test tests/postgres/consumption-concurrency.test.mjs",
     "test:e2e": "playwright test",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate"

@@ -488,6 +488,24 @@ describe("ledger persistence integrity", () => {
     expect(await rows(sql`SELECT * FROM inventory_ledger_states`)).toEqual(before);
   });
 
+  it("keeps the applied zero COUNT fence across backdated events and ignored duplicate COUNT inserts", async () => {
+    const initial = (await readStockLedger(fixture.db, owner, [item]))[0]!;
+    expect(initial).toMatchObject({ balance: "10", ledgerRevision: "1", countMovementId: movement });
+    const [backdated] = await fixture.db.insert(inventoryMovements).values({ ownerId: owner, inventoryItemId: item,
+      type: "COUNT", quantityDeltaInBaseUnit: "0", countedQuantityInBaseUnit: "10", occurredAt: new Date("2000-01-01") }).returning();
+    expect((await readStockLedger(fixture.db, owner, [item]))[0]).toMatchObject({ balance: "10", ledgerRevision: "2", countMovementId: backdated!.id });
+    await fixture.db.insert(inventoryMovements).values({ id: movement, ownerId: owner, inventoryItemId: item,
+      type: "COUNT", quantityDeltaInBaseUnit: "99", countedQuantityInBaseUnit: "109", occurredAt: new Date("2099-01-01") }).onConflictDoNothing();
+    expect((await readStockLedger(fixture.db, owner, [item]))[0]).toMatchObject({ balance: "10", ledgerRevision: "2", countMovementId: backdated!.id });
+    await expect(fixture.db.transaction(async (tx) => {
+      await tx.insert(inventoryMovements).values({ ownerId: owner, inventoryItemId: item,
+        type: "COUNT", quantityDeltaInBaseUnit: "1", countedQuantityInBaseUnit: "11", occurredAt: new Date() });
+      await tx.execute(sql`SELECT 1 / 0`);
+    })).rejects.toThrow();
+    expect((await readStockLedger(fixture.db, owner, [item]))[0]).toMatchObject({ balance: "10", ledgerRevision: "2", countMovementId: backdated!.id });
+    expect(await rows(sql`SELECT count(*)::int AS count FROM inventory_movements`)).toEqual([{ count: 2 }]);
+  });
+
   it("rejects TRUNCATE rather than allowing history or fences to be erased", async () => {
     await expect(fixture.db.execute(sql`TRUNCATE inventory_movements CASCADE`)).rejects.toThrow();
     await expect(fixture.db.execute(sql`TRUNCATE inventory_ledger_states`)).rejects.toThrow();
