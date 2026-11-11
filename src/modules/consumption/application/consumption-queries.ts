@@ -171,7 +171,7 @@ export function createConsumptionQueryService(db: DatabaseClient) {
       if (!ids.data.length) throw new ConsumptionStateError("INVALID_INPUT", "Select stock items to count");
       const counted = [...ids.data].sort();
       return db.transaction(async (tx): Promise<SettlementPreview> => {
-        const owned = await tx.select({ id: inventoryItems.id }).from(inventoryItems).where(and(eq(inventoryItems.ownerId, owner.data), inArray(inventoryItems.id, counted)));
+        const owned = await tx.select({ id: inventoryItems.id, inventoryItemName: inventoryItems.name, baseUnit: inventoryItems.baseUnit }).from(inventoryItems).where(and(eq(inventoryItems.ownerId, owner.data), inArray(inventoryItems.id, counted)));
         if (owned.length !== counted.length) notFound();
         // Closure is deliberately discovered ONLY from selected COUNT items.
         const pending = await findPendingConsumption(tx, owner.data, counted);
@@ -185,7 +185,10 @@ export function createConsumptionQueryService(db: DatabaseClient) {
         const projection = await readContexts(tx, owner.data, rows.map((row) => row.context));
         const touched = [...new Set([...counted, ...[...projection.requirements.values()].flat().map((item) => item.inventoryItemId)])].sort();
         const stock = await readOwnedStock(tx, owner.data, touched);
-        return { countedItemIds: counted, counts: counted.map((inventoryItemId) => ({ inventoryItemId, remainingQuantity: null, mode: "COUNT", quantityDelta: null })),
+        return { countedItemIds: counted, counts: counted.map((inventoryItemId) => {
+          const item = owned.find(row => row.id === inventoryItemId)!;
+          return { inventoryItemId, inventoryItemName: item.inventoryItemName, baseUnit: item.baseUnit as UnitCode, remainingQuantity: null, mode: "COUNT", quantityDelta: null };
+        }),
           contexts: rows.map(({ context, cycle, snapshot }) => ({ source: { cycleId: cycle.id, planningSnapshotId: snapshot.id, contextId: context.id },
             cycle: toCycle(cycle, snapshot), context: toContext(context),
             items: draftItems(projection.requirements.get(context.id) ?? [], cycle, null, stock, counted) })),

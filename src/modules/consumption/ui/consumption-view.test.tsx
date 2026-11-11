@@ -8,8 +8,17 @@ vi.mock("@/app/(app)/cycles/[id]/consumption/actions", () => ({ confirmUseAction
 describe("ConsumptionView", () => {
   it("keeps a mixed selection actionable without inventing counted-only use", () => {
     const ui = render(<ConsumptionView view={PENDING_USAGE} settlement={MIXED_SETTLEMENT_PREVIEW} />);
-    expect(ui.getByLabelText(`ของเหลือหลังใช้ ${ids.countedOnly}`)).toHaveValue("");
+    expect(ui.getByLabelText("ของเหลือหลังใช้ น้ำตาลทราย (kg)")).toHaveValue("");
+    expect(ui.queryByLabelText("จำนวนใช้ น้ำตาลทราย")).toBeNull();
     expect(ui.queryByLabelText(`จำนวนใช้ ${ids.countedOnly}`)).toBeNull();
+    const form = ui.getByRole("form", { name: "นับของเหลือและเคลียร์ยอดใช้" }) as HTMLFormElement;
+    const payload = JSON.parse(String(new FormData(form).get("payload"))) as {
+      counts: { inventoryItemId: string }[];
+      contexts: { contextId: string; items: { inventoryItemId: string }[] }[];
+    };
+    expect(payload.counts.map(item => item.inventoryItemId)).toEqual([ids.flour, ids.countedOnly]);
+    expect(payload.contexts.map(context => [context.contextId, context.items.map(item => item.inventoryItemId)]))
+      .toEqual([[ids.context, [ids.flour, ids.bag]]]);
     expect(ui.getByRole("button", { name: "บันทึกยอดใช้และของเหลือพร้อมกัน" })).toBeInTheDocument();
     expect(ui.queryByRole("button", { name: "ยืนยันยอดใช้" })).toBeNull();
   });

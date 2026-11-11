@@ -91,6 +91,7 @@ export type SettlementContextView = Readonly<{
 export type SettlementPreview = Readonly<{
   countedItemIds: readonly string[]; contexts: readonly SettlementContextView[];
   counts: readonly Readonly<{
+    inventoryItemName: string; baseUnit: ConsumptionRequirement["baseUnit"];
     inventoryItemId: string; remainingQuantity: null; mode: "COUNT"; quantityDelta: null;
   }>[];
   stock: readonly ConsumptionStockView[]; expectedLedger: readonly LedgerExpectation[];

@@ -29,8 +29,8 @@ describe("ConsumptionPage", () => {
     const ui = render(await ConsumptionPage({ params: Promise.resolve({ id: ids.cycle }), searchParams: Promise.resolve({ mode: "settle", countItem: [ids.flour, ids.countedOnly] }) }));
     expect(mocks.getSettlementPreview).toHaveBeenCalledWith("owned-user", [ids.flour, ids.countedOnly]);
     expect(mocks.requireOwner.mock.invocationCallOrder[0]!).toBeLessThan(mocks.getSettlementPreview.mock.invocationCallOrder[0]!);
-    fireEvent.change(ui.getByLabelText("ของเหลือหลังใช้ แป้งขนมปังจากแผน"), { target: { value: "25" } });
-    fireEvent.change(ui.getByLabelText(`ของเหลือหลังใช้ ${ids.countedOnly}`), { target: { value: "7.125" } });
+    fireEvent.change(ui.getByLabelText("ของเหลือหลังใช้ แป้งขนมปังจากแผน (g)"), { target: { value: "25" } });
+    fireEvent.change(ui.getByLabelText("ของเหลือหลังใช้ น้ำตาลทราย (kg)"), { target: { value: "7.125" } });
     fireEvent.change(ui.getByLabelText("เหตุผลการนับและเคลียร์ยอดใช้"), { target: { value: "นับหลังอบ" } });
     fireEvent.click(ui.getByLabelText("ยืนยันว่าของเหลือเป็นยอดหลังใช้ทุกรายการที่แสดง และผลิตเสร็จแล้ว"));
     fireEvent.click(ui.getByRole("button", { name: "บันทึกยอดใช้และของเหลือพร้อมกัน" }));
@@ -97,7 +97,7 @@ describe("ConsumptionPage", () => {
   // Catches accidental ordinary COUNT/confirm routing or unowned GET preview reads.
   it.each([{ countItem: ids.flour }, { countItem: [ids.flour, ids.bag] }])("loads an explicitly selected owner-first settlement preview $countItem", async ({ countItem }) => {
     const selection: readonly string[] = typeof countItem === "string" ? [countItem] : countItem;
-    mocks.getSettlementPreview.mockResolvedValueOnce({ ...SETTLEMENT_PREVIEW, countedItemIds: selection, counts: selection.map(inventoryItemId => ({ inventoryItemId, remainingQuantity: null, mode: "COUNT", quantityDelta: null })), contexts: SETTLEMENT_PREVIEW.contexts.map(context => ({ ...context, items: context.items.map(item => selection.includes(item.inventoryItemId) ? { ...item, mode: "COUNT_SETTLED", quantityDelta: "0" } : item) })) });
+    mocks.getSettlementPreview.mockResolvedValueOnce({ ...SETTLEMENT_PREVIEW, countedItemIds: selection, counts: selection.map(inventoryItemId => ({ inventoryItemId, inventoryItemName: inventoryItemId === ids.flour ? "แป้งชื่อปัจจุบัน" : "ถุงชื่อปัจจุบัน", baseUnit: inventoryItemId === ids.flour ? "g" : "piece", remainingQuantity: null, mode: "COUNT", quantityDelta: null })), contexts: SETTLEMENT_PREVIEW.contexts.map(context => ({ ...context, items: context.items.map(item => selection.includes(item.inventoryItemId) ? { ...item, mode: "COUNT_SETTLED", quantityDelta: "0" } : item) })) });
     const ui = render(await ConsumptionPage({ params: Promise.resolve({ id: ids.cycle }), searchParams: Promise.resolve({ mode: "settle", countItem }) }));
     expect(mocks.getSettlementPreview).toHaveBeenCalledWith("owned-user", typeof countItem === "string" ? [countItem] : countItem);
     expect(mocks.requireOwner.mock.invocationCallOrder[0]!).toBeLessThan(mocks.getSettlementPreview.mock.invocationCallOrder[0]!);

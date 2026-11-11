@@ -61,6 +61,7 @@ describe("OperationsPage", () => {
     expect(within(within(container).getByRole("region", { name: "รับชำระเงิน" })).getByRole("heading", { name: ORDER.customerName })).toBeVisible();
     expect(within(container).queryByRole("button")).toBeNull();
     expect(container.querySelector("form")).toBeNull();
+    expect(within(container).getByRole("link", { name: "บันทึกยอดใช้" })).toHaveAttribute("href", `/cycles/${CYCLE_ID}/consumption`);
   });
 
   it("keeps another switcher Cycle out of this Cycle timeline", async () => {

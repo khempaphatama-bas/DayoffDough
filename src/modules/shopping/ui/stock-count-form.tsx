@@ -153,6 +153,8 @@ function CountForm({ view }: Readonly<{ view: CountRequiredView }>) {
           role="alert"
         >
           <p>{state.error}</p>
+          {state.blockers?.map(row => <Link className="inline-flex min-h-11 items-center font-bold underline underline-offset-4" href={`/cycles/${row.cycleId}/consumption`} key={row.cycleId}>{row.cycleName}</Link>)}
+          {state.blockers?.length ? <Link className="inline-flex min-h-11 items-center font-bold underline underline-offset-4" href={`/cycles/${state.blockers[0]!.cycleId}/consumption`}>เลือกรายการนับของเหลือและเคลียร์ยอดใช้</Link> : null}
           {state.stale ? (
             <Link
               className="inline-flex min-h-11 items-center font-bold underline underline-offset-4"

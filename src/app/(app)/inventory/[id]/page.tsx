@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireOwner } from "@/lib/auth/require-owner";
 import { db } from "@/lib/db/client";
+import { findPendingConsumption } from "@/modules/consumption/application/count-barrier";
 import { createInventoryService } from "@/modules/inventory/application/inventory";
 import { PhysicalCountForm, PriceForm } from "@/modules/inventory/ui/price-form";
 import { formatSatangAsBaht } from "@/modules/money/domain/money";
@@ -35,6 +36,8 @@ export default async function InventoryDetailPage({
     throw error;
   }
 
+  const blockers = await findPendingConsumption(db, owner.id, [detail.id]);
+
   return (
     <main className="mx-auto grid max-w-6xl gap-7 px-5 py-8">
       <header>
@@ -51,7 +54,7 @@ export default async function InventoryDetailPage({
 
       <section className="grid gap-5 lg:grid-cols-2">
         <PriceForm defaultDate={bangkokDateInputValue(new Date())} itemId={detail.id} packBaseQuantity={detail.baseQuantityPerPurchasePack} />
-        <PhysicalCountForm itemId={detail.id} />
+        <PhysicalCountForm itemId={detail.id} blockers={blockers} />
       </section>
 
       <section className="overflow-hidden rounded-3xl border border-stone-200 bg-white shadow-sm">

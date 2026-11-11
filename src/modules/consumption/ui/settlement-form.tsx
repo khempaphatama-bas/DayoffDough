@@ -97,7 +97,10 @@ function SettlementIntentForm({ preview: incoming, action }: Props) {
   const refreshQuery = new URLSearchParams({ mode: "settle" });
   preview.countedItemIds.forEach(id => refreshQuery.append("countItem", id));
   const refreshHref = `?${refreshQuery}`;
-  const labelFor = (id: string) => allItems.find(item => item.inventoryItemId === id)?.inventoryItemName ?? id;
+  // Current master data labels physical COUNT only when no immutable source
+  // requirement exists. Display metadata never enters the write manifest.
+  const displayFor = (id: string) => allItems.find(item => item.inventoryItemId === id) ?? preview.counts.find(item => item.inventoryItemId === id);
+  const labelFor = (id: string) => displayFor(id)?.inventoryItemName ?? id;
   function update(contextId: string, itemId: string, patch: Partial<Entry>) {
     setIntent(current => ({ ...current, contexts: current.contexts.map(row => row.contextId === contextId ? { ...row, items: row.items.map(item => item.inventoryItemId === itemId ? { ...item, ...patch } : item) } : row) }));
   }
@@ -176,11 +179,13 @@ function SettlementIntentForm({ preview: incoming, action }: Props) {
         })}
         {intent.counts.map((count, index) => {
           const name = labelFor(count.inventoryItemId);
+          const display = displayFor(count.inventoryItemId)!;
+          const unit = formatUnitLabel(display.baseUnit);
           const stock = preview.stock.find(row => row.inventoryItemId === count.inventoryItemId)!;
           let remaining: string | null = null;
           try { remaining = canonicalQuantity(count.remainingQuantity); } catch { /* Physical count starts blank. */ }
           return <section key={count.inventoryItemId} className="grid min-w-0 gap-2 rounded-3xl border border-amber-200 bg-amber-50 p-5">
-            <label htmlFor={`settle-count-${count.inventoryItemId}`} className="font-bold">ของเหลือหลังใช้ {name}</label>
+            <label htmlFor={`settle-count-${count.inventoryItemId}`} className="font-bold">ของเหลือหลังใช้ {name} ({unit})</label>
             <p className="text-sm">ยอดบัญชีก่อนนับ {stock.balance} · COUNT จะตั้งยอดเท่าของเหลือหลังใช้</p>
             <input {...errors(`counts.${index}.remainingQuantity`)} id={`settle-count-${count.inventoryItemId}`} className={INPUT} required type="text" inputMode="decimal" value={count.remainingQuantity} onChange={event => setIntent(current => ({ ...current, counts: current.counts.map(row => row.inventoryItemId === count.inventoryItemId ? { ...row, remainingQuantity: event.target.value } : row) }))} />
             {fieldError(`counts.${index}.remainingQuantity`)}

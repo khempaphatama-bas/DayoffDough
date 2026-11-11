@@ -163,7 +163,7 @@ describe("consumption read models", () => {
     expect(second?.items.map((item) => [item.inventoryItemId, item.usedQuantity, item.mode, item.quantityDelta])).toEqual([
       [s.itemIds[0], "1100", "COUNT_SETTLED", "0"], [s.itemIds[1], "7", "DIRECT", "-7"],
     ]);
-    expect(view.counts).toEqual([{ inventoryItemId: s.itemIds[0], remainingQuantity: null, mode: "COUNT", quantityDelta: null }]);
+    expect(view.counts).toEqual([{ inventoryItemId: s.itemIds[0], inventoryItemName: "แป้งขนมปัง", baseUnit: "g", remainingQuantity: null, mode: "COUNT", quantityDelta: null }]);
     expect(view.expectedLedger.map((item) => item.inventoryItemId)).toEqual(s.itemIds);
     expect(view.stock.map((item) => item.balance)).toEqual(["50", "12"]);
     expect(queries.filter((query) => query.includes('from "inventory_ledger_states"'))).toHaveLength(1);
@@ -190,14 +190,16 @@ describe("consumption read models", () => {
   it("includes counted-only owned stock alongside the full pending context union", async () => {
     const s = await seedConsumptionScenario(fixture.db);
     const countedOnlyId = "40000000-0000-4000-8000-000000000001";
-    await fixture.db.insert(inventoryItems).values({ id: countedOnlyId, ownerId: OWNER_ID, name: "Counted only", category: "INGREDIENT", baseUnit: "g", purchaseUnitLabel: "bag", baseQuantityPerPurchasePack: "1" });
+    await fixture.db.insert(inventoryItems).values({ id: countedOnlyId, ownerId: OWNER_ID, name: "Counted only", active: false, category: "INGREDIENT", baseUnit: "kg", purchaseUnitLabel: "bag", baseQuantityPerPurchasePack: "1" });
+    await fixture.db.update(inventoryItems).set({ name: "Renamed master", baseUnit: "kg" }).where(eq(inventoryItems.id, s.itemIds[0]!));
     await fixture.db.insert(inventoryMovements).values({ ownerId: OWNER_ID, inventoryItemId: countedOnlyId, type: "PURCHASE", quantityDeltaInBaseUnit: "9.25", occurredAt: new Date() });
     const view = await service.getSettlementPreview(OWNER_ID, [countedOnlyId, s.itemIds[0]!]);
     expect(view.countedItemIds).toEqual([s.itemIds[0], countedOnlyId]);
     expect(view.contexts).toHaveLength(1);
     expect(view.contexts[0]!.source).toMatchObject({ cycleId: s.cycleId, planningSnapshotId: s.planningSnapshotId });
     expect(view.contexts[0]!.items.map(item => [item.inventoryItemId, item.usedQuantity, item.mode])).toEqual([[s.itemIds[0], "2200", "COUNT_SETTLED"], [s.itemIds[1], "14", "DIRECT"]]);
-    expect(view.counts).toEqual([{ inventoryItemId: s.itemIds[0], remainingQuantity: null, mode: "COUNT", quantityDelta: null }, { inventoryItemId: countedOnlyId, remainingQuantity: null, mode: "COUNT", quantityDelta: null }]);
+    expect(view.counts).toEqual([{ inventoryItemId: s.itemIds[0], inventoryItemName: "Renamed master", baseUnit: "kg", remainingQuantity: null, mode: "COUNT", quantityDelta: null }, { inventoryItemId: countedOnlyId, inventoryItemName: "Counted only", baseUnit: "kg", remainingQuantity: null, mode: "COUNT", quantityDelta: null }]);
+    expect(view.contexts[0]!.items[0]).toMatchObject({ inventoryItemName: "แป้งขนมปัง", baseUnit: "g" });
     expect(view.stock.map(row => row.inventoryItemId)).toEqual([...s.itemIds, countedOnlyId]);
     expect(view.expectedLedger.map(row => row.inventoryItemId)).toEqual([...s.itemIds, countedOnlyId]);
     expect(view.stock[2]).toEqual({ inventoryItemId: countedOnlyId, balance: "9.25", ledgerRevision: "1", countMovementId: null });

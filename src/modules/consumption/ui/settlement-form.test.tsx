@@ -17,7 +17,7 @@ function payload(data: FormData): SettleUseInput {
 }
 type UI = ReturnType<typeof mount>;
 function complete(ui: UI) {
-  fireEvent.change(ui.getByLabelText("ของเหลือหลังใช้ แป้งขนมปังจากแผน"), { target: { value: "25" } });
+  fireEvent.change(ui.getByLabelText("ของเหลือหลังใช้ แป้งขนมปังจากแผน (g)"), { target: { value: "25" } });
   fireEvent.change(ui.getByLabelText("เหตุผลการนับและเคลียร์ยอดใช้"), { target: { value: "นับของเหลือหลังอบ" } });
   fireEvent.click(ui.getByLabelText("ยืนยันว่าของเหลือเป็นยอดหลังใช้ทุกรายการที่แสดง และผลิตเสร็จแล้ว"));
 }
@@ -30,12 +30,16 @@ describe("SettlementForm", () => {
     const sent: SettleUseInput[] = [];
     const ui = mount(<SettlementForm preview={MIXED_SETTLEMENT_PREVIEW} action={async (_, data) => { sent.push(payload(data)); return initial; }} />);
     expect(ui.queryByText(/ข้อมูลตัวอย่างไม่ครบ/)).toBeNull();
-    expect(ui.getByLabelText(`นับของเหลือ ${ids.countedOnly}`)).toBeChecked();
+    expect(ui.getByLabelText("นับของเหลือ น้ำตาลทราย")).toBeChecked();
+    expect(ui.getByLabelText("ของเหลือหลังใช้ น้ำตาลทราย (kg)")).toBeRequired();
+    expect(ui.getByRole("link", { name: /นับสต๊อกปัจจุบัน น้ำตาลทราย/ })).toHaveAttribute("href", `/inventory/${ids.countedOnly}`);
+    expect(ui.queryByText("แป้งชื่อปัจจุบัน")).toBeNull();
+    expect(ui.getByLabelText("ของเหลือหลังใช้ แป้งขนมปังจากแผน (g)")).toBeRequired();
     expect(ui.queryByLabelText(`จำนวนใช้ ${ids.countedOnly}`)).toBeNull();
     expect(ui.getByText(/DIRECT · ผลยอดใช้ -2/)).toBeInTheDocument();
     complete(ui);
     expect(ui.getByRole("button", { name: "บันทึกยอดใช้และของเหลือพร้อมกัน" })).toBeDisabled();
-    fireEvent.change(ui.getByLabelText(`ของเหลือหลังใช้ ${ids.countedOnly}`), { target: { value: "7.125" } });
+    fireEvent.change(ui.getByLabelText("ของเหลือหลังใช้ น้ำตาลทราย (kg)"), { target: { value: "7.125" } });
     submit(ui); await waitFor(() => expect(sent).toHaveLength(1));
     expect(sent[0]).toEqual({ requestId: expect.any(String), reason: "นับของเหลือหลังอบ",
       contexts: [{ cycleId: ids.cycle, planningSnapshotId: ids.snapshot, contextId: ids.context, confirmTakenOutOfUse: true, items: [
@@ -54,7 +58,7 @@ describe("SettlementForm", () => {
     expect(ui.getByText(/COUNT_SETTLED · ผลยอดใช้ 0/)).toBeInTheDocument();
     expect(ui.getByText(/DIRECT · ผลยอดใช้ -2/)).toBeInTheDocument();
     expect(ui.getByText(/ยอดบัญชีก่อนนับ 10.7/)).toBeInTheDocument();
-    expect(ui.queryByLabelText("ของเหลือหลังใช้ ถุงขนมจากแผน")).toBeNull();
+    expect(ui.queryByLabelText("ของเหลือหลังใช้ ถุงขนมจากแผน (ชิ้น)")).toBeNull();
     complete(ui); submit(ui);
     await waitFor(() => expect(sent).toHaveLength(1));
     expect(sent[0]).toEqual({ requestId: expect.any(String), contexts: [{ ...SETTLEMENT_PREVIEW.contexts[0]!.source, confirmTakenOutOfUse: true, items: [
@@ -68,7 +72,7 @@ describe("SettlementForm", () => {
   it("requires every usage line, remaining, confirmation and overall reason", () => {
     const ui = mount(<SettlementForm preview={SETTLEMENT_PREVIEW} action={async () => initial} />);
     complete(ui);
-    for (const label of ["ของเหลือหลังใช้ แป้งขนมปังจากแผน", "จำนวนใช้ ถุงขนมจากแผน", "เหตุผลการนับและเคลียร์ยอดใช้"]) {
+    for (const label of ["ของเหลือหลังใช้ แป้งขนมปังจากแผน (g)", "จำนวนใช้ ถุงขนมจากแผน", "เหตุผลการนับและเคลียร์ยอดใช้"]) {
       const field = ui.getByLabelText(label); const value = (field as HTMLInputElement).value;
       fireEvent.change(field, { target: { value: "" } });
       expect(ui.getByRole("button", { name: "บันทึกยอดใช้และของเหลือพร้อมกัน" })).toBeDisabled();
@@ -118,7 +122,7 @@ describe("SettlementForm", () => {
       const ui = mount(<SettlementForm preview={SETTLEMENT_PREVIEW} action={action} />); complete(ui); submit(ui);
       await waitFor(() => expect(ui.getByRole("alert")).toHaveTextContent(stale ? "มีรอบค้างเพิ่ม" : "ไม่ได้บันทึกทั้งชุด"));
       expect(ui.queryByRole("status")).toBeNull();
-      expect(ui.getByLabelText("ของเหลือหลังใช้ แป้งขนมปังจากแผน")).toHaveAccessibleDescription("ตรวจยอดเหลือ");
+      expect(ui.getByLabelText("ของเหลือหลังใช้ แป้งขนมปังจากแผน (g)")).toHaveAccessibleDescription("ตรวจยอดเหลือ");
       const changed = { ...SETTLEMENT_PREVIEW, expectedLedger: SETTLEMENT_PREVIEW.expectedLedger.map(row => ({ ...row, ledgerRevision: "99" })), contexts: [...SETTLEMENT_PREVIEW.contexts, { ...RELATED_SETTLEMENT_CONTEXT, cycle: { ...RELATED_SETTLEMENT_CONTEXT.cycle, cycleName: "รอบเพิ่มใหม่" } }] };
       ui.rerender(<SettlementForm preview={changed} action={action} />);
       expect(ui.queryByText("รอบเพิ่มใหม่")).toBeNull(); submit(ui);
@@ -132,9 +136,9 @@ describe("SettlementForm", () => {
     const action = async (_: ConsumptionActionState, data: FormData) => { sent.push(payload(data)); return initial; };
     const ui = mount(<SettlementForm preview={SETTLEMENT_PREVIEW} action={action} />); complete(ui); submit(ui);
     await waitFor(() => expect(sent).toHaveLength(1));
-    ui.rerender(<SettlementForm preview={{ ...SETTLEMENT_PREVIEW, countedItemIds: [ids.flour, ids.bag], counts: [...SETTLEMENT_PREVIEW.counts, { inventoryItemId: ids.bag, remainingQuantity: null, mode: "COUNT", quantityDelta: null }], expectedLedger: SETTLEMENT_PREVIEW.expectedLedger.map(row => ({ ...row, ledgerRevision: "8" })) }} action={action} />);
-    expect(ui.getByLabelText("ของเหลือหลังใช้ แป้งขนมปังจากแผน")).toHaveValue(""); complete(ui);
-    fireEvent.change(ui.getByLabelText("ของเหลือหลังใช้ ถุงขนมจากแผน"), { target: { value: "4" } }); submit(ui);
+    ui.rerender(<SettlementForm preview={{ ...SETTLEMENT_PREVIEW, countedItemIds: [ids.flour, ids.bag], counts: [...SETTLEMENT_PREVIEW.counts, { inventoryItemId: ids.bag, inventoryItemName: "ถุงชื่อปัจจุบัน", baseUnit: "piece", remainingQuantity: null, mode: "COUNT", quantityDelta: null }], expectedLedger: SETTLEMENT_PREVIEW.expectedLedger.map(row => ({ ...row, ledgerRevision: "8" })) }} action={action} />);
+    expect(ui.getByLabelText("ของเหลือหลังใช้ แป้งขนมปังจากแผน (g)")).toHaveValue(""); complete(ui);
+    fireEvent.change(ui.getByLabelText("ของเหลือหลังใช้ ถุงขนมจากแผน (ชิ้น)"), { target: { value: "4" } }); submit(ui);
     await waitFor(() => expect(sent).toHaveLength(2));
     expect(sent[1]!.requestId).not.toBe(sent[0]!.requestId);
     expect(sent[1]!.expectedLedger.map(row => row.ledgerRevision)).toEqual(["8", "8"]);
@@ -182,7 +186,7 @@ describe("SettlementForm", () => {
     for (let index = 0; index < 3; index++) {
       complete(ui); submit(ui);
       await waitFor(() => expect(sent).toHaveLength(index + 1));
-      await waitFor(() => expect(ui.getByLabelText("ของเหลือหลังใช้ แป้งขนมปังจากแผน")).toHaveValue(""));
+      await waitFor(() => expect(ui.getByLabelText("ของเหลือหลังใช้ แป้งขนมปังจากแผน (g)")).toHaveValue(""));
       // Draft reset can render before useActionState commits its returned result.
       // Wait for the original button label: pending has ended and the new intent is unconfirmed.
       await waitFor(() => expect(ui.getByRole("button", { name: "บันทึกยอดใช้และของเหลือพร้อมกัน" })).toBeDisabled());
@@ -195,7 +199,7 @@ describe("SettlementForm", () => {
     const sent: SettleUseInput[] = [];
     const ui = mount(<SettlementForm preview={SETTLEMENT_PREVIEW} action={async (_, data) => { sent.push(payload(data)); const result = success(1); return { ...result, result: { ...result.result!, replayed: sent.length > 1 } }; }} />);
     complete(ui); submit(ui);
-    await waitFor(() => expect(ui.getByLabelText("ของเหลือหลังใช้ แป้งขนมปังจากแผน")).toHaveValue(""));
+    await waitFor(() => expect(ui.getByLabelText("ของเหลือหลังใช้ แป้งขนมปังจากแผน (g)")).toHaveValue(""));
     await waitFor(() => expect(ui.getByRole("button", { name: "บันทึกยอดใช้และของเหลือพร้อมกัน" })).toBeDisabled());
     complete(ui); submit(ui);
     await waitFor(() => expect(sent).toHaveLength(2));

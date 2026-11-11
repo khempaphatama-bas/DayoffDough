@@ -113,6 +113,12 @@ export function CycleDetail({
             <>
               <Link
                 className="inline-flex min-h-12 items-center justify-center rounded-xl border border-amber-800 px-6 text-lg font-bold text-amber-900"
+                href={`/cycles/${cycle.id}/consumption`}
+              >
+                บันทึกยอดใช้
+              </Link>
+              <Link
+                className="inline-flex min-h-12 items-center justify-center rounded-xl border border-amber-800 px-6 text-lg font-bold text-amber-900"
                 href={`/cycles/${cycle.id}/planning`}
               >
                 ดูแผนการผลิต
