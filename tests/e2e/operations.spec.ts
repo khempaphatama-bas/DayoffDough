@@ -1,30 +1,13 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { createServerClient } from "@supabase/ssr";
 import { deactivateLocalUnusedProduct, isolatedLocalFixtureTarget } from "../helpers/local-product-fixture";
 import {
   addInventoryPrice, configureShopSettings, createBakeCycle, createCustomer, createDeliveryMethod,
   createInventoryItem, createOrder, createProduct, createProductionTemplate,
-  createRecipeVersion, loginAsOwner,
+  createRecipeVersion, loginAsOwner, verifiedOwnerId, confirmCycleStock,
 } from "../fixtures/owner";
+import { confirmPlannedUse } from "../helpers/consumption-ui";
 
 const TIMEOUT = 30_000;
-
-async function verifiedOwnerId(page: Page): Promise<string> {
-  const cookies = await page.context().cookies();
-  const auth = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
-    { cookies: { getAll: () => cookies, setAll: () => {} } },
-  );
-  // Verify the session with Auth; do not trust a browser-supplied UUID or the
-  // unrelated unit-test OWNER_ID constant for privileged fixture cleanup.
-  const { data: { user }, error } = await auth.auth.getUser();
-  if (error || !user || !process.env.OWNER_EMAIL
-    || user.email?.toLowerCase() !== process.env.OWNER_EMAIL.toLowerCase()) {
-    throw new Error("Authenticated owner verification failed for local fixture cleanup");
-  }
-  return user.id;
-}
 
 async function expectNoHorizontalOverflow(page: Page) {
   await expect.poll(() => page.evaluate(() =>
@@ -81,6 +64,8 @@ test("owner explicitly packs, delivers and completes a cycle before collecting i
     }
     await page.goto(`${cycleUrl}/planning`);
     await action(page, page, "ยืนยันล็อกรอบ");
+    await page.goto(`${cycleUrl}/shopping`);
+    await confirmCycleStock(page, [{ itemName: flourName, quantity: "5000" }]);
     // Keep this active/unselected option out of unrelated template setup. The
     // exact unused fixture is deactivated in finally, even when a check fails.
     await createProduct(page, { name: longUnselectedProduct, sellingPriceBaht: "120" });
@@ -203,6 +188,9 @@ test("owner explicitly packs, delivers and completes a cycle before collecting i
       }
     }
     await expect(timeline).toContainText("งานทั้งหมดเสร็จแล้ว");
+    // V1 usage is an explicit after-bake action, independent of delivery.
+    await confirmPlannedUse(page, cycleUrl);
+    await page.goto(`${cycleUrl}/operations`);
     await expect(page.getByRole("button", { name: "จบรอบผลิต", exact: true })).toBeDisabled();
     const delivery = board.getByRole("region", { name: "พร้อมจัดส่ง", exact: true });
     for (const name of [timed, untimed]) await delivery.getByLabel(`เลือกจัดส่ง ${name}`, { exact: true }).check();

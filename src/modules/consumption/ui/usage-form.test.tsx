@@ -165,6 +165,8 @@ describe("UsageForm", () => {
       fireEvent.click(ui.getByRole("button", { name: "บันทึกการแก้ไข" }));
       await waitFor(() => expect(ui.getByRole("alert")).toHaveTextContent(stale ? "ข้อมูลเปลี่ยนแล้ว" : "ตรวจข้อมูลอีกครั้ง"));
       expect(ui.getByLabelText("จำนวนใช้ แป้งขนมปังจากแผน")).toHaveValue("0.123456");
+      expect(payload(new FormData(ui.container.querySelector("form")!))).toEqual(submitted[0]);
+      expect(ui.getByLabelText("ที่มาของยอดใช้ แป้งขนมปังจากแผน")).toHaveValue("OWNER_REPORTED");
       expect(ui.getByLabelText("จำนวนใช้ แป้งขนมปังจากแผน")).toHaveAccessibleDescription("ตรวจจำนวนรายการนี้");
       expect(ui.getByLabelText("เหตุผล แป้งขนมปังจากแผน")).toHaveValue("ยอดจริง");
       expect(ui.getByLabelText("เหตุผลการแก้ไข")).toHaveValue("แก้บันทึกเดิม");

@@ -119,9 +119,17 @@ describe("SettlementForm", () => {
     it(`retains the entire failed ${stale ? "stale context" : "shortage"} intent through unsolicited props and retry`, async () => {
       const sent: SettleUseInput[] = [];
       const action = async (_: ConsumptionActionState, data: FormData) => { sent.push(payload(data)); return { ...initial, stale, error: stale ? "มีรอบค้างเพิ่ม กรุณาเปิดข้อมูลล่าสุด" : "ถุงไม่พอ ไม่ได้บันทึกทั้งชุด", fieldErrors: { "counts.0.remainingQuantity": "ตรวจยอดเหลือ" }, blockers: [{ cycleId: ids.cycle, cycleName: "รอบค้าง" }] }; };
-      const ui = mount(<SettlementForm preview={SETTLEMENT_PREVIEW} action={action} />); complete(ui); submit(ui);
+      const ui = mount(<SettlementForm preview={SETTLEMENT_PREVIEW} action={action} />); complete(ui);
+      fireEvent.change(ui.getByLabelText("จำนวนใช้ แป้งขนมปังจากแผน"), { target: { value: "0.1" } });
+      fireEvent.change(ui.getByLabelText("เหตุผล แป้งขนมปังจากแผน"), { target: { value: "ชั่งใช้จริง" } });
+      submit(ui);
       await waitFor(() => expect(ui.getByRole("alert")).toHaveTextContent(stale ? "มีรอบค้างเพิ่ม" : "ไม่ได้บันทึกทั้งชุด"));
       expect(ui.queryByRole("status")).toBeNull();
+      expect(payload(new FormData(ui.getByRole("form", { name: "นับของเหลือและเคลียร์ยอดใช้" }) as HTMLFormElement))).toEqual(sent[0]);
+      expect(ui.getByLabelText("ที่มาของยอดใช้ แป้งขนมปังจากแผน")).toHaveValue("OWNER_REPORTED");
+      expect(ui.getByLabelText("จำนวนใช้ แป้งขนมปังจากแผน")).toHaveValue("0.1");
+      expect(ui.getByLabelText("เหตุผล แป้งขนมปังจากแผน")).toHaveValue("ชั่งใช้จริง");
+      expect(ui.getByRole("checkbox", { name: /ยืนยันว่าของเหลือเป็นยอดหลังใช้/ })).toBeChecked();
       expect(ui.getByLabelText("ของเหลือหลังใช้ แป้งขนมปังจากแผน (g)")).toHaveAccessibleDescription("ตรวจยอดเหลือ");
       const changed = { ...SETTLEMENT_PREVIEW, expectedLedger: SETTLEMENT_PREVIEW.expectedLedger.map(row => ({ ...row, ledgerRevision: "99" })), contexts: [...SETTLEMENT_PREVIEW.contexts, { ...RELATED_SETTLEMENT_CONTEXT, cycle: { ...RELATED_SETTLEMENT_CONTEXT.cycle, cycleName: "รอบเพิ่มใหม่" } }] };
       ui.rerender(<SettlementForm preview={changed} action={action} />);

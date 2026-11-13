@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import Decimal from "decimal.js";
-import { useActionState, useRef, useState } from "react";
+import { useActionState, useEffect, useRef, useState } from "react";
 import { formatUnitLabel } from "@/modules/units/domain/units";
 import { settleUseInputSchema } from "../domain/forms";
 import { calculateUseEffect, canonicalQuantity } from "../domain/rules";
@@ -55,6 +55,16 @@ export function SettlementSelection({ items, selectedItemIds = [], actionHref, p
 }
 
 function SettlementIntentForm({ preview: incoming, action }: Props) {
+  const formElement = useRef<HTMLFormElement>(null);
+  useEffect(() => {
+    const form = formElement.current;
+    if (!form) return;
+    // The native commit-time reset bypasses React's delegated onReset handler.
+    // Receipt-driven newIntent remains the only reset of this controlled draft.
+    const preserveIntent = (event: Event) => event.preventDefault();
+    form.addEventListener("reset", preserveIntent);
+    return () => form.removeEventListener("reset", preserveIntent);
+  }, []);
   // Same selected set does not adopt unsolicited contexts or ledger tokens. Only
   // an explicit GET refresh (document navigation) captures a fresh server preview.
   const [intent, setIntent] = useState(() => newIntent(incoming));
@@ -125,7 +135,7 @@ function SettlementIntentForm({ preview: incoming, action }: Props) {
       setIntent(newIntent(preview));
     }} />
     {selectionDirty ? <p role="alert" className="rounded-xl bg-amber-50 p-4 text-sm">เปลี่ยนรายการนับแล้ว กรุณาดูตัวอย่างใหม่ ข้อมูลและโทเคนเดิมใช้บันทึกไม่ได้</p> : null}
-    <form action={formAction} aria-label="นับของเหลือและเคลียร์ยอดใช้" className="grid min-w-0 gap-4 [overflow-wrap:anywhere]">
+    <form ref={formElement} action={formAction} aria-label="นับของเหลือและเคลียร์ยอดใช้" className="grid min-w-0 gap-4 [overflow-wrap:anywhere]">
       <input type="hidden" name="payload" disabled={selectionDirty} value={JSON.stringify(parsed.success ? parsed.data : input)} />
       <p className="rounded-2xl bg-amber-50 p-4 text-sm text-amber-950">ของเหลือคือยอดหลังใช้ทุกรายการด้านล่าง ไม่หักยอดใช้ออกจากของเหลือซ้ำ ตามแผนเป็นประมาณการ ไม่ใช่ยอดใช้จริง ยอดใช้และยอดนับจะบันทึกพร้อมกันทั้งชุดเท่านั้น</p>
       <fieldset disabled={pending || selectionDirty} className="grid min-w-0 gap-4">

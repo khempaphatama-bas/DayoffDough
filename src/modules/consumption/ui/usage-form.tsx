@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useActionState, useRef, useState } from "react";
+import { useActionState, useEffect, useRef, useState } from "react";
 import { formatUnitLabel } from "@/modules/units/domain/units";
 import { confirmUseInputSchema, correctUseInputSchema } from "../domain/forms";
 import { calculateUseEffect, canonicalQuantity } from "../domain/rules";
@@ -31,6 +31,16 @@ function needsReason(entry: Entry, planned: string): boolean {
 }
 
 function UsageIntentForm({ view, mode, action }: Props) {
+  const formElement = useRef<HTMLFormElement>(null);
+  useEffect(() => {
+    const form = formElement.current;
+    if (!form) return;
+    // React resets native controls during commit while delegated events are off.
+    // Only a new successful receipt resets this fully controlled intent below.
+    const preserveIntent = (event: Event) => event.preventDefault();
+    form.addEventListener("reset", preserveIntent);
+    return () => form.removeEventListener("reset", preserveIntent);
+  }, []);
   const [intent, setIntent] = useState(() => newIntent(view));
   const completedOperations = useRef(new Set<string>());
   const [state, formAction, pending] = useActionState(async (previous: ConsumptionActionState, data: FormData) => {
@@ -69,7 +79,7 @@ function UsageIntentForm({ view, mode, action }: Props) {
   }
 
   return (
-    <form action={formAction} className="grid min-w-0 gap-4 [overflow-wrap:anywhere]" aria-label={mode === "CONFIRM" ? "ยืนยันยอดใช้การผลิต" : "แก้ไขยอดใช้การผลิต"}>
+    <form ref={formElement} action={formAction} className="grid min-w-0 gap-4 [overflow-wrap:anywhere]" aria-label={mode === "CONFIRM" ? "ยืนยันยอดใช้การผลิต" : "แก้ไขยอดใช้การผลิต"}>
       <input name="payload" type="hidden" value={JSON.stringify(parsed.success ? parsed.data : input)} />
       <p className="rounded-2xl bg-amber-50 p-4 text-sm text-amber-950">
         {mode === "CONFIRM" ? "ยืนยันหลังผลิตเสร็จ แยกจากการส่งครบหรือจบรอบ ตามแผนเป็นประมาณการ ไม่ใช่ยอดใช้จริงที่เจ้าของชั่งบันทึก" : "ตรวจยอดเดิมและผลสต๊อกที่เสนอก่อนแก้ไข ประวัติเดิมจะไม่ถูกลบ"}

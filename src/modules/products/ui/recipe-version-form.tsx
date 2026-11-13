@@ -31,13 +31,13 @@ export function RecipeVersionForm({
   );
 
   return (
-    <section className="grid gap-4">
+    <section className="grid min-w-0 gap-4">
       <button className="min-h-11 justify-self-start rounded-xl bg-stone-900 px-5 font-semibold text-white" onClick={() => setOpen((value) => !value)} type="button">เพิ่มเวอร์ชันสูตร</button>
       {open ? (
         ingredientOptions.length === 0 ? (
           <p className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-amber-900">ต้องเพิ่มวัตถุดิบประเภทวัตถุดิบก่อนสร้างสูตร</p>
         ) : (
-          <form action={formAction} className="grid gap-4 rounded-3xl border border-stone-200 bg-white p-5 shadow-sm md:grid-cols-2">
+          <form action={formAction} className="grid min-w-0 gap-4 rounded-3xl border border-stone-200 bg-white p-5 shadow-sm md:grid-cols-2">
             <input name="productId" type="hidden" value={productId} />
             <input name="ingredientCount" type="hidden" value={rows.length} />
             <label className="grid gap-2 text-sm font-semibold text-stone-700">รหัสเวอร์ชัน<input className="min-h-11 rounded-xl border border-stone-300 px-4 text-base font-normal" name="versionCode" required /></label>
@@ -47,12 +47,12 @@ export function RecipeVersionForm({
             <label className="grid gap-2 text-sm font-semibold text-stone-700">ค่าไฟหรือแก๊สต่อสูตร (บาท)<input className="min-h-11 rounded-xl border border-stone-300 px-4 text-base font-normal" defaultValue="0.00" min="0" name="utilityCostBahtPerBatch" required step="0.01" type="number" /></label>
             <label className="grid gap-2 text-sm font-semibold text-stone-700">ค่าเผื่อสูญเสีย (%)<input className="min-h-11 rounded-xl border border-stone-300 px-4 text-base font-normal" max="100" min="0" name="wasteAllowancePercent" step="0.0001" type="number" /></label>
 
-            <fieldset className="grid gap-4 rounded-2xl border border-stone-200 p-4 md:col-span-2">
+            <fieldset className="grid min-w-0 gap-4 rounded-2xl border border-stone-200 p-4 md:col-span-2">
               <legend className="px-2 font-bold text-stone-900">วัตถุดิบในสูตร</legend>
               {rows.map((row, index) => (
-                <div className="grid gap-3 md:grid-cols-[1fr_1fr_auto]" key={row}>
-                  <label className="grid gap-2 text-sm font-semibold text-stone-700">วัตถุดิบ {index + 1}<select className="min-h-11 rounded-xl border border-stone-300 bg-white px-4 text-base font-normal" defaultValue="" name={`ingredientId_${index}`} required><option disabled value="">เลือกวัตถุดิบ</option>{ingredientOptions.map((option) => <option key={option.id} value={option.id}>{option.name} ({option.baseUnit})</option>)}</select></label>
-                  <label className="grid gap-2 text-sm font-semibold text-stone-700">ปริมาณวัตถุดิบ {index + 1}<input className="min-h-11 rounded-xl border border-stone-300 px-4 text-base font-normal" inputMode="decimal" min="0.000001" name={`ingredientQuantity_${index}`} required step="0.000001" type="number" /></label>
+                <div className="grid min-w-0 gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]" key={row}>
+                  <label className="grid min-w-0 gap-2 text-sm font-semibold text-stone-700">วัตถุดิบ {index + 1}<select className="min-h-11 w-full min-w-0 max-w-full rounded-xl border border-stone-300 bg-white px-4 text-base font-normal" defaultValue="" name={`ingredientId_${index}`} required><option disabled value="">เลือกวัตถุดิบ</option>{ingredientOptions.map((option) => <option key={option.id} value={option.id}>{option.name} ({option.baseUnit})</option>)}</select></label>
+                  <label className="grid min-w-0 gap-2 text-sm font-semibold text-stone-700">ปริมาณวัตถุดิบ {index + 1}<input className="min-h-11 w-full min-w-0 max-w-full rounded-xl border border-stone-300 px-4 text-base font-normal" inputMode="decimal" min="0.000001" name={`ingredientQuantity_${index}`} required step="0.000001" type="number" /></label>
                   {rows.length > 1 ? <button aria-label={`ลบวัตถุดิบ ${index + 1}`} className="min-h-11 self-end rounded-xl border border-stone-300 px-3 text-sm font-semibold" onClick={() => setRows((current) => current.filter((value) => value !== row))} type="button">ลบ</button> : null}
                 </div>
               ))}

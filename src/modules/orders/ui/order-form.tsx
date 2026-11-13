@@ -45,9 +45,9 @@ const PAYMENT_STATUS_LABELS = {
 } as const;
 
 const INPUT_CLASS =
-  "min-h-11 rounded-xl border border-stone-300 bg-white px-4 text-base font-normal";
+  "min-h-11 w-full min-w-0 max-w-full rounded-xl border border-stone-300 bg-white px-4 text-base font-normal";
 const TEXTAREA_CLASS =
-  "min-h-20 rounded-xl border border-stone-300 bg-white px-4 py-3 text-base font-normal";
+  "min-h-20 w-full min-w-0 max-w-full rounded-xl border border-stone-300 bg-white px-4 py-3 text-base font-normal";
 
 function FieldError({
   error,
@@ -239,7 +239,7 @@ export function OrderForm({
       : "บันทึกออเดอร์";
 
   return (
-    <form className="grid gap-6 pb-24 md:pb-0" onSubmit={submitOrder}>
+    <form className="grid w-full min-w-0 max-w-full gap-6 pb-24 md:pb-0 [&_article]:min-w-0 [&_label]:min-w-0 [&_section]:min-w-0" onSubmit={submitOrder}>
       <input name="payload" type="hidden" value={JSON.stringify(values)} />
       {orderId ? <input name="orderId" type="hidden" value={orderId} /> : null}
 

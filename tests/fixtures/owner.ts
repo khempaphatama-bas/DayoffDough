@@ -4,12 +4,15 @@ import {
   type Page,
   type Response,
 } from "@playwright/test";
+import { createServerClient } from "@supabase/ssr";
+import { isolatedLocalFixtureTarget } from "../helpers/local-product-fixture";
 
 export const OWNER_ID = "00000000-0000-4000-8000-000000000001";
 export const OTHER_OWNER_ID = "00000000-0000-4000-8000-000000000002";
 const SERVER_ACTION_TIMEOUT = 30_000;
 
 function isCurrentPageServerAction(page: Page): (response: Response) => boolean {
+  isolatedLocalFixtureTarget();
   const pathname = new URL(page.url()).pathname;
   return (response) =>
     response.request().method() === "POST" &&
@@ -35,6 +38,7 @@ async function tryClickVisibleLink(page: Page, name: string): Promise<boolean> {
 }
 
 async function clickVisibleLink(page: Page, name: string): Promise<void> {
+  isolatedLocalFixtureTarget();
   if (await tryClickVisibleLink(page, name)) return;
 
   if (["ลูกค้า", "สินค้าและสูตร", "การจัดส่ง", "ตั้งค่าร้าน", "เทมเพลตการผลิต"].includes(name)) {
@@ -82,6 +86,7 @@ export async function createProductionTemplate(
   if (input.activities.length === 0) {
     throw new Error("Production templates need at least one activity");
   }
+  isolatedLocalFixtureTarget();
   await page.goto("/production/templates/new");
   await expect(
     page.getByRole("heading", { name: "สร้างเทมเพลตการผลิต", exact: true }),
@@ -177,14 +182,36 @@ export async function createProductionTemplate(
 }
 
 export async function loginAsOwner(page: Page): Promise<void> {
+  isolatedLocalFixtureTarget(); // Refuse fixture writes against an unapproved app DB.
   await page.goto("/login");
   await page.getByLabel("อีเมล").fill(requiredEnv("E2E_OWNER_EMAIL"));
   await page.getByLabel("รหัสผ่าน").fill(requiredEnv("E2E_OWNER_PASSWORD"));
   await page.getByRole("button", { name: "เข้าสู่ระบบ" }).click();
   await expect(page).toHaveURL(/\/dashboard$/, { timeout: 15_000 });
+  await verifiedOwnerId(page);
+}
+
+export async function verifiedOwnerId(page: Page): Promise<string> {
+  isolatedLocalFixtureTarget();
+  const cookies = await page.context().cookies();
+  const auth = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
+    { cookies: { getAll: () => cookies, setAll: () => {} } },
+  );
+  // Auth verifies the real owner, never a browser UUID or unit OWNER_ID.
+  const { data: { user }, error } = await auth.auth.getUser();
+  if (error || !user || !process.env.OWNER_EMAIL || !process.env.E2E_OWNER_EMAIL
+    || user.email?.toLowerCase() !== process.env.OWNER_EMAIL.toLowerCase()
+    || user.email?.toLowerCase() !== process.env.E2E_OWNER_EMAIL.toLowerCase()
+    || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(user.id)) {
+    throw new Error("Authenticated owner verification failed for isolated local fixtures");
+  }
+  return user.id;
 }
 
 export async function configureShopSettings(page: Page): Promise<void> {
+  isolatedLocalFixtureTarget();
   await clickVisibleLink(page, "ตั้งค่าร้าน");
   await page.getByLabel("ค่าแรงต่อชั่วโมง (บาท)").fill("120");
   await page.getByLabel("ค่าเผื่อสูญเสียเริ่มต้น (%)").fill("3");
@@ -329,6 +356,7 @@ export async function createPackagingRule(
     quantity: string;
   }>,
 ): Promise<void> {
+  isolatedLocalFixtureTarget();
   if (new URL(page.url()).pathname !== "/delivery") {
     await clickVisibleLink(page, "การจัดส่ง");
   }
@@ -520,6 +548,7 @@ export async function confirmCycleStock(
   page: Page,
   counts: ReadonlyArray<{ itemName: string; quantity: string }>,
 ): Promise<void> {
+  isolatedLocalFixtureTarget();
   for (const count of counts) {
     await page
       .getByLabel(`จำนวนที่นับจริง ${count.itemName}`)
@@ -550,6 +579,7 @@ export async function recordCyclePurchase(
     occurredAt: string;
   }>,
 ): Promise<void> {
+  isolatedLocalFixtureTarget();
   const item = page.getByRole("article", { name: input.itemName });
   await item.getByLabel("จำนวนแพ็กที่ซื้อ").fill(input.packCount);
   await item.getByLabel("ราคารวม (บาท)").fill(input.totalPriceBaht);
