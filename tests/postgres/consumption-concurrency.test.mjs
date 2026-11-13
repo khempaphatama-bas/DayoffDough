@@ -6,6 +6,7 @@ import path from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { after, test } from "node:test";
 import { setImmediate } from "node:timers/promises";
+import { eq } from "drizzle-orm";
 import { readMigrationFiles } from "drizzle-orm/migrator";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { getTableConfig } from "drizzle-orm/pg-core";
@@ -453,23 +454,38 @@ test("opposite item orders across independent Cycles serialize without deadlock"
   const { input } = await fixture.prepareConsumptionFixture(h.db, OWNER_ID, s.relatedCycleId);
   input.items = input.items.map(item => ({ ...item, usedQuantity: "1", basis: "OWNER_REPORTED", reason: "Measured" })).reverse();
   input.expectedLedger = [...input.expectedLedger].reverse();
-  // Block the higher item so A demonstrably holds the lower item while still
-  // acquiring its multi-item lock set. B's reversed input MUST wait on A's
-  // lower item, not acquire higher-first; this catches an inverted item order.
+  // Record the actual query parameter at the driver boundary: blocker PIDs
+  // alone cannot distinguish lower-item locks from higher-item queue blockers.
+  const a = inventoryLockObserver(h.first), b = inventoryLockObserver(h.second);
   await h.setup`BEGIN`;
   const [{ pid: blockerPid }] = await h.setup`SELECT pg_backend_pid() AS pid`;
   await h.setup`SELECT id FROM inventory_items WHERE id=${s.itemIds[1]} FOR UPDATE`;
-  let firstPending, secondPending;
+  let firstPending, secondPending, reversedPending;
   let first, second;
   try {
-    firstPending = outcome(consumption(h.firstDb).confirmUse(OWNER_ID, s.input));
+    firstPending = outcome(consumption(a.db).confirmUse(OWNER_ID, s.input));
     await blocked(h, h.firstPid, blockerPid, firstPending);
-    secondPending = outcome(consumption(h.secondDb).confirmUse(OWNER_ID, input));
+    assert.deepEqual(a.items, s.itemIds);
+    // Negative control: a real higher-first query has the SAME A-blocks-B PID
+    // chain (A is ahead in the higher-item queue), but must fail our item proof.
+    reversedPending = outcome(b.db.select().from(applicationSchema.inventoryItems)
+      .where(eq(applicationSchema.inventoryItems.id, s.itemIds[1])).for("update"));
+    await blocked(h, h.secondPid, h.firstPid, reversedPending);
+    assert.deepEqual(b.items, [s.itemIds[1]]);
+    assert.throws(() => assertLowerItemFirst(b.items, s.itemIds[0]), { code: "ERR_ASSERTION" });
+    await h.observer`SELECT pg_cancel_backend(${h.secondPid})`;
+    const reversed = await reversedPending;
+    assert.equal(reversed.error?.cause?.code, "57014");
+    console.log(`NEGATIVE_CONTROL higher_first=${b.items[0]} soft_blocker=${h.firstPid} rejected_by_item_assertion`);
+    b.items.length = 0;
+    secondPending = outcome(consumption(b.db).confirmUse(OWNER_ID, input));
     await blocked(h, h.secondPid, h.firstPid, secondPending);
+    assertLowerItemFirst(b.items, s.itemIds[0]);
+    console.log(`OBSERVER_ITEM_ORDER A=${a.items.join(",")} B_waiting_item=${b.items[0]}`);
     assert.deepEqual(await state(h), { operations: 0, revisions: 0, movements: 0, pointers: 0 });
     await h.setup`ROLLBACK`;
     first = await firstPending; second = await secondPending;
-  } finally { await h.setup`ROLLBACK`; if (firstPending) await firstPending; if (secondPending) await secondPending; }
+  } finally { await h.setup`ROLLBACK`; if (firstPending) await firstPending; if (reversedPending) await reversedPending; if (secondPending) await secondPending; }
   assert.ifError(first.error); assert.equal(second.error?.kind, "STALE_DATA");
   await consumption(h.db).confirmUse(OWNER_ID, { ...input, expectedLedger: await tokens(h.db, s.itemIds) });
   assert.deepEqual(await balance(h, s.itemIds), ["49", "7"]);
@@ -481,18 +497,57 @@ test("direct child-first movement mutation rejects 55P03 without inverted blocki
   await h.first`BEGIN`;
   try {
     await h.first`SELECT id FROM inventory_items WHERE id = ${s.itemIds[0]} FOR UPDATE`;
+    // Negative control: PostgreSQL lock_timeout also emits 55P03. Its observed
+    // blocking wait and timeout message must not satisfy the NOWAIT predicate.
     await h.second`BEGIN`;
+    await h.second`SET LOCAL lock_timeout = '1s'`;
+    const timeoutPending = outcome(h.second`SELECT id FROM inventory_items WHERE id = ${s.itemIds[0]} FOR UPDATE`);
+    await blocked(h, h.secondPid, h.firstPid, timeoutPending);
+    const timedOut = await timeoutPending;
+    assert.equal(timedOut.error?.code, "55P03");
+    assert.match(timedOut.error.message, /canceling statement due to lock timeout/);
+    assert.throws(() => assertNowaitRejection(timedOut.error), { code: "ERR_ASSERTION" });
+    console.log("NEGATIVE_CONTROL blocking_wait=observed code=55P03 lock_timeout rejected_by_nowait_assertion");
+    await h.second`ROLLBACK`;
+    await h.second`BEGIN`;
+    // Disable only the timeout that could masquerade as guard rejection. A
+    // blocking regression remains bounded by statement_timeout (code 57014).
+    await h.second`SET LOCAL lock_timeout = '0'`;
+    await h.second`SET LOCAL statement_timeout = '2s'`;
     await h.second`SELECT inventory_item_id FROM inventory_ledger_states WHERE inventory_item_id = ${s.itemIds[0]} FOR UPDATE`;
     const before = await tokens(drizzle(h.observer), s.itemIds);
-    const result = await outcome(h.second`INSERT INTO inventory_movements (owner_id, inventory_item_id, type, quantity_delta_in_base_unit, occurred_at)
+    const pending = outcome(h.second`INSERT INTO inventory_movements (owner_id, inventory_item_id, type, quantity_delta_in_base_unit, occurred_at)
       VALUES (${OWNER_ID}, ${s.itemIds[0]}, 'PURCHASE', 1, now())`);
-    assert.equal(result.error?.code, "55P03");
+    let settled = false;
+    void pending.then(() => { settled = true; });
+    while (!settled) {
+      const [wait] = await h.observer`SELECT pg_blocking_pids(${h.secondPid}) AS blockers`;
+      if (!settled) assert.deepEqual(wait.blockers, [], "child-first contender must not wait on upstream locks");
+      await setImmediate();
+    }
+    const result = await pending;
+    assertNowaitRejection(result.error);
     assert.deepEqual(await tokens(drizzle(h.observer), s.itemIds), before);
-    const [wait] = await h.observer`SELECT pg_blocking_pids(${h.secondPid}) AS blockers`;
-    assert.deepEqual(wait.blockers, []);
-    console.log("OBSERVER_CHILD_FIRST rejected=55P03 no_wait metadata_unchanged");
+    console.log("OBSERVER_CHILD_FIRST intended_NOWAIT=55P03 lock_timeout=0 statement_timeout=2s metadata_unchanged");
   } finally { await h.second`ROLLBACK`; await h.first`ROLLBACK`; }
 }));
+function assertNowaitRejection(error) {
+  assert.equal(error?.code, "55P03");
+  assert.equal(error.message, 'could not obtain lock on row in relation "inventory_items"');
+}
+function assertLowerItemFirst(items, lowerId) {
+  assert.deepEqual(items, [lowerId], "contender must be acquiring the lower item, not queued on the higher item");
+}
+function inventoryLockObserver(connection) {
+  const items = [];
+  const db = drizzle(connection, { logger: { logQuery(query, params) {
+    if (!query.includes('from "inventory_items"') || !/\bfor update\b/i.test(query)) return;
+    const idParameter = query.match(/"inventory_items"\."id" = \$(\d+)/);
+    assert.ok(idParameter, "inventory lock SQL must identify the contested item");
+    items.push(params[Number(idParameter[1]) - 1]);
+  } } });
+  return { db, items };
+}
 async function blocked(h, waitingPid, holdingPid, pending) {
   let settled = false; void pending.then(() => { settled = true; });
   const deadline = Date.now() + 5000;
