@@ -82,6 +82,8 @@ function SettlementIntentForm({ preview: incoming, action }: Props) {
   const preview = intent.preview;
   const selected = new Set(preview.countedItemIds);
   const allItems = preview.contexts.flatMap(row => row.items);
+  const pendingItemIds = new Set(allItems.map(row => row.inventoryItemId));
+  const countOnlyIds = preview.countedItemIds.filter(id => !pendingItemIds.has(id));
   // Selected stock can have no pending usage of its own. Match the query's
   // touched union without fabricating an item in any immutable context.
   const union = new Set([...preview.countedItemIds, ...allItems.map(row => row.inventoryItemId)]);
@@ -97,7 +99,7 @@ function SettlementIntentForm({ preview: incoming, action }: Props) {
     counts: intent.counts,
   };
   const parsed = settleUseInputSchema.safeParse(input);
-  const ready = !selectionDirty && coherent && parsed.success && intent.contexts.every(row => {
+  const ready = !selectionDirty && countOnlyIds.length === 0 && coherent && parsed.success && intent.contexts.every(row => {
     const context = preview.contexts.find(context => context.source.contextId === row.contextId)!;
     return exactSet(row.items.map(item => item.inventoryItemId), new Set(context.items.map(item => item.inventoryItemId))) && row.items.every(entry => {
       const item = context.items.find(item => item.inventoryItemId === entry.inventoryItemId)!;
@@ -134,6 +136,10 @@ function SettlementIntentForm({ preview: incoming, action }: Props) {
       setSelectionDirty(true);
       setIntent(newIntent(preview));
     }} />
+    {countOnlyIds.length > 0 ? <div role="alert" className="grid gap-2 rounded-xl bg-amber-50 p-4 text-sm">
+      {countOnlyIds.map(id => <p key={id}>{labelFor(id)} ไม่มีรอบค้างยอดใช้ ต้องใช้การนับสต๊อกปัจจุบันตามปกติ ไม่รวมในการเคลียร์ยอดใช้ชุดนี้</p>)}
+      <p>ยังบันทึกชุดที่เลือกนี้ไม่ได้ ยกเลิกเลือกรายการเหล่านี้ แล้วกดดูตัวอย่างและเริ่มรายการนับใหม่ เพื่อตรวจยอดใช้และโทเคนล่าสุดก่อนบันทึก ไม่มีการตัดรายการที่เลือกออกให้อัตโนมัติ</p>
+    </div> : null}
     {selectionDirty ? <p role="alert" className="rounded-xl bg-amber-50 p-4 text-sm">เปลี่ยนรายการนับแล้ว กรุณาดูตัวอย่างใหม่ ข้อมูลและโทเคนเดิมใช้บันทึกไม่ได้</p> : null}
     <form ref={formElement} action={formAction} aria-label="นับของเหลือและเคลียร์ยอดใช้" className="grid min-w-0 gap-4 [overflow-wrap:anywhere]">
       <input type="hidden" name="payload" disabled={selectionDirty} value={JSON.stringify(parsed.success ? parsed.data : input)} />

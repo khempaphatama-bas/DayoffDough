@@ -122,8 +122,10 @@ function UsageIntentForm({ view, mode, action }: Props) {
                   <label className="text-sm font-semibold" htmlFor={`${prefix}-basis`}>ที่มาของยอดใช้ {item.inventoryItemName}</label>
                   <select {...errorProps(basisPath)} className={INPUT} id={`${prefix}-basis`} value={entry.basis} onChange={event => update(index, event.target.value === "PLANNED" ? { basis: "PLANNED", usedQuantity: item.plannedQuantity } : { basis: "OWNER_REPORTED" })}>
                     {!cancelled ? <option value="PLANNED">ตามแผน (ประมาณการ)</option> : null}
+                    {cancelled && entry.basis === "PLANNED" ? <option value="PLANNED" disabled>เดิมตามแผน · ยังไม่ยืนยันใช้จริง</option> : null}
                     <option value="OWNER_REPORTED">เจ้าของบันทึกใช้จริง</option>
                   </select>
+                  {cancelled && entry.basis === "PLANNED" ? <p className="text-sm text-amber-950">ยอดเดิมเป็นประมาณการ เลือกเจ้าของบันทึกใช้จริงเพื่อยืนยันบรรทัดนี้ แม้จำนวนเท่าเดิม ประวัติตามแผนเดิมยังคงอยู่</p> : null}
                   {fieldError(basisPath)}
                 </div>
               </div>

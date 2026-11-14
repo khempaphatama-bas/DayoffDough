@@ -19,7 +19,7 @@ describe("ConsumptionPage", () => {
     mocks.getCycleConsumption.mockResolvedValue(PENDING_USAGE);
     mocks.getSettlementPreview.mockResolvedValue(SETTLEMENT_PREVIEW);
   });
-  it("submits a valid mixed GET preview with complete counts, context and captured ledger", async () => {
+  it("preserves and blocks mixed GET intent until explicit selection and fresh pending-only page", async () => {
     const sent: SettleUseInput[] = [];
     mocks.getSettlementPreview.mockResolvedValueOnce(MIXED_SETTLEMENT_PREVIEW);
     mocks.settleUseAction.mockImplementationOnce(async (_: ConsumptionActionState, data: FormData): Promise<ConsumptionActionState> => {
@@ -33,10 +33,39 @@ describe("ConsumptionPage", () => {
     fireEvent.change(ui.getByLabelText("ของเหลือหลังใช้ น้ำตาลทราย (kg)"), { target: { value: "7.125" } });
     fireEvent.change(ui.getByLabelText("เหตุผลการนับและเคลียร์ยอดใช้"), { target: { value: "นับหลังอบ" } });
     fireEvent.click(ui.getByLabelText("ยืนยันว่าของเหลือเป็นยอดหลังใช้ทุกรายการที่แสดง และผลิตเสร็จแล้ว"));
+    expect(ui.getByRole("button", { name: "บันทึกยอดใช้และของเหลือพร้อมกัน" })).toBeDisabled();
+    expect(ui.getByRole("alert")).toHaveTextContent(/น้ำตาลทราย.*ไม่มีรอบค้างยอดใช้.*นับสต๊อกปัจจุบัน/);
+    expect(ui.getByRole("link", { name: /นับสต๊อกปัจจุบัน น้ำตาลทราย/ })).toHaveAttribute("href", `/inventory/${ids.countedOnly}`);
+    const form = ui.getByRole("form", { name: "นับของเหลือและเคลียร์ยอดใช้" }) as HTMLFormElement;
+    const mixed = JSON.parse(String(new FormData(form).get("payload"))) as SettleUseInput;
+    expect(mixed.counts).toEqual([{ inventoryItemId: ids.flour, remainingQuantity: "25" }, { inventoryItemId: ids.countedOnly, remainingQuantity: "7.125" }]);
+    expect(mixed.expectedLedger).toEqual([{ inventoryItemId: ids.flour, ledgerRevision: "4", countMovementId: ids.count }, { inventoryItemId: ids.bag, ledgerRevision: "2", countMovementId: null }, { inventoryItemId: ids.countedOnly, ledgerRevision: "3", countMovementId: null }]);
+    expect(mixed.contexts).toEqual([{ cycleId: ids.cycle, planningSnapshotId: ids.snapshot, contextId: ids.context, confirmTakenOutOfUse: true, items: [
+      { inventoryItemId: ids.flour, usedQuantity: "0.3", basis: "PLANNED", reason: null },
+      { inventoryItemId: ids.bag, usedQuantity: "2", basis: "PLANNED", reason: null },
+    ] }]);
+    fireEvent.click(ui.getByRole("button", { name: "บันทึกยอดใช้และของเหลือพร้อมกัน" }));
+    expect(mocks.settleUseAction).not.toHaveBeenCalled();
+    fireEvent.click(ui.getByLabelText("นับของเหลือ น้ำตาลทราย"));
+    expect(new FormData(form).has("payload")).toBe(false);
+    expect(ui.getByRole("button", { name: "บันทึกยอดใช้และของเหลือพร้อมกัน" })).toBeDisabled();
+    const selector = ui.getByRole("form", { name: "เลือกรายการนับของเหลือ" }) as HTMLFormElement;
+    expect(selector).toHaveAttribute("method", "get");
+    const get = new URLSearchParams([...new FormData(selector)].map(([key, value]) => [key, String(value)]));
+    expect(get.get("mode")).toBe("settle");
+    expect(get.getAll("countItem")).toEqual([ids.flour]);
+    ui.rerender(await ConsumptionPage({ params: Promise.resolve({ id: ids.cycle }), searchParams: Promise.resolve({ mode: get.get("mode")!, countItem: get.getAll("countItem") }) }));
+    expect(mocks.getSettlementPreview).toHaveBeenLastCalledWith("owned-user", [ids.flour]);
+    expect(mocks.requireOwner.mock.invocationCallOrder[1]!).toBeLessThan(mocks.getSettlementPreview.mock.invocationCallOrder[1]!);
+    expect(ui.getByLabelText("ของเหลือหลังใช้ แป้งขนมปังจากแผน (g)")).toHaveValue("");
+    fireEvent.change(ui.getByLabelText("ของเหลือหลังใช้ แป้งขนมปังจากแผน (g)"), { target: { value: "25" } });
+    fireEvent.change(ui.getByLabelText("เหตุผลการนับและเคลียร์ยอดใช้"), { target: { value: "นับหลังอบ" } });
+    fireEvent.click(ui.getByLabelText("ยืนยันว่าของเหลือเป็นยอดหลังใช้ทุกรายการที่แสดง และผลิตเสร็จแล้ว"));
+    expect(ui.getByRole("button", { name: "บันทึกยอดใช้และของเหลือพร้อมกัน" })).toBeEnabled();
     fireEvent.click(ui.getByRole("button", { name: "บันทึกยอดใช้และของเหลือพร้อมกัน" }));
     await waitFor(() => expect(sent).toHaveLength(1));
-    expect(sent[0]!.counts).toEqual([{ inventoryItemId: ids.flour, remainingQuantity: "25" }, { inventoryItemId: ids.countedOnly, remainingQuantity: "7.125" }]);
-    expect(sent[0]!.expectedLedger).toEqual([{ inventoryItemId: ids.flour, ledgerRevision: "4", countMovementId: ids.count }, { inventoryItemId: ids.bag, ledgerRevision: "2", countMovementId: null }, { inventoryItemId: ids.countedOnly, ledgerRevision: "3", countMovementId: null }]);
+    expect(sent[0]!.counts).toEqual([{ inventoryItemId: ids.flour, remainingQuantity: "25" }]);
+    expect(sent[0]!.expectedLedger).toEqual([{ inventoryItemId: ids.flour, ledgerRevision: "4", countMovementId: ids.count }, { inventoryItemId: ids.bag, ledgerRevision: "2", countMovementId: null }]);
     expect(sent[0]!.contexts).toEqual([{ cycleId: ids.cycle, planningSnapshotId: ids.snapshot, contextId: ids.context, confirmTakenOutOfUse: true, items: [
       { inventoryItemId: ids.flour, usedQuantity: "0.3", basis: "PLANNED", reason: null },
       { inventoryItemId: ids.bag, usedQuantity: "2", basis: "PLANNED", reason: null },

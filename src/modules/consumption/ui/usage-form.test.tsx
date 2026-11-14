@@ -1,6 +1,7 @@
 import type { ReactElement } from "react";
 import { act, fireEvent, render, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
+import userEvent from "@testing-library/user-event";
 import { CANCELLED_USAGE, CONSUMPTION_IDS as ids, PENDING_USAGE, RECORDED_USAGE } from "@tests/fixtures/consumption-views";
 import type { ConsumptionActionState, ConfirmUseInput, CorrectUseInput } from "../domain/types";
 import { UsageForm } from "./usage-form";
@@ -18,6 +19,33 @@ function payload(data: FormData): ConfirmUseInput | CorrectUseInput {
 }
 
 describe("UsageForm", () => {
+  // Catches native select fallback falsely showing actual while payload remains
+  // PLANNED, and a changed line hiding another line's unresolved attestation.
+  it("keeps each cancelled previous-PLANNED line visibly unresolved until explicitly attested", async () => {
+    const submitted: (ConfirmUseInput | CorrectUseInput)[] = [];
+    const view = { ...RECORDED_USAGE, cycle: { ...RECORDED_USAGE.cycle, cycleStatus: "CANCELLED" as const },
+      items: RECORDED_USAGE.items.map(item => ({ ...item, basis: "PLANNED" as const, usedQuantity: item.plannedQuantity })) };
+    const ui = mount(<UsageForm view={view} mode="CORRECT" action={async (_, data) => { submitted.push(payload(data)); return initial; }} />);
+    const form = ui.getByRole("form", { name: "แก้ไขยอดใช้การผลิต" }) as HTMLFormElement;
+    const flour = ui.getByLabelText("ที่มาของยอดใช้ แป้งขนมปังจากแผน");
+    const bag = ui.getByLabelText("ที่มาของยอดใช้ ถุงขนมจากแผน");
+    expect(flour).toHaveValue("PLANNED"); expect(bag).toHaveValue("PLANNED");
+    expect(ui.getAllByRole("option", { selected: true }).every(option => option.textContent?.includes("ยังไม่ยืนยันใช้จริง"))).toBe(true);
+    expect(payload(new FormData(form)).items.map(item => item.basis)).toEqual(["PLANNED", "PLANNED"]);
+    fireEvent.change(ui.getByLabelText("เหตุผลการแก้ไข"), { target: { value: "ตรวจใช้จริงหลังยกเลิก" } });
+    expect(ui.getByRole("button", { name: "บันทึกการแก้ไข" })).toBeDisabled();
+    fireEvent.change(ui.getByLabelText("จำนวนใช้ แป้งขนมปังจากแผน"), { target: { value: "0.1" } });
+    fireEvent.change(ui.getByLabelText("เหตุผล แป้งขนมปังจากแผน"), { target: { value: "ชั่งจริง" } });
+    expect(flour).toHaveValue("OWNER_REPORTED"); expect(bag).toHaveValue("PLANNED");
+    expect(ui.getByRole("button", { name: "บันทึกการแก้ไข" })).toBeDisabled();
+    await userEvent.selectOptions(bag, "OWNER_REPORTED");
+    expect(bag).toHaveValue("OWNER_REPORTED");
+    expect(ui.getByLabelText("จำนวนใช้ ถุงขนมจากแผน")).toHaveValue("2");
+    expect(ui.getByRole("button", { name: "บันทึกการแก้ไข" })).toBeEnabled();
+    fireEvent.click(ui.getByRole("button", { name: "บันทึกการแก้ไข" }));
+    await waitFor(() => expect(submitted).toHaveLength(1));
+    expect(submitted[0]!.items.map(item => [item.usedQuantity, item.basis])).toEqual([["0.1", "OWNER_REPORTED"], ["2", "OWNER_REPORTED"]]);
+  });
   // Catches a form that silently reports recipe defaults as actual or drops source/fence tokens.
   it("submits explicit planned estimates with the server source and complete expected ledger", async () => {
     const submitted: (ConfirmUseInput | CorrectUseInput)[] = [];

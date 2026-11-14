@@ -24,11 +24,10 @@ function complete(ui: UI) {
 function submit(ui: UI) { fireEvent.click(ui.getByRole("button", { name: "บันทึกยอดใช้และของเหลือพร้อมกัน" })); }
 
 describe("SettlementForm", () => {
-  // Catches narrowing the touched union to context items and rejecting a valid
-  // owned counted-only item, or fabricating a usage row for that selected item.
-  it("dispatches mixed pending and counted-only stock with complete counts and tokens", async () => {
-    const sent: SettleUseInput[] = [];
-    const ui = mount(<SettlementForm preview={MIXED_SETTLEMENT_PREVIEW} action={async (_, data) => { sent.push(payload(data)); return initial; }} />);
+  // Catches advertising an impossible mixed operation or silently narrowing the
+  // owner's selected counts/tokens instead of requiring an explicit fresh GET.
+  it("blocks mixed count-only settlement until explicit pending-only selection and fresh preview", () => {
+    const ui = mount(<SettlementForm preview={MIXED_SETTLEMENT_PREVIEW} action={async () => initial} />);
     expect(ui.queryByText(/ข้อมูลตัวอย่างไม่ครบ/)).toBeNull();
     expect(ui.getByLabelText("นับของเหลือ น้ำตาลทราย")).toBeChecked();
     expect(ui.getByLabelText("ของเหลือหลังใช้ น้ำตาลทราย (kg)")).toBeRequired();
@@ -40,16 +39,26 @@ describe("SettlementForm", () => {
     complete(ui);
     expect(ui.getByRole("button", { name: "บันทึกยอดใช้และของเหลือพร้อมกัน" })).toBeDisabled();
     fireEvent.change(ui.getByLabelText("ของเหลือหลังใช้ น้ำตาลทราย (kg)"), { target: { value: "7.125" } });
-    submit(ui); await waitFor(() => expect(sent).toHaveLength(1));
-    expect(sent[0]).toEqual({ requestId: expect.any(String), reason: "นับของเหลือหลังอบ",
-      contexts: [{ cycleId: ids.cycle, planningSnapshotId: ids.snapshot, contextId: ids.context, confirmTakenOutOfUse: true, items: [
-        { inventoryItemId: ids.flour, usedQuantity: "0.3", basis: "PLANNED", reason: null },
-        { inventoryItemId: ids.bag, usedQuantity: "2", basis: "PLANNED", reason: null },
-      ] }],
-      counts: [{ inventoryItemId: ids.flour, remainingQuantity: "25" }, { inventoryItemId: ids.countedOnly, remainingQuantity: "7.125" }],
-      expectedLedger: [{ inventoryItemId: ids.flour, ledgerRevision: "4", countMovementId: ids.count }, { inventoryItemId: ids.bag, ledgerRevision: "2", countMovementId: null }, { inventoryItemId: ids.countedOnly, ledgerRevision: "3", countMovementId: null }],
-    });
+    expect(ui.getByRole("button", { name: "บันทึกยอดใช้และของเหลือพร้อมกัน" })).toBeDisabled();
+    expect(ui.getByRole("alert")).toHaveTextContent(/น้ำตาลทราย.*ไม่มีรอบค้างยอดใช้.*นับสต๊อกปัจจุบัน/);
+    const form = ui.getByRole("form", { name: "นับของเหลือและเคลียร์ยอดใช้" }) as HTMLFormElement;
+    const draft = payload(new FormData(form));
+    expect(draft.counts.map(row => row.inventoryItemId)).toEqual([ids.flour, ids.countedOnly]);
+    expect(draft.expectedLedger).toEqual(MIXED_SETTLEMENT_PREVIEW.expectedLedger);
+    expect(draft.contexts[0]!.items.map(row => row.inventoryItemId)).toEqual([ids.flour, ids.bag]);
     expect(ui.getByText("ยอดหลังนับ 7.125 · ผล COUNT -2.125")).toBeInTheDocument();
+    fireEvent.click(ui.getByLabelText("นับของเหลือ น้ำตาลทราย"));
+    expect(ui.getByRole("button", { name: "บันทึกยอดใช้และของเหลือพร้อมกัน" })).toBeDisabled();
+    expect(new FormData(form).has("payload")).toBe(false);
+    const selection = new FormData(ui.getByRole("form", { name: "เลือกรายการนับของเหลือ" }) as HTMLFormElement);
+    expect(selection.getAll("countItem")).toEqual([ids.flour]);
+    expect(selection.get("mode")).toBe("settle");
+    expect(ui.getByRole("form", { name: "เลือกรายการนับของเหลือ" })).toHaveAttribute("method", "get");
+    // Only adoption of the explicit fresh preview can enable a new operation.
+    ui.rerender(<SettlementForm preview={SETTLEMENT_PREVIEW} action={async () => initial} />);
+    expect(ui.getByLabelText("ของเหลือหลังใช้ แป้งขนมปังจากแผน (g)")).toHaveValue("");
+    complete(ui);
+    expect(ui.getByRole("button", { name: "บันทึกยอดใช้และของเหลือพร้อมกัน" })).toBeEnabled();
   });
   // Catches selected-only usage payloads, hidden zero effects and double subtracting physical stock.
   it("sends the full use context but a physical count only for selected flour", async () => {
