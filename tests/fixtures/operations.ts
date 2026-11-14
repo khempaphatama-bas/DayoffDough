@@ -1,4 +1,16 @@
 import type { CycleOperationsView, OperationsTask, OperationsOrder, OperationsOrderItem } from "@/modules/operations/domain/types";
+import type { DatabaseClient } from "@/lib/db/types";
+import { createConsumptionCommandService } from "@/modules/consumption/application/consumption-commands";
+import { prepareConsumptionFixture } from "./consumption";
+
+// Use the real V1 workflow when arranging completed/zero-use Operations tests.
+export async function recordOperationsConsumption(db: DatabaseClient, ownerId: string, cycleId: string, zero = false) {
+  const { input } = await prepareConsumptionFixture(db, ownerId, cycleId);
+  return createConsumptionCommandService(db).confirmUse(ownerId, zero ? {
+    ...input, confirmEmpty: true, reason: "No inventory taken out of use",
+    items: input.items.map((i) => ({ ...i, usedQuantity: "0", basis: "OWNER_REPORTED", reason: "No inventory taken out of use" })),
+  } : input);
+}
 
 export const CYCLE_ID = "72000000-0000-4000-8000-000000000001";
 export const GENERATION_ID = "72000000-0000-4000-8000-000000000002";
@@ -19,6 +31,7 @@ export const READY_VIEW = {
   products: [{ id: TASK.productId!, name: "ฟอคคาเซีย" }, { id: "72000000-0000-4000-8000-000000000005", name: "บริยอช" }],
   tasks: [TASK], taskBuckets: { overdue: [], today: [TASK], future: [] }, orders: [], cancelledOrders: [],
   completion: { ready: false, remainingTaskCount: 1, remainingOrderCount: 0, unpaidOrderCount: 0, outstandingSatang: 0 },
+  consumption: { required: true, recorded: false, startBlockedByStockCheck: true },
 } satisfies Extract<CycleOperationsView, { kind: "READY" }>;
 
 export const NO_GENERATION_VIEW: Extract<CycleOperationsView, { kind: "NO_GENERATION" }> = {

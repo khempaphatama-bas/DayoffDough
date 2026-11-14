@@ -79,6 +79,16 @@ const VIEW: CountRequiredView = {
 };
 
 describe("StockCountForm", () => {
+  it("shows owned pending-cycle links and its settlement selector after a real COUNT rejection", async () => {
+    const oldCycleId = "10000000-0000-4000-8000-000000000001";
+    actions.confirmCycleStockAction.mockResolvedValueOnce({ error: "มีรอบค้างยอดใช้", fieldErrors: {}, saved: false, stale: false, blockers: [{ cycleId: oldCycleId, cycleName: "รอบเก่าที่ต้องเคลียร์" }] });
+    render(<StockCountForm view={VIEW} />);
+    await userEvent.click(screen.getByRole("button", { name: "ยืนยันสต๊อกและสร้างรายการซื้อ" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("มีรอบค้างยอดใช้");
+    expect(screen.getByRole("link", { name: "รอบเก่าที่ต้องเคลียร์" })).toHaveAttribute("href", `/cycles/${oldCycleId}/consumption`);
+    expect(screen.getByRole("link", { name: "เลือกรายการนับของเหลือและเคลียร์ยอดใช้" })).toHaveAttribute("href", `/cycles/${oldCycleId}/consumption`);
+    expect(screen.queryByText(oldCycleId)).toBeNull();
+  });
   beforeEach(() => {
     actions.confirmCycleStockAction.mockReset();
     actions.confirmCycleStockAction.mockResolvedValue(OK_STATE);

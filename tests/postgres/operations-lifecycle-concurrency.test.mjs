@@ -2,8 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { test } from "node:test";
-import { drizzle } from "drizzle-orm/postgres-js";
-import { migrate } from "drizzle-orm/postgres-js/migrator";
+import { readMigrationFiles } from "drizzle-orm/migrator";
 import postgres from "postgres";
 
 const OWNER_ID = "71000000-0000-4000-8000-000000000001";
@@ -14,6 +13,22 @@ const SNAPSHOT_ID = "76000000-0000-4000-8000-000000000001";
 const GENERATION_ID = "77000000-0000-4000-8000-000000000001";
 const TASK_ID = "78000000-0000-4000-8000-000000000001";
 const TASK_REQUEST_ID = "79000000-0000-4000-8000-000000000001";
+
+// These five historical Operations races retain their original meaning. Seed
+// their Cycle through the real pre-0014 schema, then apply the cutover; never
+// opt a new V1 Cycle out or disable any trigger. Each migration stays atomic.
+async function applyMigrationRange(connection, from, to = 14) {
+  const migrations = readMigrationFiles({ migrationsFolder: "drizzle" });
+  for (let index = from; index <= to; index++) {
+    const migration = migrations[index];
+    assert.ok(migration, `Migration ${index} is missing`);
+    await connection.begin(async transaction => {
+      for (const statement of migration.sql) {
+        if (statement.trim()) await transaction.unsafe(statement);
+      }
+    });
+  }
+}
 
 function localAdminUrl() {
   const raw = process.env.TASK7_LOCAL_PG_ADMIN_URL;
@@ -64,7 +79,7 @@ test("direct Order start serializes with concurrent Cycle unlock", { timeout: 20
   try {
     await admin.unsafe(`CREATE DATABASE "${databaseName}"`);
     migrationClient = client(databaseUrl);
-    await migrate(drizzle(migrationClient), { migrationsFolder: "drizzle" });
+    await applyMigrationRange(migrationClient, 0, 13);
     await migrationClient`
       INSERT INTO customers (id, owner_id, name)
       VALUES (${CUSTOMER_ID}, ${OWNER_ID}, 'Race customer')
@@ -78,6 +93,7 @@ test("direct Order start serializes with concurrent Cycle unlock", { timeout: 20
       INSERT INTO orders (id, owner_id, customer_id, bake_cycle_id, fulfillment_status)
       VALUES (${ORDER_ID}, ${OWNER_ID}, ${CUSTOMER_ID}, ${CYCLE_ID}, 'CONFIRMED')
     `;
+    await applyMigrationRange(migrationClient, 14);
 
     orderConnection = client(databaseUrl);
     cycleConnection = client(databaseUrl);
@@ -151,7 +167,7 @@ async function runTaskCompletionRace(kind) {
   try {
     await admin.unsafe(`CREATE DATABASE "${databaseName}"`);
     migrationClient = client(databaseUrl);
-    await migrate(drizzle(migrationClient), { migrationsFolder: "drizzle" });
+    await applyMigrationRange(migrationClient, 0, 13);
     await migrationClient`
       INSERT INTO bake_cycles (
         id, owner_id, name, status, target_production_date, primary_delivery_date
@@ -194,6 +210,7 @@ async function runTaskCompletionRace(kind) {
       `;
     }
 
+    await applyMigrationRange(migrationClient, 14);
     writer = client(databaseUrl);
     cycleConnection = client(databaseUrl);
     observer = client(databaseUrl);
@@ -281,7 +298,7 @@ async function runPackingTransitionRace(firstOperation) {
   try {
     await admin.unsafe(`CREATE DATABASE "${databaseName}"`);
     migrationClient = client(databaseUrl);
-    await migrate(drizzle(migrationClient), { migrationsFolder: "drizzle" });
+    await applyMigrationRange(migrationClient, 0, 13);
     await migrationClient`INSERT INTO customers (id, owner_id, name) VALUES (${CUSTOMER_ID}, ${OWNER_ID}, 'Packing race customer')`;
     await migrationClient`INSERT INTO products (id, owner_id, name, selling_unit, default_unit_price_satang)
       VALUES (${productId}, ${OWNER_ID}, 'Packing race bread', 'piece', 100)`;
@@ -293,6 +310,7 @@ async function runPackingTransitionRace(firstOperation) {
       VALUES (${itemId}, ${OWNER_ID}, ${ORDER_ID}, ${productId}, 10, 100, 0)`;
     await migrationClient`INSERT INTO order_item_packing_progress (owner_id, order_item_id, packed_quantity)
       VALUES (${OWNER_ID}, ${itemId}, 10)`;
+    await applyMigrationRange(migrationClient, 14);
 
     first = client(databaseUrl);
     second = client(databaseUrl);

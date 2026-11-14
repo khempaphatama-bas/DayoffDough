@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import Decimal from "decimal.js";
+import { assertNoPendingConsumption, rethrowConsumptionLockError } from "@/modules/consumption/application/count-barrier";
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { lockOwnedBakeCycle, lockOwnedInventoryItems } from "@/lib/db/row-locks";
@@ -423,6 +424,7 @@ export function createShoppingCommandService(
         if (lockedItems.length !== source.length) {
           throw new ShoppingStateError("Shopping inventory profile changed");
         }
+        await assertNoPendingConsumption(tx, verifiedOwnerId, source.map((row) => row.inventoryItemId));
         const refreshed = await loadValidatedShoppingSource(
           tx as unknown as DatabaseClient,
           verifiedOwnerId,
@@ -492,7 +494,7 @@ export function createShoppingCommandService(
           verifiedOwnerId,
           cycle.id,
         );
-      });
+      }).catch(rethrowConsumptionLockError);
     },
 
     async recordPurchase(

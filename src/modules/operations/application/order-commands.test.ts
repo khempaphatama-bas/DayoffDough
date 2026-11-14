@@ -1,4 +1,5 @@
 import { and, eq } from "drizzle-orm";
+import { confirmConsumptionStock } from "@tests/fixtures/consumption";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { OTHER_OWNER_ID, OWNER_ID } from "@tests/fixtures/owner";
 import { seedLockedPlanningScenario, seedPlanningScenario } from "@tests/fixtures/planning";
@@ -63,6 +64,7 @@ describe("order operations commands", () => {
   }
 
   async function inProduction(cycleId: string) {
+    await confirmConsumptionStock(context.db, OWNER_ID, cycleId);
     await createCycleOperationsCommandService(context.db).startCycle(OWNER_ID, { cycleId });
     const [secondOrder] = await context.db.select({ id: orders.id }).from(orders).where(and(
       eq(orders.ownerId, OWNER_ID), eq(orders.bakeCycleId, cycleId), eq(orders.sourceChannel, "PHONE"),

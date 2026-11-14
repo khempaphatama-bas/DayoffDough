@@ -2,6 +2,7 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 import {
   addInventoryPrice,
   configureShopSettings,
+  confirmCycleStock,
   createBakeCycle,
   createCustomer,
   createDeliveryMethod,
@@ -315,6 +316,10 @@ test("owner runs the complete production timeline lifecycle", async ({ page }, t
   await submitCurrentPageAction(page, page, "ปลดล็อกรอบ");
   await page.goto(`${cycleUrl}/planning`);
   await submitCurrentPageAction(page, page, "ยืนยันล็อกรอบ");
+
+  // V1 uses the active generation's explicit stock check, not a legacy opt-out.
+  await page.goto(`${cycleUrl}/shopping`);
+  await confirmCycleStock(page, [{ itemName: flourName, quantity: "5000" }, { itemName: boxName, quantity: "100" }]);
 
   await page.goto(`${cycleUrl}/production`);
   await expect(page.getByRole("heading", { name: /รุ่น 2/ })).toBeVisible();

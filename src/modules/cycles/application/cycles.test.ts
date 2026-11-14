@@ -1,4 +1,7 @@
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
+import { confirmConsumptionStock } from "@tests/fixtures/consumption";
+import { recordOperationsConsumption } from "@tests/fixtures/operations";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Logger } from "drizzle-orm/logger";
 import { OTHER_OWNER_ID, OWNER_ID } from "@tests/fixtures/owner";
@@ -167,7 +170,17 @@ describe("cycle service", () => {
     "COMPLETED",
     "CANCELLED",
   ] as const)("rejects metadata edits while a cycle is %s", async (status) => {
-    const [cycle] = await context.db
+    const legacyCycleId = randomUUID();
+    const historical = status === "IN_PRODUCTION" || status === "COMPLETED";
+    if (historical) {
+      await context.close();
+      context = await createTestDatabase({ beforeConsumptionCutover: async (db) => {
+        await db.execute(sql`INSERT INTO bake_cycles (id, owner_id, name, status, target_production_date, primary_delivery_date, locked_at)
+          VALUES (${legacyCycleId}, ${OWNER_ID}, ${`Frozen ${status}`}, ${status}, '2026-08-29', '2026-08-30', ${status === "IN_PRODUCTION" ? "2026-08-28T00:00:00.000Z" : null})`);
+      } });
+      service = createCycleService(context.db);
+    }
+    const [cycle] = historical ? await context.db.select().from(bakeCycles).where(eq(bakeCycles.id, legacyCycleId)) : await context.db
       .insert(bakeCycles)
       .values({
         ownerId: OWNER_ID,
@@ -176,7 +189,7 @@ describe("cycle service", () => {
         targetProductionDate: "2026-08-29",
         primaryDeliveryDate: "2026-08-30",
         lockedAt:
-          status === "LOCKED" || status === "IN_PRODUCTION"
+          status === "LOCKED"
             ? new Date("2026-08-28T00:00:00.000Z")
             : null,
       })
@@ -206,6 +219,22 @@ describe("cycle service", () => {
     const manuallyReachableTargets = bakeCycleStatus.filter(
       (status) => status !== "LOCKED",
     );
+    // These matrix rows deliberately represent historical cycles without plans.
+    // Only the production/terminal sources need the actual pre0014 boundary.
+    const historicalIds = new Map<string, string>();
+    await context.close();
+    context = await createTestDatabase({ beforeConsumptionCutover: async (db) => {
+      for (const current of ["IN_PRODUCTION", "COMPLETED"] as const) {
+        for (const target of manuallyReachableTargets) {
+          const name = `${current} to ${target}`;
+          const id = randomUUID();
+          historicalIds.set(name, id);
+          await db.execute(sql`INSERT INTO bake_cycles (id, owner_id, name, status, target_production_date, primary_delivery_date, locked_at)
+            VALUES (${id}, ${OWNER_ID}, ${name}, ${current}, '2026-08-29', '2026-08-30', ${current === "IN_PRODUCTION" ? "2026-08-28T00:00:00.000Z" : null})`);
+        }
+      }
+    } });
+    service = createCycleService(context.db);
 
     for (const current of bakeCycleStatus) {
       for (const target of manuallyReachableTargets) {
@@ -213,7 +242,8 @@ describe("cycle service", () => {
           current === "LOCKED" || current === "IN_PRODUCTION"
             ? new Date("2026-08-28T00:00:00.000Z")
             : null;
-        const [cycle] = await context.db
+        const historicalId = historicalIds.get(`${current} to ${target}`);
+        const [cycle] = historicalId ? await context.db.select().from(bakeCycles).where(eq(bakeCycles.id, historicalId)) : await context.db
           .insert(bakeCycles)
           .values({
             ownerId: OWNER_ID,
@@ -287,6 +317,7 @@ describe("cycle service", () => {
         overrides: [],
       });
       if (source === "IN_PRODUCTION") {
+        await confirmConsumptionStock(context.db, OWNER_ID, scenario.cycleId);
         await createCycleOperationsCommandService(context.db).startCycle(
           OWNER_ID, { cycleId: scenario.cycleId },
         );
@@ -309,6 +340,7 @@ describe("cycle service", () => {
           .where(eq(cycleTaskGenerations.planningSnapshotId, locked.id));
         await context.db.update(cycleTasks).set({ status: "DONE" })
           .where(eq(cycleTasks.cycleTaskGenerationId, generation!.id));
+        await recordOperationsConsumption(context.db, OWNER_ID, scenario.cycleId, true);
         await createCycleOperationsCommandService(context.db).completeCycle(OWNER_ID, {
           cycleId: scenario.cycleId, expectedTaskGenerationId: generation!.id, confirmation: true,
         });

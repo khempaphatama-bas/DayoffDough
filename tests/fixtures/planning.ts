@@ -98,6 +98,7 @@ export async function seedPlanningScenario(
     includePackagingPrice?: boolean;
     orderQuantity?: number;
     idSet?: "PRIMARY" | "SECONDARY";
+    reusePreCutoverCycle?: boolean;
   }> = {},
 ): Promise<Readonly<{
   cycleId: string;
@@ -310,7 +311,11 @@ export async function seedPlanningScenario(
     createdAt: new Date("2026-08-01T00:00:00.000Z"),
     updatedAt: new Date("2026-08-01T00:00:00.000Z"),
   });
-  await db.insert(bakeCycles).values({
+  if (input.reusePreCutoverCycle) {
+    const [existing] = await db.select().from(bakeCycles).where(eq(bakeCycles.id, ids.cycle));
+    if (!existing || existing.ownerId !== ownerId || existing.consumptionPolicy !== "LEGACY" || existing.status !== cycleStatus)
+      throw new Error("Expected the explicitly pre-cutover planning cycle");
+  } else await db.insert(bakeCycles).values({
     id: ids.cycle,
     ownerId,
     name: "รอบส่ง 30 ส.ค.",

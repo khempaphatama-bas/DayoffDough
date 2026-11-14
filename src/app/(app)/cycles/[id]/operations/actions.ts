@@ -14,12 +14,15 @@ import {
   orderOperationInputSchema, packingQuantityInputSchema, paymentTargetInputSchema,
 } from "@/modules/operations/domain/forms";
 import { OperationsStateError, type OperationsErrorKind } from "@/modules/operations/domain/types";
+import { createConsumptionActionSupport } from "@/modules/consumption/application/action-support";
+import { ConsumptionStateError, type ConsumptionStateErrorKind, type ConsumptionBlocker } from "@/modules/consumption/domain/types";
 
 export type OperationsActionState = Readonly<{
   error: string | null;
-  kind: "INVALID_INPUT" | OperationsErrorKind | null;
+  kind: "INVALID_INPUT" | OperationsErrorKind | ConsumptionStateErrorKind | null;
   fieldErrors: Readonly<Record<string, string>>;
   saved: boolean;
+  blockers?: readonly ConsumptionBlocker[];
 }>;
 
 const THAI_OPERATIONS_ERRORS: Readonly<Record<OperationsErrorKind, string>> = {
@@ -69,7 +72,7 @@ function revalidateOperationsViews({ cycleId, orderIds = [] }: AffectedViews): v
 }
 
 async function runOperation<T>(
-  formData: FormData, schema: z.ZodType<T>, execute: (input: T) => Promise<AffectedViews>,
+  formData: FormData, schema: z.ZodType<T>, execute: (input: T) => Promise<AffectedViews>, ownerId: string,
 ): Promise<OperationsActionState> {
   let payload: unknown;
   try { payload = readPayload(formData); } catch {
@@ -84,7 +87,16 @@ async function runOperation<T>(
   try {
     revalidateOperationsViews(await execute(parsed.data));
     return { error: null, kind: null, fieldErrors: {}, saved: true };
-  } catch (error) { return operationsErrorState(error); }
+  } catch (error) {
+    if (error instanceof ConsumptionStateError) {
+      try {
+        const cycleId = typeof parsed.data === "object" && parsed.data !== null && "cycleId" in parsed.data && typeof parsed.data.cycleId === "string" ? parsed.data.cycleId : undefined;
+        const safe = await createConsumptionActionSupport(db).mapError(ownerId, error, cycleId);
+        if (safe) return { error: safe.error, kind: error.kind, fieldErrors: safe.fieldErrors, saved: false, blockers: safe.blockers };
+      } catch { /* Do not expose a failed owned lookup. */ }
+    }
+    return operationsErrorState(error);
+  }
 }
 
 async function ownedOrderViews(ownerId: string, orderId: string): Promise<AffectedViews> {
@@ -99,7 +111,7 @@ export async function startCycleAction(_previousState: OperationsActionState, fo
   return runOperation(formData, cycleOperationInputSchema, async (input) => {
     await createCycleOperationsCommandService(db).startCycle(owner.id, input);
     return { cycleId: input.cycleId };
-  });
+  }, owner.id);
 }
 
 export async function confirmOrdersAction(_previousState: OperationsActionState, formData: FormData): Promise<OperationsActionState> {
@@ -107,7 +119,7 @@ export async function confirmOrdersAction(_previousState: OperationsActionState,
   return runOperation(formData, batchOrderOperationInputSchema, async (input) => {
     await createOrderOperationsCommandService(db).confirmOrders(owner.id, input);
     return input;
-  });
+  }, owner.id);
 }
 
 export async function startOrdersAction(_previousState: OperationsActionState, formData: FormData): Promise<OperationsActionState> {
@@ -115,7 +127,7 @@ export async function startOrdersAction(_previousState: OperationsActionState, f
   return runOperation(formData, batchOrderOperationInputSchema, async (input) => {
     await createOrderOperationsCommandService(db).startOrders(owner.id, input);
     return input;
-  });
+  }, owner.id);
 }
 
 export async function setPackedQuantityAction(_previousState: OperationsActionState, formData: FormData): Promise<OperationsActionState> {
@@ -127,7 +139,7 @@ export async function setPackedQuantityAction(_previousState: OperationsActionSt
       .where(and(eq(orderItems.ownerId, owner.id), eq(orderItems.id, input.orderItemId))).limit(1);
     if (!parent) throw new OperationsStateError("NOT_FOUND", "Operations record not found");
     return { cycleId: parent.bakeCycleId, orderIds: [parent.orderId] };
-  });
+  }, owner.id);
 }
 
 export async function confirmOrderPackedAction(_previousState: OperationsActionState, formData: FormData): Promise<OperationsActionState> {
@@ -135,7 +147,7 @@ export async function confirmOrderPackedAction(_previousState: OperationsActionS
   return runOperation(formData, orderOperationInputSchema, async (input) => {
     await createOrderOperationsCommandService(db).confirmOrderPacked(owner.id, input);
     return { cycleId: input.cycleId, orderIds: [input.orderId] };
-  });
+  }, owner.id);
 }
 
 export async function reopenOrderPackingAction(_previousState: OperationsActionState, formData: FormData): Promise<OperationsActionState> {
@@ -143,7 +155,7 @@ export async function reopenOrderPackingAction(_previousState: OperationsActionS
   return runOperation(formData, orderOperationInputSchema, async (input) => {
     await createOrderOperationsCommandService(db).reopenOrderPacking(owner.id, input);
     return { cycleId: input.cycleId, orderIds: [input.orderId] };
-  });
+  }, owner.id);
 }
 
 export async function setOrderAmountPaidAction(_previousState: OperationsActionState, formData: FormData): Promise<OperationsActionState> {
@@ -151,7 +163,7 @@ export async function setOrderAmountPaidAction(_previousState: OperationsActionS
   return runOperation(formData, paymentTargetInputSchema, async (input) => {
     await createPaymentOperationsCommandService(db).setOrderAmountPaid(owner.id, input);
     return ownedOrderViews(owner.id, input.orderId);
-  });
+  }, owner.id);
 }
 
 export async function deliverOrdersAction(_previousState: OperationsActionState, formData: FormData): Promise<OperationsActionState> {
@@ -159,7 +171,7 @@ export async function deliverOrdersAction(_previousState: OperationsActionState,
   return runOperation(formData, batchOrderOperationInputSchema, async (input) => {
     await createOrderOperationsCommandService(db).deliverOrders(owner.id, input);
     return input;
-  });
+  }, owner.id);
 }
 
 export async function completeCycleAction(_previousState: OperationsActionState, formData: FormData): Promise<OperationsActionState> {
@@ -167,5 +179,5 @@ export async function completeCycleAction(_previousState: OperationsActionState,
   return runOperation(formData, completeCycleInputSchema, async (input) => {
     await createCycleOperationsCommandService(db).completeCycle(owner.id, input);
     return { cycleId: input.cycleId };
-  });
+  }, owner.id);
 }

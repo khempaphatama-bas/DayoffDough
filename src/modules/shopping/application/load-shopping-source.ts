@@ -12,6 +12,7 @@ import type {
   SnapshotRequirementInput,
   StockCountCandidate,
   StockRequirementCategory,
+  StockRequirement,
 } from "@/modules/shopping/domain/types";
 import type { UnitCode } from "@/modules/units/domain/units";
 
@@ -51,11 +52,11 @@ function toRequirementInput(
   };
 }
 
-export async function loadShoppingSource(
+export async function loadSnapshotStockRequirements(
   reader: ShoppingSourceReader,
   ownerId: string,
   planningSnapshotId: string,
-): Promise<ReadonlyArray<StockCountCandidate>> {
+): Promise<readonly StockRequirement[]> {
   const [materialRows, packagingRows, priceRows] = await Promise.all([
     reader
       .select()
@@ -89,7 +90,7 @@ export async function loadShoppingSource(
   const priceByItemId = new Map(
     priceRows.map((price) => [price.inventoryItemId, price]),
   );
-  const requirements = aggregateSnapshotRequirements({
+  return aggregateSnapshotRequirements({
     materials: materialRows.map((row) =>
       toRequirementInput(row, priceByItemId),
     ),
@@ -97,6 +98,14 @@ export async function loadShoppingSource(
       toRequirementInput(row, priceByItemId),
     ),
   });
+}
+
+export async function loadShoppingSource(
+  reader: ShoppingSourceReader,
+  ownerId: string,
+  planningSnapshotId: string,
+): Promise<ReadonlyArray<StockCountCandidate>> {
+  const requirements = await loadSnapshotStockRequirements(reader, ownerId, planningSnapshotId);
   if (requirements.length === 0) return [];
 
   const itemIds = requirements.map((row) => row.inventoryItemId);

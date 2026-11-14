@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState } from "react";
+import Link from "next/link";
 import {
   addInventoryPriceAction,
   recordInventoryCountAction,
@@ -49,11 +50,13 @@ export function PriceForm({
   );
 }
 
-export function PhysicalCountForm({ itemId }: Readonly<{ itemId: string }>) {
+export function PhysicalCountForm({ itemId, blockers = [] }: Readonly<{ itemId: string; blockers?: readonly Readonly<{ cycleId: string; cycleName: string }>[] }>) {
   const [state, formAction, pending] = useActionState(
     recordInventoryCountAction,
     INITIAL_STATE,
   );
+  // Render-time guidance is not authority; the action still rejects stale COUNTs.
+  const pendingUse = state.blockers?.length ? state.blockers : blockers;
   return (
     <form action={formAction} className="grid gap-4 rounded-3xl border border-stone-200 bg-white p-5 shadow-sm">
       <h2 className="text-xl font-bold text-stone-900">นับสต๊อกจริง</h2>
@@ -63,8 +66,13 @@ export function PhysicalCountForm({ itemId }: Readonly<{ itemId: string }>) {
         <input className="min-h-11 rounded-xl border border-stone-300 px-4 text-base font-normal" inputMode="decimal" min="0" name="countedQuantity" required step="0.000001" type="number" />
       </label>
       {state.error ? <p className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-800" role="alert">{state.error}</p> : null}
+      {pendingUse.length ? <div className="grid gap-2 rounded-xl bg-amber-50 p-4 text-sm text-amber-950">
+        <p>มีรอบค้างยอดใช้ กรุณาบันทึกยอดใช้ก่อนนับ หรือบันทึกของเหลือพร้อมเคลียร์ยอดใช้ทั้งชุด</p>
+        {pendingUse.map(row => <Link className="inline-flex min-h-11 items-center font-bold underline" href={`/cycles/${row.cycleId}/consumption`} key={row.cycleId}>{row.cycleName}</Link>)}
+        <Link className="inline-flex min-h-11 items-center font-bold underline" href={`/cycles/${pendingUse[0]!.cycleId}/consumption?mode=settle&countItem=${itemId}`}>นับของเหลือและเคลียร์ยอดใช้</Link>
+      </div> : null}
       {state.saved ? <p className="rounded-xl bg-emerald-50 px-4 py-3 text-sm text-emerald-800" aria-live="polite">อัปเดตยอดสต๊อกแล้ว</p> : null}
-      <button className="min-h-11 rounded-xl bg-amber-800 px-5 font-semibold text-white disabled:opacity-60" disabled={pending} type="submit">{pending ? "กำลังบันทึก…" : "บันทึกยอดนับ"}</button>
+      <button className="min-h-11 rounded-xl bg-amber-800 px-5 font-semibold text-white disabled:opacity-60" disabled={pending || pendingUse.length > 0} type="submit">{pending ? "กำลังบันทึก…" : "บันทึกยอดนับ"}</button>
     </form>
   );
 }

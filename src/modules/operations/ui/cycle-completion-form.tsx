@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useEffect, useId, useRef, useState } from "react";
+import Link from "next/link";
 import { completeCycleAction, type OperationsActionState } from "@/app/(app)/cycles/[id]/operations/actions";
 import { formatSatangAsBaht } from "@/modules/money/domain/money";
 import type { CycleOperationsView } from "@/modules/operations/domain/types";
@@ -25,11 +26,13 @@ export function CycleCompletionForm({ view, action = completeCycleAction }: Read
   const { completion, cycle } = view;
   if (cycle.status === "COMPLETED") return completion.remainingTaskCount > 0 || completion.remainingOrderCount > 0 ? <p role="alert" className="rounded-2xl border border-amber-300 bg-amber-50 p-4 text-amber-950">ข้อมูลรอบที่จบแล้วไม่สอดคล้อง: งานค้าง {completion.remainingTaskCount} งาน · ออเดอร์ยังไม่ส่ง {completion.remainingOrderCount} ใบ · งาน การแพ็ก และจัดส่งอ่านอย่างเดียว แต่ยังบันทึกยอดชำระได้</p> : <p className="rounded-2xl bg-emerald-50 p-4">จบรอบผลิตแล้ว · ยังบันทึกยอดชำระได้</p>;
   if (cycle.status !== "IN_PRODUCTION") return null;
-  const blocked = !completion.ready || completion.remainingTaskCount > 0 || completion.remainingOrderCount > 0 || pending;
+  const pendingUse = view.consumption.required && !view.consumption.recorded;
+  const blocked = !completion.ready || completion.remainingTaskCount > 0 || completion.remainingOrderCount > 0 || pendingUse || pending;
   function close() { if (!pending) { setConfirming(false); trigger.current?.focus(); } }
   return <section aria-label="จบรอบผลิต" className="grid gap-3 rounded-2xl border border-stone-200 p-4">
     <button type="button" className={buttonClass} disabled={blocked} ref={trigger} onClick={() => setConfirming(true)}>จบรอบผลิต</button>
     {!completion.ready ? <p className="text-stone-700">ยังจบรอบไม่ได้: งานค้าง {completion.remainingTaskCount} งาน · ออเดอร์ยังไม่ส่ง {completion.remainingOrderCount} ใบ</p> : null}
+    {pendingUse ? <p className="text-stone-700">ยังจบรอบไม่ได้: กรุณายืนยันยอดใช้หลังผลิตเสร็จ · <Link className="inline-flex min-h-11 items-center font-bold text-amber-900 underline" href={`/cycles/${cycle.id}/consumption`}>บันทึกยอดใช้</Link></p> : null}
     {state.error && !confirming ? <p role="alert" className="text-red-800">{state.error}</p> : null}
     {confirming ? <div role="dialog" aria-modal="true" aria-labelledby={dialogId} className="fixed inset-0 z-40 grid place-items-center bg-stone-950/40 p-4" onKeyDown={event => handleOperationsDialogKeyDown(event, close)}>
       <form action={formAction} className="grid max-h-[85dvh] w-full max-w-md gap-4 overflow-y-auto rounded-3xl bg-white p-5 shadow-xl">
@@ -39,6 +42,8 @@ export function CycleCompletionForm({ view, action = completeCycleAction }: Read
         <input name="payload" type="hidden" value={JSON.stringify({ cycleId: cycle.id, expectedTaskGenerationId: view.generation.id, confirmation: true })} />
         <div className="flex flex-wrap gap-3"><button type="button" ref={cancel} className={buttonClass} disabled={pending} onClick={close}>ยกเลิก</button><button type="submit" ref={confirm} className={buttonClass} disabled={blocked}>ยืนยันจบรอบผลิต</button></div>
         {state.error ? <p role="alert" className="text-red-800">{state.error} {state.kind === "STALE_DATA" ? <a className="underline" href={`/cycles/${cycle.id}/operations`}>โหลดข้อมูลล่าสุด</a> : null}</p> : null}
+        {state.blockers?.map(row => <Link className="inline-flex min-h-11 items-center font-bold text-amber-900 underline" href={`/cycles/${row.cycleId}/consumption`} key={row.cycleId}>{row.cycleName}</Link>)}
+        {state.kind === "PENDING_USE" && !state.blockers?.length ? <Link className="inline-flex min-h-11 items-center font-bold text-amber-900 underline" href={`/cycles/${cycle.id}/consumption`}>บันทึกยอดใช้</Link> : null}
       </form>
     </div> : null}
   </section>;

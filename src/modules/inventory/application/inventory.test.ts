@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { Logger } from "drizzle-orm/logger";
 import { createTestDatabase } from "@tests/helpers/test-db";
 import { OTHER_OWNER_ID, OWNER_ID } from "@tests/fixtures/owner";
@@ -17,6 +17,14 @@ describe("inventory service", () => {
 
   afterEach(async () => {
     await context.close();
+  });
+
+  it("maps a COUNT guard lock conflict to safe STALE_DATA without writing", async () => {
+    const item = await service.createItem(OWNER_ID, { name: "Flour", category: "INGREDIENT", baseUnit: "g", purchaseUnitLabel: "bag", baseQuantityPerPurchasePack: "1000", minimumStockQuantity: "0" });
+    await context.db.execute(sql`CREATE FUNCTION test_inventory_contention() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'private SQL detail' USING ERRCODE = '55P03'; END; $$ LANGUAGE plpgsql`);
+    await context.db.execute(sql`CREATE TRIGGER test_inventory_contention BEFORE INSERT ON inventory_movements FOR EACH ROW EXECUTE FUNCTION test_inventory_contention()`);
+    await expect(service.recordCount(OWNER_ID, item.id, "25", new Date())).rejects.toMatchObject({ kind: "STALE_DATA", message: "Stock changed; refresh and try again" });
+    expect((await service.getItemDetail(OWNER_ID, item.id)).stockBalance).toBe("0");
   });
 
   it("stores price history and returns the latest effective unit cost", async () => {

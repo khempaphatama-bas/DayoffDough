@@ -4,6 +4,8 @@ import { revalidatePath } from "next/cache";
 import type { ZodIssue } from "zod";
 import { requireOwner } from "@/lib/auth/require-owner";
 import { db } from "@/lib/db/client";
+import { createConsumptionActionSupport } from "@/modules/consumption/application/action-support";
+import { ConsumptionStateError, type ConsumptionBlocker } from "@/modules/consumption/domain/types";
 import { parseBahtToSatang } from "@/modules/money/domain/money";
 import {
   createShoppingCommandService,
@@ -20,6 +22,7 @@ export type StockActionState = Readonly<{
   fieldErrors: Readonly<Record<string, string>>;
   saved: boolean;
   stale: boolean;
+  blockers?: readonly ConsumptionBlocker[];
 }>;
 
 export type PurchaseActionState = Readonly<{
@@ -197,32 +200,34 @@ function revalidateShoppingViews(cycleId: string): void {
 
 function logUnexpectedFailure(
   operation: ShoppingOperation,
-  ownerId: string,
-  cycleId: string,
   requestId: string,
 ): void {
   console.error("shopping_action_failed", {
     operation,
-    ownerId,
-    cycleId,
     requestId,
+    category: "unexpected",
   });
 }
 
-function commandFailureState(
+async function commandFailureState(
   error: unknown,
   operation: ShoppingOperation,
   ownerId: string,
-  cycleId: string,
   requestId: string,
-): StockActionState {
+): Promise<StockActionState> {
+  if (error instanceof ConsumptionStateError) {
+    try {
+      const safe = await createConsumptionActionSupport(db).mapError(ownerId, error);
+      if (safe) return { ...safe, saved: false };
+    } catch { /* Fall through to the safe unexpected-failure response. */ }
+  }
   if (error instanceof ShoppingStateError) {
     return unsavedState(STALE_PLAN_ERROR, {}, true);
   }
   if (error instanceof ShoppingValidationError) {
     return unsavedState(INVALID_INPUT_ERROR);
   }
-  logUnexpectedFailure(operation, ownerId, cycleId, requestId);
+  logUnexpectedFailure(operation, requestId);
   return unsavedState(
     operation === "confirm_stock"
       ? "ระบบยืนยันสต๊อกไม่สำเร็จ กรุณาลองอีกครั้ง"
@@ -278,7 +283,6 @@ export async function confirmCycleStockAction(
       error,
       "confirm_stock",
       owner.id,
-      parsed.data.cycleId,
       parsed.data.confirmationRequestId,
     );
   }
@@ -342,7 +346,6 @@ export async function recordCyclePurchaseAction(
       error,
       "record_purchase",
       owner.id,
-      parsed.data.cycleId,
       parsed.data.purchaseRequestId,
     );
   }

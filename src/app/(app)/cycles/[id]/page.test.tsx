@@ -125,6 +125,7 @@ describe("CycleDetail", () => {
     const name = status === "LOCKED" || status === "IN_PRODUCTION" ? "เปิด Operations" : "ดู Operations";
     expect(page.getByRole("link", { name })).toHaveAttribute("href", `/cycles/${CYCLE.id}/operations`);
     for (const label of ["ดูแผนการผลิต", "ดู Production Timeline", "เช็กสต๊อกและรายการซื้อ"]) expect(page.getByRole("link", { name: label })).toBeVisible();
+    expect(page.getByRole("link", { name: "บันทึกยอดใช้" })).toHaveAttribute("href", `/cycles/${CYCLE.id}/consumption`);
     expect(page.queryByRole("link", { name: "เพิ่มออเดอร์" })).toBeNull();
   });
 

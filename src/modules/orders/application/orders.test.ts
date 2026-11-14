@@ -1,4 +1,6 @@
 import { and, eq, sql } from "drizzle-orm";
+import { confirmConsumptionStock } from "@tests/fixtures/consumption";
+import { recordOperationsConsumption } from "@tests/fixtures/operations";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Logger } from "drizzle-orm/logger";
 import { OTHER_OWNER_ID, OWNER_ID } from "@tests/fixtures/owner";
@@ -323,6 +325,15 @@ describe("order service", () => {
   ] as const)(
     "freezes production inputs and cancellation while allowing money in %s",
     async (cycleStatus) => {
+      const legacyCycleId = "68000000-0000-4000-8000-000000000002";
+      if (cycleStatus === "IN_PRODUCTION" || cycleStatus === "COMPLETED") {
+        await context.close();
+        context = await createTestDatabase({ beforeConsumptionCutover: async (db) => {
+          await db.execute(sql`INSERT INTO bake_cycles (id, owner_id, name, status, target_production_date, primary_delivery_date)
+            VALUES (${legacyCycleId}, ${OWNER_ID}, ${`Legacy ${cycleStatus}`}, ${cycleStatus}, '2026-09-05', '2026-09-06')`);
+        } });
+        service = createOrderService(context.db);
+      }
       const masters = await seedMasters(context.db);
       const created = await service.create(OWNER_ID, orderInput(masters));
       const [destination] = await context.db
@@ -336,10 +347,7 @@ describe("order service", () => {
         })
         .returning();
       if (cycleStatus === "IN_PRODUCTION" || cycleStatus === "COMPLETED") {
-        const [legacyCycle] = await context.db.insert(bakeCycles).values({
-          ownerId: OWNER_ID, name: `Legacy ${cycleStatus}`, status: cycleStatus,
-          targetProductionDate: "2026-09-05", primaryDeliveryDate: "2026-09-06",
-        }).returning();
+        const [legacyCycle] = await context.db.select().from(bakeCycles).where(eq(bakeCycles.id, legacyCycleId));
         await context.db.update(orders).set({ bakeCycleId: legacyCycle!.id })
           .where(eq(orders.id, created.id));
         masters.cycle = legacyCycle!;
@@ -549,6 +557,7 @@ describe("order service", () => {
       const created = await service.get(OWNER_ID, scenario.orderIds[0]!);
       if (cycleStatus !== "LOCKED") {
         const cycles = createCycleOperationsCommandService(context.db);
+        await confirmConsumptionStock(context.db, OWNER_ID, scenario.cycleId);
         await cycles.startCycle(OWNER_ID, { cycleId: scenario.cycleId });
         if (cycleStatus === "COMPLETED") {
           const operations = createOrderOperationsCommandService(context.db);
@@ -567,6 +576,7 @@ describe("order service", () => {
             .where(eq(cycleTaskGenerations.planningSnapshotId, scenario.planningSnapshotId));
           await context.db.update(cycleTasks).set({ status: "DONE" })
             .where(eq(cycleTasks.cycleTaskGenerationId, generation!.id));
+          await recordOperationsConsumption(context.db, OWNER_ID, scenario.cycleId, true);
           await cycles.completeCycle(OWNER_ID, {
             cycleId: scenario.cycleId, expectedTaskGenerationId: generation!.id, confirmation: true,
           });
@@ -986,6 +996,13 @@ describe("order service", () => {
   });
 
   it("returns active create options and re-includes historical edit references", async () => {
+    const historicalCycleId = "68000000-0000-4000-8000-000000000001";
+    await context.close();
+    context = await createTestDatabase({ beforeConsumptionCutover: async (db) => {
+      await db.execute(sql`INSERT INTO bake_cycles (id, owner_id, name, status, target_production_date, primary_delivery_date)
+        VALUES (${historicalCycleId}, ${OWNER_ID}, 'Already producing', 'IN_PRODUCTION', '2026-09-05', '2026-09-06')`);
+    } });
+    service = createOrderService(context.db);
     const active = await seedMasters(context.db);
     const [inactiveMethod] = await context.db
       .insert(deliveryMethods)
@@ -1019,16 +1036,7 @@ describe("order service", () => {
         active: false,
       })
       .returning();
-    const [advancedCycle] = await context.db
-      .insert(bakeCycles)
-      .values({
-        ownerId: OWNER_ID,
-        name: "Already producing",
-        status: "IN_PRODUCTION",
-        targetProductionDate: "2026-09-05",
-        primaryDeliveryDate: "2026-09-06",
-      })
-      .returning();
+    const [advancedCycle] = await context.db.select().from(bakeCycles).where(eq(bakeCycles.id, historicalCycleId));
     const [draftCycle] = await context.db
       .insert(bakeCycles)
       .values({
@@ -1351,6 +1359,7 @@ describe("order service", () => {
     const scenario = await seedLockedPlanningScenario(context.db);
     const orderId = scenario.orderIds[0]!;
     const operations = createOrderOperationsCommandService(context.db);
+    await confirmConsumptionStock(context.db, OWNER_ID, scenario.cycleId);
     await createCycleOperationsCommandService(context.db).startCycle(OWNER_ID, { cycleId: scenario.cycleId });
     await operations.startOrders(OWNER_ID, { cycleId: scenario.cycleId, orderIds: [orderId] });
     const [item] = await context.db.select().from(orderItems).where(eq(orderItems.orderId, orderId));

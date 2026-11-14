@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OWNER_ID } from "@tests/fixtures/owner";
 import type { PurchaseActionState, StockActionState } from "./actions";
+import { ConsumptionStateError } from "@/modules/consumption/domain/types";
+
+const consumption = vi.hoisted(() => ({ mapError: vi.fn() }));
+vi.mock("@/modules/consumption/application/action-support", () => ({ createConsumptionActionSupport: () => consumption }));
 
 const CYCLE_ID = "11111111-1111-4111-8111-111111111111";
 const SNAPSHOT_ID = "22222222-2222-4222-8222-222222222222";
@@ -101,6 +105,17 @@ const EXPECTED_REVALIDATIONS = [
   "/inventory",
   "/dashboard",
 ];
+
+describe("Shopping Consumption guard response", () => {
+  it("returns owned pending-use links instead of a generic count failure", async () => {
+    vi.resetAllMocks(); auth.requireOwner.mockResolvedValue({ id: OWNER_ID });
+    const failure = new ConsumptionStateError("PENDING_USE", "SQL password");
+    commands.confirmStock.mockRejectedValue(failure);
+    consumption.mapError.mockResolvedValue({ error: "กรุณาบันทึกยอดใช้ก่อนนับสต๊อก", fieldErrors: {}, stale: false, blockers: [{ cycleId: CYCLE_ID, cycleName: "รอบเก่า" }] });
+    expect(await confirmCycleStockAction(INITIAL_STOCK_STATE, stockForm(validStockPayload()))).toEqual({ error: "กรุณาบันทึกยอดใช้ก่อนนับสต๊อก", fieldErrors: {}, saved: false, stale: false, blockers: [{ cycleId: CYCLE_ID, cycleName: "รอบเก่า" }] });
+    expect(consumption.mapError).toHaveBeenCalledWith(OWNER_ID, failure); expect(next.revalidatePath).not.toHaveBeenCalled();
+  });
+});
 
 describe("shopping actions", () => {
   beforeEach(() => {
@@ -449,9 +464,8 @@ describe("shopping actions", () => {
     });
     expect(logger).toHaveBeenCalledWith("shopping_action_failed", {
       operation: "confirm_stock",
-      ownerId: OWNER_ID,
-      cycleId: CYCLE_ID,
       requestId: REQUEST_ID,
+      category: "unexpected",
     });
     expect(JSON.stringify(logger.mock.calls)).not.toContain("secret");
     expect(JSON.stringify(logger.mock.calls)).not.toContain("raw stock detail");
@@ -479,9 +493,8 @@ describe("shopping actions", () => {
     });
     expect(logger).toHaveBeenCalledWith("shopping_action_failed", {
       operation: "record_purchase",
-      ownerId: OWNER_ID,
-      cycleId: CYCLE_ID,
       requestId: REQUEST_ID,
+      category: "unexpected",
     });
     const logged = JSON.stringify(logger.mock.calls);
     expect(logged).not.toContain("secret");

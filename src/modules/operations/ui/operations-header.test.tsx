@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OperationsActionState } from "@/app/(app)/cycles/[id]/operations/actions";
@@ -10,9 +10,32 @@ import { OperationsHeader } from "./operations-header";
 
 describe("OperationsHeader", () => {
   beforeEach(() => { vi.clearAllMocks(); mocks.start.mockResolvedValue({ error: null, kind: null, fieldErrors: {}, saved: true }); });
+  it("guides a blocked locked V1 cycle to stock check separately from pending production use", () => {
+    const locked = render(<OperationsHeader view={READY_VIEW} />);
+    const page = within(locked.container);
+    expect(page.getByRole("button", { name: "เริ่มรอบผลิต" })).toBeDisabled();
+    expect(page.getByRole("link", { name: "เช็กสต๊อกก่อนเริ่มผลิต" })).toHaveAttribute("href", `/cycles/${CYCLE_ID}/shopping`);
+    locked.unmount();
+    const production = render(<OperationsHeader view={{ ...READY_VIEW, cycle: { ...READY_VIEW.cycle, status: "IN_PRODUCTION" } }} />);
+    expect(within(production.container).getByRole("link", { name: "บันทึกยอดใช้" })).toHaveAttribute("href", `/cycles/${CYCLE_ID}/consumption`);
+    expect(within(production.container).getByText(/ยังไม่ได้บันทึกยอดใช้/)).toBeVisible();
+    expect(within(production.container).queryByRole("link", { name: "เช็กสต๊อกก่อนเริ่มผลิต" })).toBeNull();
+  });
+  it("renders safe owned blocker guidance after a genuinely dispatched stale-page start", async () => {
+    mocks.start.mockResolvedValueOnce({ error: "กรุณาตรวจสต๊อกก่อนเริ่มผลิต", kind: "STOCK_CHECK_REQUIRED", fieldErrors: {}, saved: false });
+    render(<OperationsHeader view={{ ...READY_VIEW, consumption: { ...READY_VIEW.consumption, startBlockedByStockCheck: false } }} />);
+    await userEvent.click(screen.getByRole("button", { name: "เริ่มรอบผลิต" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("กรุณาตรวจสต๊อกก่อนเริ่มผลิต");
+    expect(screen.getByRole("link", { name: "เช็กสต๊อกก่อนเริ่มผลิต" })).toHaveAttribute("href", `/cycles/${CYCLE_ID}/shopping`);
+  });
+  it("retains the pre-cutover start path without a V1 stock-check gate", () => {
+    const { container } = render(<OperationsHeader view={{ ...READY_VIEW, consumption: { required: false, recorded: false, startBlockedByStockCheck: false } }} />);
+    expect(within(container).getByRole("button", { name: "เริ่มรอบผลิต" })).toBeEnabled();
+    expect(within(container).queryByRole("link", { name: "เช็กสต๊อกก่อนเริ่มผลิต" })).toBeNull();
+  });
   it("switches one cycle at a time and starts only a ready locked cycle", async () => {
     const secondId = "72000000-0000-4000-8000-000000000020";
-    render(<OperationsHeader view={{ ...READY_VIEW, cycleOptions: [...READY_VIEW.cycleOptions, { ...READY_VIEW.cycleOptions[0]!, id: secondId, name: "อีกรอบ" }] }} />);
+    render(<OperationsHeader view={{ ...READY_VIEW, consumption: { ...READY_VIEW.consumption, startBlockedByStockCheck: false }, cycleOptions: [...READY_VIEW.cycleOptions, { ...READY_VIEW.cycleOptions[0]!, id: secondId, name: "อีกรอบ" }] }} />);
     expect(screen.getByLabelText("เลือกรอบผลิต")).toHaveValue(CYCLE_ID);
     expect(screen.getByLabelText("เลือกรอบผลิต")).toHaveClass("min-h-11");
     expect(screen.getByRole("button", { name: "เริ่มรอบผลิต" })).toHaveClass("min-h-12");
@@ -42,7 +65,7 @@ describe("OperationsHeader", () => {
   it("shows errors and pending state without claiming success before server confirmation", async () => {
     let resolve!: (value: OperationsActionState) => void;
     mocks.start.mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
-    render(<OperationsHeader view={READY_VIEW} />);
+    render(<OperationsHeader view={{ ...READY_VIEW, consumption: { ...READY_VIEW.consumption, startBlockedByStockCheck: false } }} />);
     await userEvent.click(screen.getByRole("button", { name: "เริ่มรอบผลิต" }));
     expect(screen.getByRole("button", { name: "กำลังเริ่มรอบผลิต…" })).toBeDisabled();
     resolve({ error: "ข้อมูลมีการเปลี่ยนแปลง กรุณาโหลดข้อมูลล่าสุด", kind: "STALE_DATA", fieldErrors: {}, saved: false });

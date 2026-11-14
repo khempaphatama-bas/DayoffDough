@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { OperationsStateError } from "@/modules/operations/domain/types";
 import { PgDialect } from "drizzle-orm/pg-core";
+import { ConsumptionStateError } from "@/modules/consumption/domain/types";
+const consumption = vi.hoisted(() => ({ mapError: vi.fn() }));
+vi.mock("@/modules/consumption/application/action-support", () => ({ createConsumptionActionSupport: () => consumption }));
 
 const mocks = vi.hoisted(() => ({
   requireOwner: vi.fn(), revalidatePath: vi.fn(), select: vi.fn(), where: vi.fn(), innerJoin: vi.fn(),
@@ -60,6 +63,17 @@ describe("Operations actions", () => {
     query.where.mockReturnValue(query);
     query.limit.mockResolvedValue([{ id: ORDER, orderId: ORDER, bakeCycleId: CYCLE }]);
     mocks.select.mockReturnValue(query);
+  });
+
+  it.each([
+    ["startCycle", startCycleAction, { cycleId: CYCLE }, "STOCK_CHECK_REQUIRED"],
+    ["completeCycle", completeCycleAction, { cycleId: CYCLE, expectedTaskGenerationId: GENERATION, confirmation: true }, "PENDING_USE"],
+  ] as const)("%s exposes the owned actionable Consumption guard without reopening Ops", async (name, action, payload, kind) => {
+    const failure = new ConsumptionStateError(kind, "SQL password", { blockerCycleIds: [CYCLE] });
+    mocks[name].mockRejectedValue(failure);
+    consumption.mapError.mockResolvedValue({ error: "กรุณาตรวจสอบสต๊อกและยอดใช้ของรอบ", fieldErrors: {}, stale: false, blockers: [{ cycleId: CYCLE, cycleName: "รอบผลิต" }] });
+    expect(await action(INITIAL, form(payload))).toEqual({ error: "กรุณาตรวจสอบสต๊อกและยอดใช้ของรอบ", kind, fieldErrors: {}, saved: false, blockers: [{ cycleId: CYCLE, cycleName: "รอบผลิต" }] });
+    expect(consumption.mapError).toHaveBeenCalledWith(OWNER, failure, CYCLE); expect(mocks.revalidatePath).not.toHaveBeenCalled();
   });
 
   it.each(cases)("%s authenticates, dispatches only its parsed command and revalidates concrete affected views", async (name, action, payload, orderIds) => {

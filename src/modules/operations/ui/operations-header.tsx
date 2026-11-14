@@ -16,15 +16,17 @@ function dateLabel(value: string): string {
     .format(createUtcCalendarDate(year!, month! - 1, day!, 5));
 }
 
-function StartCycleForm({ cycleId }: Readonly<{ cycleId: string }>) {
+function StartCycleForm({ cycleId, blocked }: Readonly<{ cycleId: string; blocked: boolean }>) {
   const [state, formAction, pending] = useActionState(startCycleAction, INITIAL_STATE);
   return (
     <form action={formAction} className="grid gap-3">
       <input name="payload" type="hidden" value={JSON.stringify({ cycleId })} />
-      <button className="min-h-12 rounded-xl bg-amber-800 px-5 font-bold text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-800 disabled:opacity-60" disabled={pending} type="submit">
+      <button className="min-h-12 rounded-xl bg-amber-800 px-5 font-bold text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-800 disabled:opacity-60" disabled={pending || blocked} type="submit">
         {pending ? "กำลังเริ่มรอบผลิต…" : "เริ่มรอบผลิต"}
       </button>
       {state.error ? <p className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-800" role="alert">{state.error}</p> : null}
+      {blocked || state.kind === "STOCK_CHECK_REQUIRED" ? <Link className="inline-flex min-h-11 items-center font-bold text-amber-900 underline" href={`/cycles/${cycleId}/shopping`}>เช็กสต๊อกก่อนเริ่มผลิต</Link> : null}
+      {state.blockers?.map(row => <Link className="inline-flex min-h-11 items-center font-bold text-amber-900 underline" href={`/cycles/${row.cycleId}/consumption`} key={row.cycleId}>{row.cycleName}</Link>)}
     </form>
   );
 }
@@ -61,10 +63,12 @@ export function OperationsHeader({ view }: Readonly<{ view: CycleOperationsView 
         <p>รุ่นงานปัจจุบัน {view.generation.generation}</p>
         <p>{view.completion.ready ? "งานและออเดอร์พร้อมจบรอบ" : `งานค้าง ${view.completion.remainingTaskCount} งาน · ออเดอร์ยังไม่ส่ง ${view.completion.remainingOrderCount} ใบ`}</p>
       </div> : <p className="text-sm text-stone-700">ยังไม่มีรุ่นงานปัจจุบัน</p>}
-      {view.kind === "READY" && cycle.status === "LOCKED" ? <StartCycleForm cycleId={cycle.id} key={cycle.id} /> : null}
+      {view.kind === "READY" && view.consumption.required && !view.consumption.recorded && (cycle.status === "IN_PRODUCTION" || cycle.status === "CANCELLED") ? <p className="rounded-xl bg-amber-50 p-4 text-sm text-amber-950">ยังไม่ได้บันทึกยอดใช้ กรุณายืนยันหลังผลิตเสร็จ แยกจากการส่งครบหรือจบรอบ{cycle.status === "CANCELLED" ? " · รอบยกเลิกต้องกรอกใช้จริงทุกบรรทัด ไม่คืนสต๊อกตามสถานะ" : ""}</p> : null}
+      {view.kind === "READY" && cycle.status === "LOCKED" ? <StartCycleForm cycleId={cycle.id} blocked={view.consumption.startBlockedByStockCheck} key={cycle.id} /> : null}
       <nav aria-label="หน้าที่เกี่ยวข้องกับรอบผลิต" className="flex flex-wrap gap-4">
         <Link className="inline-flex min-h-11 items-center font-bold text-amber-900" href={`/cycles/${cycle.id}/production`}>Production Timeline</Link>
         <Link className="inline-flex min-h-11 items-center font-bold text-amber-900" href={`/cycles/${cycle.id}/planning`}>แผนการผลิต</Link>
+        <Link className="inline-flex min-h-11 items-center font-bold text-amber-900" href={`/cycles/${cycle.id}/consumption`}>บันทึกยอดใช้</Link>
       </nav>
     </header>
   );

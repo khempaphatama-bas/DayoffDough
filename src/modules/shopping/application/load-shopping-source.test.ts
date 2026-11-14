@@ -26,7 +26,7 @@ import {
   recipes,
   recipeVersions,
 } from "@/modules/products/db/schema";
-import { loadShoppingSource } from "./load-shopping-source";
+import { loadShoppingSource, loadSnapshotStockRequirements } from "./load-shopping-source";
 
 const LOCKED_AT = new Date("2026-08-23T03:00:00.000Z");
 const LOCK_REQUEST_ID = "53000000-0000-4000-8000-000000000001";
@@ -298,6 +298,12 @@ describe("shopping source loader", () => {
         query.includes('from "inventory_items"'),
       )!.sql,
     ).not.toContain('"inventory_items"."active" =');
+    // The shared source sums the same already-buffered rows, but never includes
+    // live purchase-pack or ledger fields used only by Shopping's outer loader.
+    expect(await loadSnapshotStockRequirements(context.db, OWNER_ID, fixture.planningSnapshotId)).toEqual([
+      { inventoryItemId: fixture.packagingItemId, inventoryItemName: "ถุงขนม", inventoryCategory: "PACKAGING", baseUnit: "piece", priceSnapshotId: expect.any(String), unitCostSatang: "10", requiredQuantity: "14" },
+      { inventoryItemId: fixture.ingredientItemId, inventoryItemName: "แป้งขนมปัง", inventoryCategory: "INGREDIENT", baseUnit: "g", priceSnapshotId: expect.any(String), unitCostSatang: "5.5", requiredQuantity: "2400" },
+    ]);
   });
 
   it("fails when an immutable requirement has no current inventory profile", async () => {
