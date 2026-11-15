@@ -1,0 +1,15 @@
+[build]
+  command = "pnpm run build"
+  publish = ".next"
+
+[build.environment]
+  NODE_VERSION = "24"
+  # Build-time path only. Set the Functions runtime path in Netlify's UI:
+  # NODE_EXTRA_CA_CERTS=/var/task/certificates/prod-ca-2021.crt
+  NODE_EXTRA_CA_CERTS = "certificates/prod-ca-2021.crt"
+
+[functions]
+  included_files = ["certificates/prod-ca-2021.crt"]
+
+# Keep credentials in Netlify's environment variables, never in this file.
+# SUPABASE_DATABASE_URL must use sslmode=verify-full.

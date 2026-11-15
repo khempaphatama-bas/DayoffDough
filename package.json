@@ -1,6 +1,7 @@
 {
   "name": "day-off-dough-os",
   "version": "1.0.0",
+  "packageManager": "pnpm@11.25.0",
   "description": "",
   "main": "index.js",
   "scripts": {
@@ -23,7 +24,7 @@
   "devEngines": {
     "packageManager": {
       "name": "pnpm",
-      "version": "^11.19.0",
+      "version": "11.25.0",
       "onFail": "download"
     }
   },
