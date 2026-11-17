@@ -16,6 +16,7 @@ import {
   uuid,
   varchar,
 } from "drizzle-orm/pg-core";
+import { ingredientKinds } from "@/modules/inventory/domain/ingredient-kind";
 
 export const inventoryCategory = [
   "INGREDIENT",
@@ -45,6 +46,9 @@ export const inventoryItems = pgTable(
     ownerId: uuid("owner_id").notNull(),
     name: varchar("name", { length: 160 }).notNull(),
     category: inventoryCategoryEnum("category").notNull(),
+    ingredientKind: varchar("ingredient_kind", { length: 16, enum: ingredientKinds })
+      .notNull()
+      .default("STANDARD"),
     baseUnit: varchar("base_unit", { length: 16 }).notNull(),
     purchaseUnitLabel: varchar("purchase_unit_label", { length: 160 }).notNull(),
     baseQuantityPerPurchasePack: numeric("base_quantity_per_purchase_pack", {
@@ -77,6 +81,17 @@ export const inventoryItems = pgTable(
     check(
       "inventory_items_minimum_stock_non_negative",
       sql`${table.minimumStockQuantity} >= 0`,
+    ),
+    check(
+      "inventory_items_prep_only_values",
+      sql`${table.ingredientKind} = 'STANDARD' OR (
+        ${table.category} = 'INGREDIENT'
+        AND ((${table.ingredientKind} = 'WATER' AND ${table.baseUnit} IN ('ml', 'l'))
+          OR (${table.ingredientKind} = 'ICE' AND ${table.baseUnit} IN ('g', 'kg')))
+        AND ${table.purchaseUnitLabel} = 'ไม่ต้องซื้อ'
+        AND ${table.baseQuantityPerPurchasePack} = 1
+        AND ${table.minimumStockQuantity} = 0
+      )`,
     ),
   ],
 );

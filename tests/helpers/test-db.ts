@@ -22,7 +22,7 @@ export async function createTestDatabase(options?: Readonly<{
   if (options?.beforeConsumptionCutover) {
     await applyMigrationRange(drizzle(client), 0, 13);
     await options.beforeConsumptionCutover(testDb as unknown as DatabaseClient);
-    await applyMigrationRange(drizzle(client), 14, 14);
+    await applyMigrationRange(drizzle(client), 14, 15);
   } else {
     await migrate(testDb, { migrationsFolder: "drizzle" });
   }

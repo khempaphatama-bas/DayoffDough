@@ -92,6 +92,7 @@ export const recipeVersions = pgTable(
     }),
     instructions: text("instructions").notNull(),
     activeFrom: timestamp("active_from", { withTimezone: true, mode: "date" }),
+    archivedAt: timestamp("archived_at", { withTimezone: true, mode: "date" }),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
       .notNull()
       .defaultNow(),

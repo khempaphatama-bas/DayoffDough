@@ -72,7 +72,7 @@ const consumptionTables = ["consumption_operations", "consumption_revision_items
 async function catalog(connection) {
   const snapshot = JSON.parse(await readFile(path.join(root, "drizzle/meta/0014_snapshot.json"), "utf8"));
   const journal = JSON.parse(await readFile(path.join(root, "drizzle/meta/_journal.json"), "utf8"));
-  assert.equal(journal.entries.at(-1).tag, "0014_phase_5a_consumption");
+  assert.equal(journal.entries[14].tag, "0014_phase_5a_consumption");
   const tables = [applicationSchema.consumptionOperations, applicationSchema.consumptionRevisionItems,
     applicationSchema.consumptionRevisions, applicationSchema.cycleConsumptionContexts,
     applicationSchema.cycleConsumptionItems, applicationSchema.inventoryLedgerStates];
@@ -122,7 +122,7 @@ async function catalog(connection) {
 
 test("fresh and through-0013 upgrade preserve legacy history and install identical final catalog", { timeout: 60000 }, async () => {
   let fresh;
-  await database(async h => { fresh = await catalog(h.observer); });
+  await database(async h => { fresh = await catalog(h.observer); }, { through: 14 });
   await database(async h => {
     const item = randomUUID(), cycle = randomUUID(), snapshot = randomUUID();
     await h.setup`INSERT INTO inventory_items (id,owner_id,name,category,base_unit,purchase_unit_label,base_quantity_per_purchase_pack)
@@ -136,7 +136,7 @@ test("fresh and through-0013 upgrade preserve legacy history and install identic
       VALUES (${snapshot},${OWNER_ID},${cycle},1,'ACTIVE',${randomUUID()},${"a".repeat(64)},1,'Legacy plan','2026-10-24','2026-10-25',0,0,'Asia/Bangkok','THB',true,now())`;
     const movements = [...await h.observer`SELECT * FROM inventory_movements ORDER BY id`];
     const snapshots = [...await h.observer`SELECT * FROM cycle_planning_snapshots ORDER BY id`];
-    await migrate(h.setup, 14);
+    await migrate(h.setup, 14, 14);
     assert.deepEqual([...await h.observer`SELECT * FROM inventory_movements ORDER BY id`], movements);
     assert.deepEqual([...await h.observer`SELECT * FROM cycle_planning_snapshots ORDER BY id`], snapshots);
     const [sum] = await h.observer`SELECT trim_scale(sum(quantity_delta_in_base_unit))::text AS balance FROM inventory_movements`;
@@ -211,14 +211,14 @@ function client(url, role) {
   return postgres(url.toString(), { max: 1, connect_timeout: 5, onnotice: () => {},
     connection: { application_name: `consumption-proof-${role}`, statement_timeout: 12000, lock_timeout: 8000 } });
 }
-async function migrate(connection, from = 0, to = 14) {
+async function migrate(connection, from, to) {
   const migrations = readMigrationFiles({ migrationsFolder: path.join(root, "drizzle") });
-  assert.equal(migrations.length, 15);
+  assert.ok(migrations[to], `Migration ${to} is missing`);
   for (let index = from; index <= to; index++) await connection.begin(async tx => {
     for (const statement of migrations[index].sql) if (statement.trim()) await tx.unsafe(statement);
   });
 }
-async function database(body, { upgrade = false } = {}) {
+async function database(body, { upgrade = false, through = 15 } = {}) {
   const name = `dayoffdough_consumption_${randomUUID().replaceAll("-", "")}`;
   const url = new URL(adminUrl); url.pathname = `/${name}`;
   const admin = client(adminUrl, "admin");
@@ -230,7 +230,7 @@ async function database(body, { upgrade = false } = {}) {
     const [setup, first, second, observer] = ["setup", "first", "second", "observer"].map(role => {
       const connection = client(url, role); connections.push(connection); return connection;
     });
-    await migrate(setup, 0, upgrade ? 13 : 14);
+    await migrate(setup, 0, upgrade ? 13 : through);
     const [{ pid: firstPid }] = await first`SELECT pg_backend_pid() AS pid`;
     const [{ pid: secondPid }] = await second`SELECT pg_backend_pid() AS pid`;
     assert.notEqual(firstPid, secondPid);
