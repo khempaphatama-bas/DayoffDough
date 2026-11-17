@@ -1,29 +1,60 @@
 import Decimal from "decimal.js";
-import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, exists, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { lockOwnedInventoryItems } from "@/lib/db/row-locks";
 import { assertNoPendingConsumption, rethrowConsumptionLockError } from "@/modules/consumption/application/count-barrier";
 import type { DatabaseClient } from "@/lib/db/types";
+import { bakeCycles } from "@/modules/cycles/db/schema";
+import { productPackagingRules } from "@/modules/delivery/db/schema";
 import { calculateUnitCostSatang } from "@/modules/inventory/domain/cost";
+import { ingredientKinds, isPrepOnly, type IngredientKind } from "@/modules/inventory/domain/ingredient-kind";
 import {
   inventoryCategory,
   inventoryItems,
   inventoryMovements,
   inventoryPrices,
 } from "@/modules/inventory/db/schema";
+import {
+  cycleInventoryPriceSnapshots,
+  cycleMaterialRequirements,
+  cyclePackagingRequirements,
+  cyclePlanningSnapshots,
+  cycleRecipePlans,
+} from "@/modules/planning/db/schema";
+import { products, recipeIngredients, recipes, recipeVersions } from "@/modules/products/db/schema";
 import type { UnitCode } from "@/modules/units/domain/units";
 
 const unitCodes = ["mg", "g", "kg", "ml", "l", "piece"] as const satisfies ReadonlyArray<UnitCode>;
 
 export type InventoryCategory = (typeof inventoryCategory)[number];
 
+const maintenanceMessages = {
+  NOT_FOUND: "Inventory item not found",
+  IDENTITY_IN_USE: "Inventory item identity is already in use",
+  PACK_IN_USE: "Inventory purchase pack is in use by an active plan",
+  ACTIVE_RECIPE: "Inventory item is in an active recipe",
+  PACKAGING_RULE: "Inventory item is in a packaging rule",
+  ACTIVE_PLAN: "Inventory item is in an active plan",
+  INACTIVE: "Inventory item is inactive",
+  PREP_ONLY: "Inventory item is for preparation only",
+  ITEM_CHANGED: "Inventory item unit changed; refresh and try again",
+} as const;
+
+export class InventoryMaintenanceError extends Error {
+  constructor(public readonly code: keyof typeof maintenanceMessages) {
+    super(maintenanceMessages[code]);
+    this.name = "InventoryMaintenanceError";
+  }
+}
+
 export type CreateInventoryItemInput = Readonly<{
   name: string;
   category: InventoryCategory;
+  ingredientKind?: IngredientKind;
   baseUnit: UnitCode;
-  purchaseUnitLabel: string;
-  baseQuantityPerPurchasePack: string;
-  minimumStockQuantity: string;
+  purchaseUnitLabel?: string;
+  baseQuantityPerPurchasePack?: string;
+  minimumStockQuantity?: string;
   notes?: string;
 }>;
 
@@ -31,6 +62,7 @@ export type AddInventoryPriceInput = Readonly<{
   packPriceSatang: number;
   packBaseQuantity: string;
   effectiveAt: Date;
+  expectedBaseUnit?: UnitCode;
   purchasedFrom?: string;
   notes?: string;
 }>;
@@ -40,6 +72,7 @@ export type InventoryItem = Readonly<{
   ownerId: string;
   name: string;
   category: InventoryCategory;
+  ingredientKind: IngredientKind;
   baseUnit: UnitCode;
   purchaseUnitLabel: string;
   baseQuantityPerPurchasePack: string;
@@ -89,23 +122,151 @@ const nonNegativeDecimalSchema = z.string().refine(
   { message: "Expected a non-negative decimal with up to 6 places" },
 );
 
-const itemSchema = z.object({
+const itemIdentitySchema = z.object({
   name: z.string().trim().min(1).max(160),
   category: z.enum(inventoryCategory),
+  ingredientKind: z.enum(ingredientKinds).default("STANDARD"),
   baseUnit: z.enum(unitCodes),
+  notes: z.string().trim().max(2000).optional(),
+});
+
+const itemPackSchema = z.object({
   purchaseUnitLabel: z.string().trim().min(1).max(160),
   baseQuantityPerPurchasePack: positiveDecimalSchema,
   minimumStockQuantity: nonNegativeDecimalSchema,
-  notes: z.string().trim().max(2000).optional(),
 });
+
+function parseItem(input: CreateInventoryItemInput) {
+  const identity = itemIdentitySchema.safeParse(input);
+  if (!identity.success) throw new Error("Invalid inventory item");
+  const { ingredientKind, category, baseUnit, notes } = identity.data;
+  const fields = { ...identity.data, notes: notes ?? null };
+  if (isPrepOnly(ingredientKind)) {
+    const validUnit = ingredientKind === "WATER"
+      ? baseUnit === "ml" || baseUnit === "l"
+      : baseUnit === "g" || baseUnit === "kg";
+    if (category !== "INGREDIENT" || !validUnit) throw new Error("Invalid inventory item");
+    return {
+      ...fields,
+      purchaseUnitLabel: "ไม่ต้องซื้อ",
+      baseQuantityPerPurchasePack: "1",
+      minimumStockQuantity: "0",
+    };
+  }
+  const pack = itemPackSchema.safeParse(input);
+  if (!pack.success) throw new Error("Invalid inventory item");
+  return { ...fields, ...pack.data };
+}
 
 const priceSchema = z.object({
   packPriceSatang: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
   packBaseQuantity: positiveDecimalSchema,
   effectiveAt: z.date(),
+  expectedBaseUnit: z.enum(unitCodes).optional(),
   purchasedFrom: z.string().trim().max(200).optional(),
   notes: z.string().trim().max(2000).optional(),
 });
+
+function assertActiveOwnedItem(item: typeof inventoryItems.$inferSelect | undefined):
+  asserts item is typeof inventoryItems.$inferSelect {
+  if (!item) throw new InventoryMaintenanceError("NOT_FOUND");
+  if (!item.active) throw new InventoryMaintenanceError("INACTIVE");
+}
+
+export function assertStockableInventoryItem(
+  item: typeof inventoryItems.$inferSelect | undefined,
+  expectedBaseUnit?: UnitCode,
+): asserts item is typeof inventoryItems.$inferSelect {
+  assertActiveOwnedItem(item);
+  if (isPrepOnly(item.ingredientKind)) throw new InventoryMaintenanceError("PREP_ONLY");
+  if (expectedBaseUnit !== undefined && item.baseUnit !== expectedBaseUnit) {
+    throw new InventoryMaintenanceError("ITEM_CHANGED");
+  }
+}
+
+function ownedItem(ownerId: string, itemId: string) {
+  return and(eq(inventoryItems.ownerId, ownerId), eq(inventoryItems.id, itemId));
+}
+
+async function readItemReferences(reader: Pick<DatabaseClient, "select">, ownerId: string, itemId: string) {
+  const recipeLineForItem = and(
+    eq(recipeIngredients.ownerId, ownerId),
+    eq(recipeIngredients.inventoryItemId, itemId),
+  );
+  const currentSnapshots = reader.select({ id: cyclePlanningSnapshots.id })
+    .from(cyclePlanningSnapshots)
+    .innerJoin(bakeCycles, and(
+      eq(bakeCycles.ownerId, cyclePlanningSnapshots.ownerId),
+      eq(bakeCycles.id, cyclePlanningSnapshots.bakeCycleId),
+      eq(bakeCycles.activePlanningSnapshotId, cyclePlanningSnapshots.id),
+    ))
+    .where(and(
+      eq(cyclePlanningSnapshots.ownerId, ownerId),
+      eq(cyclePlanningSnapshots.status, "ACTIVE"),
+      inArray(bakeCycles.status, ["LOCKED", "IN_PRODUCTION"]),
+    ));
+
+  // A single read sees one committed view of all reference types. Maintenance
+  // callers already hold the item lock; none of these reads lock parent rows.
+  const [refs] = await reader.select({
+    active: inventoryItems.active,
+    recipe: exists(reader.select({ id: recipeIngredients.id }).from(recipeIngredients).where(recipeLineForItem)),
+    activeRecipe: exists(reader.select({ id: recipeIngredients.id }).from(recipeIngredients)
+      .innerJoin(recipeVersions, and(
+        eq(recipeVersions.ownerId, recipeIngredients.ownerId),
+        eq(recipeVersions.id, recipeIngredients.recipeVersionId),
+      ))
+      .innerJoin(recipes, and(eq(recipes.ownerId, recipeVersions.ownerId), eq(recipes.id, recipeVersions.recipeId)))
+      .innerJoin(products, and(
+        eq(products.ownerId, recipes.ownerId),
+        eq(products.id, recipes.productId),
+        eq(products.activeRecipeVersionId, recipeVersions.id),
+      ))
+      .where(recipeLineForItem)),
+    packagingRule: exists(reader.select({ id: productPackagingRules.id }).from(productPackagingRules)
+      .where(and(eq(productPackagingRules.ownerId, ownerId), eq(productPackagingRules.inventoryItemId, itemId)))),
+    price: exists(reader.select({ id: inventoryPrices.id }).from(inventoryPrices)
+      .where(and(eq(inventoryPrices.ownerId, ownerId), eq(inventoryPrices.inventoryItemId, itemId)))),
+    movement: exists(reader.select({ id: inventoryMovements.id }).from(inventoryMovements)
+      .where(and(eq(inventoryMovements.ownerId, ownerId), eq(inventoryMovements.inventoryItemId, itemId)))),
+    // Every material and packaging requirement has an owned price snapshot,
+    // even when there was no price to copy.
+    plan: exists(reader.select({ id: cycleInventoryPriceSnapshots.id }).from(cycleInventoryPriceSnapshots)
+      .where(and(eq(cycleInventoryPriceSnapshots.ownerId, ownerId), eq(cycleInventoryPriceSnapshots.inventoryItemId, itemId)))),
+    currentMaterial: exists(reader.select({ id: cycleMaterialRequirements.id }).from(cycleMaterialRequirements)
+      .where(and(
+        eq(cycleMaterialRequirements.ownerId, ownerId),
+        eq(cycleMaterialRequirements.inventoryItemId, itemId),
+        inArray(cycleMaterialRequirements.planningSnapshotId, currentSnapshots),
+      ))),
+    currentPackaging: exists(reader.select({ id: cyclePackagingRequirements.id }).from(cyclePackagingRequirements)
+      .where(and(
+        eq(cyclePackagingRequirements.ownerId, ownerId),
+        eq(cyclePackagingRequirements.inventoryItemId, itemId),
+        inArray(cyclePackagingRequirements.planningSnapshotId, currentSnapshots),
+      ))),
+    currentRecipe: exists(reader.select({ id: cycleRecipePlans.id }).from(cycleRecipePlans)
+      .innerJoin(recipeIngredients, and(
+        eq(recipeIngredients.ownerId, cycleRecipePlans.ownerId),
+        eq(recipeIngredients.recipeVersionId, cycleRecipePlans.sourceRecipeVersionId),
+      ))
+      .where(and(
+        eq(cycleRecipePlans.ownerId, ownerId),
+        recipeLineForItem,
+        inArray(cycleRecipePlans.planningSnapshotId, currentSnapshots),
+      ))),
+  }).from(inventoryItems).where(ownedItem(ownerId, itemId)).limit(1);
+
+  if (!refs) return null;
+  return {
+    active: refs.active,
+    identityInUse: refs.recipe || refs.packagingRule || refs.price || refs.movement || refs.plan,
+    packInUse: refs.currentMaterial || refs.currentPackaging,
+    activeRecipe: refs.activeRecipe,
+    packagingRule: refs.packagingRule,
+    activePlan: refs.currentMaterial || refs.currentPackaging || refs.currentRecipe,
+  };
+}
 
 function toItem(row: typeof inventoryItems.$inferSelect): InventoryItem {
   return {
@@ -113,6 +274,7 @@ function toItem(row: typeof inventoryItems.$inferSelect): InventoryItem {
     ownerId: row.ownerId,
     name: row.name,
     category: row.category,
+    ingredientKind: row.ingredientKind,
     baseUnit: row.baseUnit as UnitCode,
     purchaseUnitLabel: row.purchaseUnitLabel,
     baseQuantityPerPurchasePack: new Decimal(
@@ -144,9 +306,9 @@ export function createInventoryService(db: DatabaseClient) {
     const [itemRow] = await db
       .select()
       .from(inventoryItems)
-      .where(and(eq(inventoryItems.ownerId, ownerId), eq(inventoryItems.id, itemId)))
+      .where(ownedItem(ownerId, itemId))
       .limit(1);
-    if (!itemRow) throw new Error("Inventory item not found");
+    if (!itemRow) throw new InventoryMaintenanceError("NOT_FOUND");
 
     const [[balanceRow], priceRows] = await Promise.all([
       db
@@ -209,18 +371,69 @@ export function createInventoryService(db: DatabaseClient) {
       ownerId: string,
       input: CreateInventoryItemInput,
     ): Promise<InventoryItem> {
-      const parsed = itemSchema.safeParse(input);
-      if (!parsed.success) throw new Error("Invalid inventory item");
+      const values = parseItem(input);
       const [row] = await db
         .insert(inventoryItems)
-        .values({
-          ownerId,
-          ...parsed.data,
-          notes: parsed.data.notes ?? null,
-        })
+        .values({ ownerId, ...values })
         .returning();
       if (!row) throw new Error("Failed to create inventory item");
       return toItem(row);
+    },
+
+    async getItemEditPolicy(
+      ownerId: string,
+      itemId: string,
+    ): Promise<{ canChangeIdentity: boolean; canChangePack: boolean } | null> {
+      const refs = await readItemReferences(db, ownerId, itemId);
+      return refs && {
+        canChangeIdentity: refs.active && !refs.identityInUse,
+        canChangePack: refs.active && !refs.packInUse,
+      };
+    },
+
+    async updateItem(
+      ownerId: string,
+      itemId: string,
+      input: CreateInventoryItemInput,
+    ): Promise<InventoryItem> {
+      return db.transaction(async (tx) => {
+        const [item] = await lockOwnedInventoryItems(tx, ownerId, [itemId]);
+        assertActiveOwnedItem(item);
+        const values = parseItem(input);
+        const identityChanged = item.baseUnit !== values.baseUnit ||
+          item.category !== values.category || item.ingredientKind !== values.ingredientKind;
+        const packChanged = item.purchaseUnitLabel !== values.purchaseUnitLabel ||
+          !new Decimal(item.baseQuantityPerPurchasePack).eq(values.baseQuantityPerPurchasePack);
+
+        if (identityChanged || packChanged) {
+          const refs = await readItemReferences(tx, ownerId, itemId);
+          if (!refs) throw new InventoryMaintenanceError("NOT_FOUND");
+          if (identityChanged && refs.identityInUse) throw new InventoryMaintenanceError("IDENTITY_IN_USE");
+          if (packChanged && refs.packInUse) throw new InventoryMaintenanceError("PACK_IN_USE");
+        }
+
+        const [row] = await tx.update(inventoryItems).set({ ...values, updatedAt: new Date() })
+          .where(ownedItem(ownerId, itemId)).returning();
+        if (!row) throw new InventoryMaintenanceError("NOT_FOUND");
+        return toItem(row);
+      }, { isolationLevel: "read committed" });
+    },
+
+    async archiveItem(ownerId: string, itemId: string): Promise<InventoryItem> {
+      return db.transaction(async (tx) => {
+        const [item] = await lockOwnedInventoryItems(tx, ownerId, [itemId]);
+        assertActiveOwnedItem(item);
+        const refs = await readItemReferences(tx, ownerId, itemId);
+        if (!refs) throw new InventoryMaintenanceError("NOT_FOUND");
+        if (refs.activeRecipe) throw new InventoryMaintenanceError("ACTIVE_RECIPE");
+        if (refs.packagingRule) throw new InventoryMaintenanceError("PACKAGING_RULE");
+        if (refs.activePlan) throw new InventoryMaintenanceError("ACTIVE_PLAN");
+
+        const [row] = await tx.update(inventoryItems).set({ active: false, updatedAt: new Date() })
+          .where(ownedItem(ownerId, itemId)).returning();
+        if (!row) throw new InventoryMaintenanceError("NOT_FOUND");
+        return toItem(row);
+      }, { isolationLevel: "read committed" });
     },
 
     async addPrice(
@@ -230,26 +443,24 @@ export function createInventoryService(db: DatabaseClient) {
     ): Promise<InventoryPrice> {
       const parsed = priceSchema.safeParse(input);
       if (!parsed.success) throw new Error("Invalid inventory price");
-      const [item] = await db
-        .select({ id: inventoryItems.id })
-        .from(inventoryItems)
-        .where(and(eq(inventoryItems.ownerId, ownerId), eq(inventoryItems.id, itemId)))
-        .limit(1);
-      if (!item) throw new Error("Inventory item not found");
-      const [row] = await db
-        .insert(inventoryPrices)
-        .values({
-          ownerId,
-          inventoryItemId: itemId,
-          packPriceSatang: parsed.data.packPriceSatang,
-          packBaseQuantity: parsed.data.packBaseQuantity,
-          effectiveAt: parsed.data.effectiveAt,
-          purchasedFrom: parsed.data.purchasedFrom ?? null,
-          notes: parsed.data.notes ?? null,
-        })
-        .returning();
-      if (!row) throw new Error("Failed to add inventory price");
-      return toPrice(row);
+      return db.transaction(async (tx) => {
+        const [item] = await lockOwnedInventoryItems(tx, ownerId, [itemId]);
+        assertStockableInventoryItem(item, parsed.data.expectedBaseUnit);
+        const [row] = await tx
+          .insert(inventoryPrices)
+          .values({
+            ownerId,
+            inventoryItemId: itemId,
+            packPriceSatang: parsed.data.packPriceSatang,
+            packBaseQuantity: parsed.data.packBaseQuantity,
+            effectiveAt: parsed.data.effectiveAt,
+            purchasedFrom: parsed.data.purchasedFrom ?? null,
+            notes: parsed.data.notes ?? null,
+          })
+          .returning();
+        if (!row) throw new Error("Failed to add inventory price");
+        return toPrice(row);
+      }, { isolationLevel: "read committed" });
     },
 
     async recordCount(
@@ -257,6 +468,7 @@ export function createInventoryService(db: DatabaseClient) {
       itemId: string,
       countedQuantity: string,
       occurredAt: Date,
+      expectedBaseUnit?: UnitCode,
     ) {
       const parsedQuantity = nonNegativeDecimalSchema.safeParse(countedQuantity);
       if (!parsedQuantity.success || Number.isNaN(occurredAt.getTime())) {
@@ -264,7 +476,7 @@ export function createInventoryService(db: DatabaseClient) {
       }
       return db.transaction(async (tx) => {
         const [item] = await lockOwnedInventoryItems(tx, ownerId, [itemId]);
-        if (!item) throw new Error("Inventory item not found");
+        assertStockableInventoryItem(item, expectedBaseUnit);
         await assertNoPendingConsumption(tx, ownerId, [itemId]);
         const [balanceRow] = await tx
           .select({
@@ -292,7 +504,7 @@ export function createInventoryService(db: DatabaseClient) {
           .returning();
         if (!movement) throw new Error("Failed to record physical count");
         return movement;
-      }).catch(rethrowConsumptionLockError);
+      }, { isolationLevel: "read committed" }).catch(rethrowConsumptionLockError);
     },
 
     async listItems(ownerId: string): Promise<ReadonlyArray<InventoryItemDetail>> {

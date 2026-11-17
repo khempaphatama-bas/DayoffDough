@@ -1,6 +1,7 @@
 import Decimal from "decimal.js";
 import { and, asc, eq } from "drizzle-orm";
 import { z } from "zod";
+import { lockOwnedInventoryItems, lockOwnedProducts } from "@/lib/db/row-locks";
 import type { DatabaseClient } from "@/lib/db/types";
 import {
   deliveryMethods,
@@ -9,6 +10,7 @@ import {
   productPackagingRules,
 } from "@/modules/delivery/db/schema";
 import { inventoryItems } from "@/modules/inventory/db/schema";
+import { assertStockableInventoryItem } from "@/modules/inventory/application/inventory";
 import { products } from "@/modules/products/db/schema";
 
 export const VALID_PACKAGING_COMBINATIONS = [
@@ -196,50 +198,37 @@ export function createDeliveryService(db: DatabaseClient) {
       const parsed = ruleSchema.safeParse(input);
       if (!parsed.success) throw new Error("Invalid packaging rule");
 
-      const [packagingItem] = await db
-        .select({ category: inventoryItems.category })
-        .from(inventoryItems)
-        .where(
-          and(
-            eq(inventoryItems.ownerId, ownerId),
-            eq(inventoryItems.id, parsed.data.inventoryItemId),
-          ),
-        )
-        .limit(1);
-      if (!packagingItem) throw new Error("Packaging item not found");
-      if (packagingItem.category === "INGREDIENT") {
-        throw new Error("Packaging item must be PACKAGING or CONSUMABLE");
-      }
-
-      if (parsed.data.scope === "PRODUCT") {
-        const [product] = await db
-          .select({ id: products.id })
-          .from(products)
-          .where(
-            and(eq(products.ownerId, ownerId), eq(products.id, parsed.data.productId!)),
-          )
-          .limit(1);
-        if (!product) throw new Error("Product not found");
-      } else {
-        const [method] = await db
-          .select({ id: deliveryMethods.id })
-          .from(deliveryMethods)
-          .where(
-            and(
+      return db.transaction(async (tx) => {
+        // Validate/lock the parent first, in the same order as catalog and plan writers.
+        if (parsed.data.scope === "PRODUCT") {
+          const [product] = await lockOwnedProducts(tx, ownerId, [parsed.data.productId!]);
+          if (!product) throw new Error("Product not found");
+        } else {
+          const [method] = await tx
+            .select({ id: deliveryMethods.id })
+            .from(deliveryMethods)
+            .where(and(
               eq(deliveryMethods.ownerId, ownerId),
               eq(deliveryMethods.id, parsed.data.deliveryMethodId!),
-            ),
-          )
-          .limit(1);
-        if (!method) throw new Error("Delivery method not found");
-      }
+            ))
+            .limit(1)
+            .for("key share");
+          if (!method) throw new Error("Delivery method not found");
+        }
 
-      const [row] = await db
-        .insert(productPackagingRules)
-        .values({ ownerId, ...parsed.data, notes: parsed.data.notes ?? null })
-        .returning();
-      if (!row) throw new Error("Failed to create packaging rule");
-      return toRule(row);
+        const [packagingItem] = await lockOwnedInventoryItems(tx, ownerId, [parsed.data.inventoryItemId]);
+        assertStockableInventoryItem(packagingItem);
+        if (packagingItem.category === "INGREDIENT") {
+          throw new Error("Packaging item must be PACKAGING or CONSUMABLE");
+        }
+
+        const [row] = await tx
+          .insert(productPackagingRules)
+          .values({ ownerId, ...parsed.data, notes: parsed.data.notes ?? null })
+          .returning();
+        if (!row) throw new Error("Failed to create packaging rule");
+        return toRule(row);
+      }, { isolationLevel: "read committed" });
     },
 
     async listDeliveryConfiguration(ownerId: string): Promise<DeliveryConfiguration> {

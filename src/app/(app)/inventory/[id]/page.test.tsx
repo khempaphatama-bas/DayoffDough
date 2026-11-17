@@ -9,7 +9,7 @@ vi.mock("@/modules/inventory/application/inventory", () => ({ createInventorySer
 vi.mock("@/modules/consumption/application/count-barrier", () => ({ findPendingConsumption: mocks.pending }));
 vi.mock("@/app/(app)/inventory/actions", () => ({ addInventoryPriceAction: vi.fn(), recordInventoryCountAction: vi.fn() }));
 import Page from "./page";
-const item: InventoryItemDetail = { id: "10000000-0000-4000-8000-000000000005", ownerId: "10000000-0000-4000-8000-000000000099", name: "แป้ง", category: "INGREDIENT", baseUnit: "g", purchaseUnitLabel: "ถุง", baseQuantityPerPurchasePack: "1000", minimumStockQuantity: "0", active: true, notes: null, stockBalance: "3", latestPrice: null, latestUnitCostSatang: null, priceHistory: [] };
+const item: InventoryItemDetail = { id: "10000000-0000-4000-8000-000000000005", ownerId: "10000000-0000-4000-8000-000000000099", name: "แป้ง", category: "INGREDIENT", ingredientKind: "STANDARD", baseUnit: "g", purchaseUnitLabel: "ถุง", baseQuantityPerPurchasePack: "1000", minimumStockQuantity: "0", active: true, notes: null, stockBalance: "3", latestPrice: null, latestUnitCostSatang: null, priceHistory: [] };
 beforeEach(() => { vi.clearAllMocks(); mocks.owner.mockResolvedValue({ id: item.ownerId }); mocks.detail.mockResolvedValue(item); mocks.pending.mockResolvedValue([]); mocks.notFound.mockImplementation(() => { throw new Error("NOT_FOUND"); }); });
 it("loads owned pending guidance only after authenticating and resolving the item", async () => {
   const cycleId = "10000000-0000-4000-8000-000000000001";

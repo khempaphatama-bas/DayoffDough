@@ -1,8 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { OWNER_ID } from "@tests/fixtures/owner";
+import { randomUUID } from "node:crypto";
+import { eq } from "drizzle-orm";
+import { OTHER_OWNER_ID, OWNER_ID } from "@tests/fixtures/owner";
 import { createTestDatabase } from "@tests/helpers/test-db";
 import { createInventoryService } from "@/modules/inventory/application/inventory";
 import { createProductService } from "@/modules/products/application/products";
+import { inventoryItems } from "@/modules/inventory/db/schema";
+import { productPackagingRules } from "@/modules/delivery/db/schema";
 import { createDeliveryService } from "./delivery";
 
 describe("delivery and packaging configuration", () => {
@@ -134,5 +138,36 @@ describe("delivery and packaging configuration", () => {
         quantityInBaseUnit: "1",
       }),
     ).rejects.toThrow("Packaging item must be PACKAGING or CONSUMABLE");
+  });
+
+  it("refuses packaging rules using inactive or prepare-only inventory", async () => {
+    const inventory = createInventoryService(context.db);
+    await context.db.update(inventoryItems).set({ active: false })
+      .where(eq(inventoryItems.id, focacciaBag.id));
+    const ice = await inventory.createItem(OWNER_ID, {
+      name: "Ice", category: "INGREDIENT", ingredientKind: "ICE", baseUnit: "g",
+    });
+    await expect(service.createPackagingRule(OWNER_ID, {
+      scope: "PRODUCT", productId: focaccia.id, deliveryMethodId: null,
+      inventoryItemId: focacciaBag.id, consumptionBasis: "PER_PRODUCT_UNIT", quantityInBaseUnit: "1",
+    })).rejects.toMatchObject({ code: "INACTIVE" });
+    await expect(service.createPackagingRule(OWNER_ID, {
+      scope: "DELIVERY_METHOD", productId: null, deliveryMethodId: kex.id,
+      inventoryItemId: ice.id, consumptionBasis: "PER_DELIVERY", quantityInBaseUnit: "1",
+    })).rejects.toMatchObject({ code: "PREP_ONLY" });
+    expect(await context.db.select().from(productPackagingRules)).toEqual([]);
+  });
+
+  it("does not disclose a foreign inventory item through a valid method rule", async () => {
+    const method = await service.createMethod(OTHER_OWNER_ID, {
+      name: "Pickup", defaultCustomerFeeSatang: 0, defaultInternalCostSatang: 0,
+      requiresDeliveryLocation: false,
+    });
+    for (const inventoryItemId of [shippingBox.id, randomUUID()]) {
+      await expect(service.createPackagingRule(OTHER_OWNER_ID, {
+        scope: "DELIVERY_METHOD", productId: null, deliveryMethodId: method.id,
+        inventoryItemId, consumptionBasis: "PER_DELIVERY", quantityInBaseUnit: "1",
+      })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    }
   });
 });

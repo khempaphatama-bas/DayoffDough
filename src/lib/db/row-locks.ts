@@ -5,8 +5,24 @@ import { inventoryItems } from "@/modules/inventory/db/schema";
 import { orderItems, orders } from "@/modules/orders/db/schema";
 import { orderItemPackingProgress } from "@/modules/operations/db/schema";
 import { cycleTasks } from "@/modules/production/db/schema";
+import { products } from "@/modules/products/db/schema";
 
 type LockingReader = Pick<DatabaseClient, "select">;
+
+export async function lockOwnedProducts(
+  reader: LockingReader,
+  ownerId: string,
+  productIds: readonly string[],
+): Promise<(typeof products.$inferSelect)[]> {
+  const rows: (typeof products.$inferSelect)[] = [];
+  for (const productId of [...new Set(productIds)].sort()) {
+    const [product] = await reader.select().from(products)
+      .where(and(eq(products.ownerId, ownerId), eq(products.id, productId)))
+      .limit(1).for("update");
+    if (product) rows.push(product);
+  }
+  return rows;
+}
 
 export async function lockOwnedBakeCycle(
   reader: LockingReader,
