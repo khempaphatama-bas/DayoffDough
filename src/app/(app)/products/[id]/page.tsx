@@ -3,16 +3,21 @@ import { notFound } from "next/navigation";
 import { requireOwner } from "@/lib/auth/require-owner";
 import { db } from "@/lib/db/client";
 import { createInventoryService } from "@/modules/inventory/application/inventory";
+import { isPrepOnly } from "@/modules/inventory/domain/ingredient-kind";
 import { formatSatangAsBaht } from "@/modules/money/domain/money";
-import { createProductService } from "@/modules/products/application/products";
-import { ActivateVersionButton } from "@/modules/products/ui/activate-version-button";
-import { RecipeVersionForm } from "@/modules/products/ui/recipe-version-form";
+import { createProductService, type RecipeVersion } from "@/modules/products/application/products";
+import { RecipeVersionControls, RecipeVersionForm } from "@/modules/products/ui/recipe-version-form";
+import { formatUnitLabel } from "@/modules/units/domain/units";
 
 export default async function ProductDetailPage({
   params,
-}: Readonly<{ params: Promise<{ id: string }> }>) {
+  searchParams,
+}: Readonly<{
+  params: Promise<{ id: string }>;
+  searchParams?: Promise<{ template?: string | string[] }>;
+}>) {
   const owner = await requireOwner();
-  const { id } = await params;
+  const [{ id }, query] = await Promise.all([params, searchParams]);
   const productService = createProductService(db);
   const [product, inventory] = await Promise.all([
     productService.getProductDetail(owner.id, id),
@@ -23,7 +28,10 @@ export default async function ProductDetailPage({
   });
   const ingredientOptions = inventory
     .filter((item) => item.category === "INGREDIENT" && item.active)
-    .map((item) => ({ id: item.id, name: item.name, baseUnit: item.baseUnit }));
+    .map(({ id, name, baseUnit, ingredientKind }) => ({ id, name, baseUnit, ingredientKind }));
+  const initialVersion = product.versions.find((version) => version.id === query?.template);
+  const selectable = product.versions.filter((version) => version.archivedAt === null);
+  const history = product.versions.filter((version) => version.archivedAt !== null);
 
   return (
     <main className="mx-auto grid max-w-6xl gap-7 px-5 py-8">
@@ -33,25 +41,80 @@ export default async function ProductDetailPage({
         <p className="mt-2 text-stone-600">฿{formatSatangAsBaht(product.defaultUnitPriceSatang)} ต่อ {product.sellingUnit}</p>
       </header>
 
-      <RecipeVersionForm defaultYieldUnit={product.sellingUnit} ingredientOptions={ingredientOptions} productId={product.id} />
+      <RecipeVersionForm
+        {...(initialVersion ? { initialVersion } : {})}
+        defaultYieldUnit={product.sellingUnit}
+        ingredientOptions={ingredientOptions}
+        key={initialVersion?.id ?? product.id}
+        productId={product.id}
+      />
 
-      <section className="grid gap-4">
-        <div><h2 className="text-2xl font-bold text-stone-900">เวอร์ชันสูตร</h2><p className="mt-1 text-sm text-stone-600">เวอร์ชันที่บันทึกแล้วจะไม่ถูกแก้ทับ</p></div>
-        {product.versions.length === 0 ? (
+      <section aria-labelledby="selectable-recipes" className="grid gap-4">
+        <div>
+          <h2 className="text-2xl font-bold text-stone-900" id="selectable-recipes">เวอร์ชันสูตร</h2>
+          <p className="mt-1 text-sm text-stone-600">บันทึกสูตรใหม่ได้โดยไม่แก้ทับสูตรเดิม การบันทึกไม่สลับสูตรที่ใช้งานอยู่</p>
+        </div>
+        {selectable.length === 0 ? (
           <div className="rounded-3xl border border-dashed border-stone-300 bg-white/60 p-8 text-center text-stone-600">ยังไม่มีเวอร์ชันสูตร</div>
         ) : (
-          product.versions.map((version) => {
-            const active = product.activeRecipeVersionId === version.id;
-            return (
-              <article className="grid gap-5 rounded-3xl border border-stone-200 bg-white p-5 shadow-sm" key={version.id}>
-                <div className="flex flex-wrap items-start justify-between gap-4"><div><div className="flex flex-wrap items-center gap-2"><h3 className="text-xl font-bold text-stone-900">{version.versionCode}</h3>{active ? <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-800">สูตรที่ใช้งานอยู่</span> : null}</div><p className="mt-1 text-sm text-stone-600">ได้ {version.baseYieldQuantity} {version.yieldUnit} · แรงงาน {version.laborMinutesPerBatch} นาที · ค่าไฟ/แก๊ส ฿{formatSatangAsBaht(version.utilityCostSatangPerBatch)}</p></div>{!active ? <ActivateVersionButton productId={product.id} versionId={version.id} /> : null}</div>
-                <div><h4 className="font-semibold text-stone-800">วัตถุดิบ</h4><ul className="mt-2 grid gap-2 text-sm text-stone-600">{version.ingredients.map((ingredient) => <li className="flex justify-between gap-4 rounded-xl bg-stone-50 px-4 py-3" key={ingredient.id}><span>{ingredient.inventoryItemName}</span><span className="font-medium text-stone-900">{ingredient.quantityInBaseUnit} {ingredient.baseUnit}</span></li>)}</ul></div>
-                {version.instructions ? <div><h4 className="font-semibold text-stone-800">วิธีทำ</h4><p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-stone-600">{version.instructions}</p></div> : null}
-              </article>
-            );
-          })
+          selectable.map((version) => <RecipeCard active={product.activeRecipeVersionId === version.id} key={version.id} productId={product.id} version={version} />)
         )}
       </section>
+      {history.length > 0 ? (
+        <section aria-labelledby="recipe-history" className="grid gap-4">
+          <div>
+            <h2 className="text-2xl font-bold text-stone-900" id="recipe-history">ประวัติสูตร</h2>
+            <p className="mt-1 text-sm text-stone-600">สูตรที่เก็บเข้าประวัติยังเปิดอ่านหรือใช้เป็นต้นแบบได้ แต่เปิดใช้งานโดยตรงไม่ได้</p>
+          </div>
+          {history.map((version) => <RecipeCard active={false} key={version.id} productId={product.id} version={version} />)}
+        </section>
+      ) : null}
     </main>
+  );
+}
+
+function RecipeCard({ active, productId, version }: Readonly<{ active: boolean; productId: string; version: RecipeVersion }>) {
+  const archived = version.archivedAt !== null;
+  const headingId = `recipe-${version.id}`;
+  const status = archived ? "เก็บเข้าประวัติแล้ว" : active ? "สูตรที่ใช้งานอยู่" : "บันทึกแล้ว ยังไม่ได้ใช้งาน";
+
+  return (
+    <article aria-labelledby={headingId} className="grid min-w-0 gap-5 rounded-3xl border border-stone-200 bg-white p-5 shadow-sm">
+      <div>
+        <div className="flex flex-wrap items-center gap-2">
+          <h3 className="min-w-0 break-words text-xl font-bold text-stone-900" id={headingId}>{version.versionCode}</h3>
+          <span className={`rounded-full px-3 py-1 text-xs font-semibold ${active ? "bg-emerald-50 text-emerald-800" : "bg-stone-100 text-stone-700"}`}>{status}</span>
+        </div>
+        <p className="mt-1 text-sm text-stone-600">
+          ได้ {version.baseYieldQuantity} {formatUnitLabel(version.yieldUnit)} · แรงงาน {version.laborMinutesPerBatch} นาที · ค่าไฟ/แก๊ส ฿{formatSatangAsBaht(version.utilityCostSatangPerBatch)}
+          {version.wasteAllowancePercent !== null ? ` · ค่าเผื่อสูญเสีย ${version.wasteAllowancePercent}%` : ""}
+        </p>
+      </div>
+      <div>
+        <h4 className="font-semibold text-stone-800">วัตถุดิบ</h4>
+        <ul className="mt-2 grid gap-2 text-sm text-stone-600">
+          {version.ingredients.map((ingredient) => (
+            <li className="flex flex-wrap justify-between gap-x-4 gap-y-1 rounded-xl bg-stone-50 px-4 py-3" key={ingredient.id}>
+              <div className="min-w-0 break-words">
+                <span>{ingredient.inventoryItemName}</span>
+                {!ingredient.itemActive ? <span className="text-amber-900"> · ปิดใช้งานแล้ว</span> : null}
+                {isPrepOnly(ingredient.ingredientKind) ? <p className="text-xs text-stone-600">ไม่คิดต้นทุนและไม่ต้องนับสต๊อก</p> : null}
+              </div>
+              <span className="font-medium text-stone-900">{ingredient.quantityInBaseUnit} {formatUnitLabel(ingredient.baseUnit)}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+      {version.instructions ? (
+        <div>
+          <h4 className="font-semibold text-stone-800">วิธีทำ</h4>
+          <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-stone-600">{version.instructions}</p>
+        </div>
+      ) : null}
+      <div className="flex flex-wrap items-start gap-2">
+        <Link className="inline-flex min-h-11 items-center rounded-xl border border-stone-300 px-4 text-sm font-semibold text-stone-800 hover:bg-stone-50" href={`?template=${version.id}#recipe-editor`} prefetch={false}>ใช้สูตรนี้เป็นต้นแบบ</Link>
+        {!active && !archived ? <RecipeVersionControls productId={productId} versionId={version.id} /> : null}
+      </div>
+    </article>
   );
 }

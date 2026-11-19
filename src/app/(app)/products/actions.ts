@@ -4,32 +4,64 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { requireOwner } from "@/lib/auth/require-owner";
 import { db } from "@/lib/db/client";
+import { ingredientKinds } from "@/modules/inventory/domain/ingredient-kind";
 import { parseBahtToSatang } from "@/modules/money/domain/money";
-import { createProductService } from "@/modules/products/application/products";
+import { createProductService, RecipeMaintenanceError } from "@/modules/products/application/products";
 
 export type ProductActionState = Readonly<{
   error: string | null;
   saved: boolean;
+  archivedVersionCodes?: readonly string[];
 }>;
+
+const unitCodes = ["mg", "g", "kg", "ml", "l", "piece"] as const;
 
 const productSchema = z.object({
   name: z.string().min(1),
-  sellingUnit: z.enum(["mg", "g", "kg", "ml", "l", "piece"]),
+  sellingUnit: z.enum(unitCodes),
   defaultUnitPriceBaht: z.string().min(1),
   notes: z.string(),
 });
 
 const versionSchema = z.object({
   productId: z.string().uuid(),
-  versionCode: z.string().min(1),
+  versionCode: z.string().trim().min(1).max(80),
   baseYieldQuantity: z.string().min(1),
-  yieldUnit: z.enum(["mg", "g", "kg", "ml", "l", "piece"]),
+  yieldUnit: z.enum(unitCodes),
   laborMinutesPerBatch: z.coerce.number().int().min(0),
   utilityCostBahtPerBatch: z.string().min(1),
   wasteAllowancePercent: z.string(),
   instructions: z.string(),
   ingredientCount: z.coerce.number().int().min(1).max(50),
 });
+
+const versionTargetSchema = z.object({ productId: z.string().uuid(), versionId: z.string().uuid() });
+const ingredientRowsSchema = z.array(z.object({
+  inventoryItemId: z.string().uuid(),
+  quantityInBaseUnit: z.string().min(1),
+  expectedIdentity: z.object({
+    baseUnit: z.enum(unitCodes),
+    ingredientKind: z.enum(ingredientKinds),
+  }),
+}));
+
+const recipeMaintenanceMessages: Record<RecipeMaintenanceError["code"], string> = {
+  NOT_FOUND: "ไม่พบสูตรสำหรับสินค้านี้ กรุณากลับไปที่หน้าสินค้าแล้วลองอีกครั้ง",
+  ACTIVE_VERSION: "สูตรนี้กำลังใช้งานอยู่ กรุณาสลับไปใช้สูตรอื่นก่อนเก็บเข้าประวัติ",
+  ARCHIVED_VERSION: "สูตรนี้ถูกเก็บเข้าประวัติแล้ว หากต้องการนำกลับมาใช้ ให้กดใช้สูตรนี้เป็นต้นแบบแล้วบันทึกเป็นเวอร์ชันใหม่",
+  ITEM_UNAVAILABLE: "มีวัตถุดิบที่ใช้ไม่ได้แล้ว กรุณาเลือกวัตถุดิบอื่นแทนหรือลบรายการนั้นก่อนบันทึก",
+  ITEM_CHANGED: "หน่วยหรือชนิดวัตถุดิบเปลี่ยนไป กรุณาโหลดหน้าใหม่ แล้วตรวจสอบปริมาณและหน่วยก่อนบันทึกอีกครั้ง",
+  DUPLICATE_VERSION_CODE: "รหัสเวอร์ชันนี้ถูกใช้แล้ว กรุณาตั้งรหัสใหม่",
+};
+
+function recipeFailure(error: unknown, fallback: string): ProductActionState {
+  return { error: error instanceof RecipeMaintenanceError ? recipeMaintenanceMessages[error.code] : fallback, saved: false };
+}
+
+function revalidateRecipeViews(productId: string) {
+  revalidatePath(`/products/${productId}`);
+  revalidatePath("/products");
+}
 
 export async function createProductAction(
   _previousState: ProductActionState,
@@ -84,22 +116,25 @@ export async function createRecipeVersionAction(
     (_, index) => ({
       inventoryItemId: formData.get(`ingredientId_${index}`),
       quantityInBaseUnit: formData.get(`ingredientQuantity_${index}`),
+      expectedIdentity: {
+        baseUnit: formData.get(`ingredientBaseUnit_${index}`),
+        ingredientKind: formData.get(`ingredientKind_${index}`),
+      },
     }),
   );
-  const parsedIngredients = z
-    .array(
-      z.object({
-        inventoryItemId: z.string().uuid(),
-        quantityInBaseUnit: z.string().min(1),
-      }),
-    )
-    .safeParse(ingredients);
+  const parsedIngredients = ingredientRowsSchema.safeParse(ingredients);
   if (!parsedIngredients.success) {
-    return { error: "กรุณาเลือกวัตถุดิบและกรอกปริมาณให้ครบ", saved: false };
+    const incompleteRow = parsedIngredients.error.issues.some(({ path }) => path[1] !== "expectedIdentity");
+    return {
+      error: incompleteRow
+        ? "กรุณาเลือกวัตถุดิบและกรอกปริมาณให้ครบ"
+        : "ข้อมูลหน่วยหรือชนิดวัตถุดิบไม่ครบ กรุณาโหลดหน้าใหม่แล้วเลือกวัตถุดิบอีกครั้ง",
+      saved: false,
+    };
   }
 
   try {
-    await createProductService(db).createRecipeVersion(
+    const version = await createProductService(db).createRecipeVersion(
       owner.id,
       parsed.data.productId,
       {
@@ -118,33 +153,65 @@ export async function createRecipeVersionAction(
         instructions: parsed.data.instructions,
       },
     );
-    revalidatePath(`/products/${parsed.data.productId}`);
-    revalidatePath("/products");
-    return { error: null, saved: true };
+    revalidateRecipeViews(parsed.data.productId);
+    return {
+      error: null,
+      saved: true,
+      archivedVersionCodes: version.archivedVersions.map(({ versionCode }) => versionCode),
+    };
   } catch (error) {
     const message =
       error instanceof Error && error.message === "Base yield must be greater than zero"
         ? "ผลผลิตต่อสูตรต้องมากกว่าศูนย์"
         : "บันทึกเวอร์ชันสูตรไม่สำเร็จ กรุณาตรวจสอบข้อมูล";
-    return { error: message, saved: false };
+    return recipeFailure(error, message);
   }
 }
 
 export async function activateRecipeVersionAction(formData: FormData): Promise<void> {
+  const result = await activateRecipeVersionWithFeedbackAction({ error: null, saved: false }, formData);
+  if (result.error) throw new Error(result.error);
+}
+
+export async function activateRecipeVersionWithFeedbackAction(
+  _previousState: ProductActionState,
+  formData: FormData,
+): Promise<ProductActionState> {
   const owner = await requireOwner();
-  const parsed = z
-    .object({ productId: z.string().uuid(), versionId: z.string().uuid() })
-    .safeParse({
-      productId: formData.get("productId"),
-      versionId: formData.get("versionId"),
-    });
-  if (!parsed.success) throw new Error("Invalid recipe activation");
-  await createProductService(db).activateRecipeVersion(
-    owner.id,
-    parsed.data.productId,
-    parsed.data.versionId,
-  );
-  revalidatePath(`/products/${parsed.data.productId}`);
-  revalidatePath("/products");
+  const parsed = versionTargetSchema.safeParse({
+    productId: formData.get("productId"),
+    versionId: formData.get("versionId"),
+  });
+  if (!parsed.success) return { error: recipeMaintenanceMessages.NOT_FOUND, saved: false };
+  try {
+    await createProductService(db).activateRecipeVersion(owner.id, parsed.data.productId, parsed.data.versionId);
+  } catch (error) {
+    if (error instanceof RecipeMaintenanceError && error.code === "ITEM_UNAVAILABLE") {
+      return { error: "สูตรนี้มีวัตถุดิบที่ใช้ไม่ได้แล้ว ให้ใช้สูตรนี้เป็นต้นแบบแล้วเปลี่ยนหรือลบรายการนั้นก่อนบันทึกเวอร์ชันใหม่", saved: false };
+    }
+    return recipeFailure(error, "เปิดใช้สูตรไม่สำเร็จ กรุณาโหลดหน้าใหม่แล้วลองอีกครั้ง");
+  }
+  revalidateRecipeViews(parsed.data.productId);
   revalidatePath("/dashboard");
+  revalidatePath("/cycles/[id]/planning", "page");
+  return { error: null, saved: true };
+}
+
+export async function archiveRecipeVersionAction(
+  _previousState: ProductActionState,
+  formData: FormData,
+): Promise<ProductActionState> {
+  const owner = await requireOwner();
+  const parsed = versionTargetSchema.safeParse({
+    productId: formData.get("productId"),
+    versionId: formData.get("versionId"),
+  });
+  if (!parsed.success) return { error: recipeMaintenanceMessages.NOT_FOUND, saved: false };
+  try {
+    await createProductService(db).archiveRecipeVersion(owner.id, parsed.data.productId, parsed.data.versionId);
+  } catch (error) {
+    return recipeFailure(error, "เก็บสูตรเข้าประวัติไม่สำเร็จ กรุณาโหลดหน้าใหม่แล้วลองอีกครั้ง");
+  }
+  revalidateRecipeViews(parsed.data.productId);
+  return { error: null, saved: true };
 }
