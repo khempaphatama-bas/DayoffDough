@@ -14,7 +14,7 @@ export default async function ProductDetailPage({
   searchParams,
 }: Readonly<{
   params: Promise<{ id: string }>;
-  searchParams?: Promise<{ template?: string | string[] }>;
+  searchParams?: Promise<{ template?: string | string[]; restartTemplate?: string | string[] }>;
 }>) {
   const owner = await requireOwner();
   const [{ id }, query] = await Promise.all([params, searchParams]);
@@ -30,8 +30,23 @@ export default async function ProductDetailPage({
     .filter((item) => item.category === "INGREDIENT" && item.active)
     .map(({ id, name, baseUnit, ingredientKind }) => ({ id, name, baseUnit, ingredientKind }));
   const initialVersion = product.versions.find((version) => version.id === query?.template);
+  const templateRestarted = query?.restartTemplate === "1";
   const selectable = product.versions.filter((version) => version.archivedAt === null);
   const history = product.versions.filter((version) => version.archivedAt !== null);
+
+  function renderRecipeCard(version: RecipeVersion) {
+    // A repeat click changes the draft key; refreshing the current URL does not.
+    const restart = initialVersion?.id === version.id && !templateRestarted ? "&restartTemplate=1" : "";
+    return (
+      <RecipeCard
+        active={version.archivedAt === null && product.activeRecipeVersionId === version.id}
+        key={version.id}
+        productId={product.id}
+        templateHref={`?template=${version.id}${restart}#recipe-editor`}
+        version={version}
+      />
+    );
+  }
 
   return (
     <main className="mx-auto grid max-w-6xl gap-7 px-5 py-8">
@@ -45,7 +60,7 @@ export default async function ProductDetailPage({
         {...(initialVersion ? { initialVersion } : {})}
         defaultYieldUnit={product.sellingUnit}
         ingredientOptions={ingredientOptions}
-        key={initialVersion?.id ?? product.id}
+        key={initialVersion ? `${initialVersion.id}:${templateRestarted}` : product.id}
         productId={product.id}
       />
 
@@ -57,7 +72,7 @@ export default async function ProductDetailPage({
         {selectable.length === 0 ? (
           <div className="rounded-3xl border border-dashed border-stone-300 bg-white/60 p-8 text-center text-stone-600">ยังไม่มีเวอร์ชันสูตร</div>
         ) : (
-          selectable.map((version) => <RecipeCard active={product.activeRecipeVersionId === version.id} key={version.id} productId={product.id} version={version} />)
+          selectable.map(renderRecipeCard)
         )}
       </section>
       {history.length > 0 ? (
@@ -66,14 +81,19 @@ export default async function ProductDetailPage({
             <h2 className="text-2xl font-bold text-stone-900" id="recipe-history">ประวัติสูตร</h2>
             <p className="mt-1 text-sm text-stone-600">สูตรที่เก็บเข้าประวัติยังเปิดอ่านหรือใช้เป็นต้นแบบได้ แต่เปิดใช้งานโดยตรงไม่ได้</p>
           </div>
-          {history.map((version) => <RecipeCard active={false} key={version.id} productId={product.id} version={version} />)}
+          {history.map(renderRecipeCard)}
         </section>
       ) : null}
     </main>
   );
 }
 
-function RecipeCard({ active, productId, version }: Readonly<{ active: boolean; productId: string; version: RecipeVersion }>) {
+function RecipeCard({ active, productId, templateHref, version }: Readonly<{
+  active: boolean;
+  productId: string;
+  templateHref: string;
+  version: RecipeVersion;
+}>) {
   const archived = version.archivedAt !== null;
   const headingId = `recipe-${version.id}`;
   const status = archived ? "เก็บเข้าประวัติแล้ว" : active ? "สูตรที่ใช้งานอยู่" : "บันทึกแล้ว ยังไม่ได้ใช้งาน";
@@ -112,7 +132,7 @@ function RecipeCard({ active, productId, version }: Readonly<{ active: boolean; 
         </div>
       ) : null}
       <div className="flex flex-wrap items-start gap-2">
-        <Link className="inline-flex min-h-11 items-center rounded-xl border border-stone-300 px-4 text-sm font-semibold text-stone-800 hover:bg-stone-50" href={`?template=${version.id}#recipe-editor`} prefetch={false}>ใช้สูตรนี้เป็นต้นแบบ</Link>
+        <Link className="inline-flex min-h-11 items-center rounded-xl border border-stone-300 px-4 text-sm font-semibold text-stone-800 hover:bg-stone-50" href={templateHref} prefetch={false}>ใช้สูตรนี้เป็นต้นแบบ</Link>
         {!active && !archived ? <RecipeVersionControls productId={productId} versionId={version.id} /> : null}
       </div>
     </article>

@@ -1,18 +1,22 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { InventoryItem } from "@/modules/inventory/application/inventory";
 import { RecipeMaintenanceError, type ProductDetail, type RecipeVersion } from "@/modules/products/application/products";
 
 const PRODUCT_ID = "11111111-1111-4111-8111-111111111111";
 const ACTIVE_ID = "11111111-1111-4111-8111-111111111112";
 const HISTORY_ID = "11111111-1111-4111-8111-111111111113";
 const SAVED_ID = "11111111-1111-4111-8111-111111111114";
+const WATER_ID = "11111111-1111-4111-8111-111111111115";
+const ICE_ID = "11111111-1111-4111-8111-111111111116";
 const OWNER = { id: "00000000-0000-4000-8000-000000000001", email: "owner@example.com" };
 
 const mocks = vi.hoisted(() => ({
   getProductDetail: vi.fn(),
   listCatalogItems: vi.fn(),
   requireOwner: vi.fn(),
+  createRecipeVersion: vi.fn(),
   archiveRecipeVersion: vi.fn(),
   activateRecipeVersion: vi.fn(),
   revalidatePath: vi.fn(),
@@ -45,17 +49,24 @@ function renderProductData() {
     ingredients: [],
   };
   mocks.requireOwner.mockResolvedValue(OWNER);
-  mocks.listCatalogItems.mockResolvedValue([]);
+  const prepItem = {
+    ownerId: OWNER.id, category: "INGREDIENT", purchaseUnitLabel: "",
+    baseQuantityPerPurchasePack: "0", minimumStockQuantity: "0", active: true, notes: null,
+  } as const;
+  mocks.listCatalogItems.mockResolvedValue([
+    { ...prepItem, id: WATER_ID, name: "น้ำ", baseUnit: "ml", ingredientKind: "WATER" },
+    { ...prepItem, id: ICE_ID, name: "น้ำแข็ง", baseUnit: "g", ingredientKind: "ICE" },
+  ] satisfies InventoryItem[]);
   mocks.getProductDetail.mockResolvedValue({
     id: PRODUCT_ID, ownerId: OWNER.id, name: "ขนม", sellingUnit: "piece", defaultUnitPriceSatang: 18000,
     activeRecipeVersionId: ACTIVE_ID, recipeId: "recipe-id", active: true, notes: null,
     versions: [version, {
       ...version, id: HISTORY_ID, versionCode: "v2", activeFrom: null, archivedAt: new Date("2026-11-17"),
       instructions: "อบสูตรเดิม 20 นาที", ingredients: [{
-        id: "water-row", inventoryItemId: "water", inventoryItemName: "น้ำ", baseUnit: "ml",
+        id: "water-row", inventoryItemId: WATER_ID, inventoryItemName: "น้ำ", baseUnit: "ml",
         ingredientKind: "WATER", itemActive: true, quantityInBaseUnit: "250",
       }, {
-        id: "ice-row", inventoryItemId: "ice", inventoryItemName: "น้ำแข็ง", baseUnit: "g",
+        id: "ice-row", inventoryItemId: ICE_ID, inventoryItemName: "น้ำแข็ง", baseUnit: "g",
         ingredientKind: "ICE", itemActive: true, quantityInBaseUnit: "100",
       }],
     }, { ...version, id: SAVED_ID, versionCode: "v3", activeFrom: null }],
@@ -132,6 +143,62 @@ describe("ProductDetailPage", () => {
     expect(screen.getAllByLabelText("รหัสเวอร์ชัน")).toHaveLength(1);
     expect(screen.getByLabelText("รหัสเวอร์ชัน")).toHaveValue("");
     expect(screen.getByLabelText("วิธีทำ")).toHaveValue("อบสูตรเดิม 20 นาที");
+  });
+
+  it("starts a fresh draft on every selection of the same template, not on revalidation", async () => {
+    renderProductData();
+    mocks.createRecipeVersion.mockRejectedValueOnce(new RecipeMaintenanceError("DUPLICATE_VERSION_CODE"));
+    const user = userEvent.setup();
+    let url = new URL(`/products/${PRODUCT_ID}`, "https://example.test");
+    const renderPage = () => ProductDetailPage({
+      params: Promise.resolve({ id: PRODUCT_ID }),
+      searchParams: Promise.resolve(Object.fromEntries(url.searchParams)),
+    });
+    const page = render(await renderPage());
+    const selectTemplate = async () => {
+      const link = versionCard("v2").getByRole("link", { name: "ใช้สูตรนี้เป็นต้นแบบ" });
+      const destination = vi.fn();
+      // Replay the actual anchor destination as a Next page update in jsdom.
+      link.addEventListener("click", (event) => {
+        event.preventDefault();
+        destination((link as HTMLAnchorElement).getAttribute("href"));
+      }, { once: true });
+      await user.click(link);
+      expect(destination).toHaveBeenCalledOnce();
+      url = new URL(destination.mock.calls[0]![0], url);
+      page.rerender(await renderPage());
+    };
+    await selectTemplate();
+    const changes = [
+      ["รหัสเวอร์ชัน", "v6"], ["ปริมาณวัตถุดิบ 1", "375"],
+      ["เวลาแรงงานต่อสูตร (นาที)", "27"], ["ค่าไฟหรือแก๊สต่อสูตร (บาท)", "14.5"],
+      ["ค่าเผื่อสูญเสีย (%)", "7"], ["วิธีทำ", "ขั้นตอนที่แก้"],
+    ] as const;
+    for (const [label, value] of changes) {
+      await user.clear(screen.getByLabelText(label));
+      await user.type(screen.getByLabelText(label), value);
+    }
+    await user.click(screen.getByRole("button", { name: "บันทึกเวอร์ชันสูตร" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("รหัสเวอร์ชันนี้ถูกใช้แล้ว");
+
+    page.rerender(await renderPage());
+    expect(screen.getByLabelText("รหัสเวอร์ชัน")).toHaveValue("v6");
+    expect(screen.getByLabelText("ปริมาณวัตถุดิบ 1")).toHaveValue(375);
+    expect(screen.getByRole("alert")).toHaveTextContent("รหัสเวอร์ชันนี้ถูกใช้แล้ว");
+
+    await selectTemplate();
+    expect(screen.getAllByLabelText("รหัสเวอร์ชัน")).toHaveLength(1);
+    expect(screen.getByLabelText("รหัสเวอร์ชัน")).toHaveValue("");
+    expect(screen.getByLabelText("ปริมาณวัตถุดิบ 1")).toHaveValue(250);
+    expect(screen.getByLabelText("เวลาแรงงานต่อสูตร (นาที)")).toHaveValue(40);
+    expect(screen.getByLabelText("ค่าไฟหรือแก๊สต่อสูตร (บาท)")).toHaveValue(10.99);
+    expect(screen.getByLabelText("ค่าเผื่อสูญเสีย (%)")).toHaveValue(3.5);
+    expect(screen.getByLabelText("วิธีทำ")).toHaveValue("อบสูตรเดิม 20 นาที");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    await user.type(screen.getByLabelText("รหัสเวอร์ชัน"), "v7");
+    await selectTemplate();
+    expect(screen.getByLabelText("รหัสเวอร์ชัน")).toHaveValue("");
   });
 
   it("requires explicit archive confirmation and renders the server's newly-current rejection", async () => {

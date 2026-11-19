@@ -118,7 +118,7 @@ it.each([
 ])("renders safe guidance after the save rejects (%s)", async (error, guidance) => {
   mocks.createRecipeVersion.mockRejectedValueOnce(error);
   const user = userEvent.setup();
-  render(<RecipeVersionForm productId={PRODUCT_ID} defaultYieldUnit="piece" ingredientOptions={[flour]} />);
+  const { rerender } = render(<RecipeVersionForm productId={PRODUCT_ID} defaultYieldUnit="piece" ingredientOptions={[flour]} />);
   await user.click(screen.getByRole("button", { name: "เพิ่มเวอร์ชันสูตร" }));
   await user.type(screen.getByLabelText("รหัสเวอร์ชัน"), "v6");
   await user.type(screen.getByLabelText("ผลผลิตต่อสูตร"), "8");
@@ -128,6 +128,9 @@ it.each([
 
   expect(await screen.findByRole("alert")).toHaveTextContent(guidance);
   expect(screen.getByRole("alert")).not.toHaveTextContent(error.message);
+  rerender(<RecipeVersionForm productId={PRODUCT_ID} defaultYieldUnit="piece" ingredientOptions={[{ ...flour, name: "แป้ง (อัปเดต)" }]} />);
   expect(screen.getByLabelText("รหัสเวอร์ชัน")).toHaveValue("v6");
+  expect(screen.getByLabelText("ปริมาณวัตถุดิบ 1")).toHaveValue(375);
+  expect(screen.getByRole("alert")).toHaveTextContent(guidance);
   expect(mocks.revalidatePath).not.toHaveBeenCalled();
 });
