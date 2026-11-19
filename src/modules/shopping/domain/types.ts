@@ -163,8 +163,16 @@ export type NoPlanView = Readonly<{
   writable: false;
 }>;
 
+export type NoStockRequiredView = Readonly<{
+  kind: "NO_STOCK_REQUIRED";
+  cycle: CycleShoppingHeader;
+  generations: ReadonlyArray<PlanningGenerationSummary>;
+  writable: false;
+}>;
+
 export type CycleStockShoppingView =
   | CountRequiredView
   | ShoppingView
   | HistoryView
-  | NoPlanView;
+  | NoPlanView
+  | NoStockRequiredView;

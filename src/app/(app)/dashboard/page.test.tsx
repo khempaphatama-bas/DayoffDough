@@ -2,13 +2,13 @@ import { render, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BakeCycle } from "@/modules/cycles/application/cycles";
 
-const mocks = vi.hoisted(() => ({ requireOwner: vi.fn(), cycles: vi.fn(), summaries: vi.fn() }));
+const mocks = vi.hoisted(() => ({ requireOwner: vi.fn(), cycles: vi.fn(), summaries: vi.fn(), inventory: vi.fn() }));
 vi.mock("@/lib/auth/require-owner", () => ({ requireOwner: mocks.requireOwner }));
 vi.mock("@/lib/db/client", () => ({ db: {} }));
 vi.mock("@/modules/cycles/application/cycles", () => ({ createCycleService: () => ({ list: mocks.cycles }) }));
 vi.mock("@/modules/orders/application/orders", () => ({ createOrderService: () => ({ listCycleSummaries: mocks.summaries }) }));
 vi.mock("@/modules/settings/application/settings", () => ({ createSettingsService: () => ({ get: async () => null }) }));
-vi.mock("@/modules/inventory/application/inventory", () => ({ createInventoryService: () => ({ listItems: async () => [] }) }));
+vi.mock("@/modules/inventory/application/inventory", () => ({ createInventoryService: () => ({ listItems: mocks.inventory }) }));
 vi.mock("@/modules/products/application/products", () => ({ createProductService: () => ({ listProducts: async () => [] }) }));
 vi.mock("@/modules/delivery/application/delivery", () => ({ createDeliveryService: () => ({ listDeliveryConfiguration: async () => ({ methods: [] }) }) }));
 import DashboardPage from "./page";
@@ -21,8 +21,18 @@ const SUMMARY = { activeOrderCount: 1, cancelledOrderCount: 0, grandTotalSatang:
 describe("DashboardPage operating Cycle", () => {
   beforeEach(() => {
     vi.clearAllMocks(); mocks.requireOwner.mockResolvedValue({ id: OWNER_ID });
+    mocks.inventory.mockResolvedValue([]);
     mocks.cycles.mockResolvedValue([OPEN, LOCKED, PRODUCTION]);
     mocks.summaries.mockResolvedValue(new Map([[PRODUCTION.id, SUMMARY], [LOCKED.id, SUMMARY], [OPEN.id, SUMMARY]]));
+  });
+  it("counts only active tracked inventory as requiring a price", async () => {
+    const item = { id: "item", ownerId: OWNER_ID, name: "แป้ง", category: "INGREDIENT", ingredientKind: "STANDARD",
+      baseUnit: "g", purchaseUnitLabel: "ถุง", baseQuantityPerPurchasePack: "1000", minimumStockQuantity: "0",
+      active: true, notes: null, stockBalance: "0", latestPrice: null, latestUnitCostSatang: null };
+    mocks.inventory.mockResolvedValue([item, { ...item, id: "water", ingredientKind: "WATER" },
+      { ...item, id: "ice", ingredientKind: "ICE" }, { ...item, id: "archived", active: false }]);
+    const { container } = render(await DashboardPage());
+    expect(within(container).getByText("1 รายการยังไม่มีราคา")).toBeVisible();
   });
   it("fetches only the selected owner-scoped Cycle summary and links to its Operations", async () => {
     const { container } = render(await DashboardPage()); const page = within(container);

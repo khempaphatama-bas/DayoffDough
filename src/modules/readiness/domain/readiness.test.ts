@@ -2,6 +2,14 @@ import { describe, expect, it } from "vitest";
 import { evaluateMasterDataReadiness } from "./readiness";
 
 describe("master-data readiness", () => {
+  it("readiness_ignores_prep_only_for_missing_price", () => {
+    const input = { settingsConfigured: true, inventoryItemCount: 3, inventoryPriceRequiredCount: 1,
+      inventoryPricedCount: 0, productCount: 1, activeRecipeCount: 1, deliveryMethodCount: 1 };
+    expect(evaluateMasterDataReadiness(input).cards.find((card) => card.key === "inventory")?.status).toBe("1 รายการยังไม่มีราคา");
+    const prepOnly = evaluateMasterDataReadiness({ ...input, inventoryItemCount: 2, inventoryPriceRequiredCount: 0 });
+    expect(prepOnly.cards.find((card) => card.key === "inventory")).toMatchObject({ ready: true, status: "พร้อม" });
+    expect(prepOnly.ready).toBe(true);
+  });
   it("is ready when every Phase 1 dependency has a usable record", () => {
     const result = evaluateMasterDataReadiness({
       settingsConfigured: true,

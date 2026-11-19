@@ -1,5 +1,6 @@
 import Decimal from "decimal.js";
 import { calculateUnitCostSatang } from "@/modules/inventory/domain/cost";
+import { isPrepOnly } from "@/modules/inventory/domain/ingredient-kind";
 import { calculateOrderTotals } from "@/modules/orders/domain/totals";
 import { calculateBatchPlan } from "./batch-plan";
 import {
@@ -477,6 +478,7 @@ export function buildPlanningPreview(
         inventoryById,
         ingredient.inventoryItemId,
       );
+      if (isPrepOnly(inventoryItem.ingredientKind ?? "STANDARD")) continue;
       requiredInventoryItemIds.add(inventoryItem.id);
       let calculation;
       try {

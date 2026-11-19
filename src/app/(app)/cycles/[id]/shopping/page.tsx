@@ -6,6 +6,7 @@ import { createShoppingQueryService } from "@/modules/shopping/application/shopp
 import type {
   CountRequiredView,
   NoPlanView,
+  NoStockRequiredView,
 } from "@/modules/shopping/domain/types";
 import { ShoppingView } from "@/modules/shopping/ui/shopping-view";
 import { StockCountForm } from "@/modules/shopping/ui/stock-count-form";
@@ -21,7 +22,7 @@ function parseGeneration(
 
 function GenerationNavigation({
   view,
-}: Readonly<{ view: CountRequiredView | NoPlanView }>) {
+}: Readonly<{ view: CountRequiredView | NoPlanView | NoStockRequiredView }>) {
   return (
     <div className="grid gap-6">
       {view.cycle.generation !== null ? (
@@ -131,6 +132,16 @@ export default async function ShoppingPage({
       ) : null}
       {view.kind === "SHOPPING" || view.kind === "HISTORY" ? (
         <ShoppingView view={view} />
+      ) : null}
+      {view.kind === "NO_STOCK_REQUIRED" ? (
+        <>
+          <GenerationNavigation view={view} />
+          <section className="rounded-3xl border border-stone-200 bg-white p-5 text-stone-700 shadow-sm">
+            <h2 className="text-xl font-bold text-stone-900">
+              รอบนี้ไม่มีรายการที่ต้องนับสต๊อก
+            </h2>
+          </section>
+        </>
       ) : null}
       {view.kind === "NO_PLAN" ? (
         <>

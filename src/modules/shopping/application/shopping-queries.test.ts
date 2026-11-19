@@ -1,15 +1,22 @@
 import { and, asc, eq } from "drizzle-orm";
 import type { Logger } from "drizzle-orm/logger";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { prepareConsumptionFixture } from "@tests/fixtures/consumption";
 import { OWNER_ID } from "@tests/fixtures/owner";
 import {
   seedLockedPlanningScenario,
   seedPlanningScenario,
 } from "@tests/fixtures/planning";
 import { createTestDatabase } from "@tests/helpers/test-db";
+import { createConsumptionCommandService } from "@/modules/consumption/application/consumption-commands";
+import { createInventoryService } from "@/modules/inventory/application/inventory";
 import { inventoryItems, inventoryMovements, inventoryPrices } from "@/modules/inventory/db/schema";
+import { productPackagingRules } from "@/modules/delivery/db/schema";
+import { createCycleOperationsCommandService } from "@/modules/operations/application/cycle-commands";
+import { createPlanningQueryService } from "@/modules/planning/application/planning-queries";
 import { createPlanningCommandService } from "@/modules/planning/application/planning-commands";
 import { cycleInventoryPriceSnapshots } from "@/modules/planning/db/schema";
+import { createProductService } from "@/modules/products/application/products";
 import {
   cycleInventoryCounts,
   cyclePurchaseEntries,
@@ -183,6 +190,38 @@ describe("shopping query service", () => {
   }, 30_000);
 
   afterEach(async () => context.close(), 30_000);
+
+  it("shows_no_count_needed_for_empty_generation only while writable", async () => {
+    const fixture = await seedPlanningScenario(context.db);
+    const water = await createInventoryService(context.db).createItem(OWNER_ID, {
+      name: "น้ำ", category: "INGREDIENT", ingredientKind: "WATER", baseUnit: "ml",
+    });
+    const products = createProductService(context.db);
+    const recipe = await products.createRecipeVersion(OWNER_ID, fixture.productId, {
+      versionCode: "v2", baseYieldQuantity: "6", yieldUnit: "piece", laborMinutesPerBatch: 30,
+      utilityCostSatangPerBatch: 2000, wasteAllowancePercent: "10", instructions: "เตรียมน้ำ",
+      ingredients: [{ inventoryItemId: water.id, quantityInBaseUnit: "500" }],
+    });
+    await products.activateRecipeVersion(OWNER_ID, fixture.productId, recipe.id);
+    await context.db.delete(productPackagingRules).where(eq(productPackagingRules.ownerId, OWNER_ID));
+    const preview = await createPlanningQueryService(context.db, CLOCK).preview(OWNER_ID, fixture.cycleId);
+    const commands = createPlanningCommandService(context.db, CLOCK);
+    const generation = await commands.lock(OWNER_ID, {
+      cycleId: fixture.cycleId, inputFingerprint: preview.inputFingerprint,
+      lockRequestId: "54000000-0000-4000-8000-000000000009", overrides: [],
+    });
+    expect(await service.getCycleStockCheck(OWNER_ID, fixture.cycleId)).toMatchObject({ kind: "NO_STOCK_REQUIRED", writable: false });
+    await expect(createCycleOperationsCommandService(context.db, CLOCK).startCycle(OWNER_ID, { cycleId: fixture.cycleId }))
+      .resolves.toMatchObject({ status: "IN_PRODUCTION" });
+    const { input } = await prepareConsumptionFixture(context.db, OWNER_ID, fixture.cycleId);
+    expect(input.items).toEqual([]);
+    const consumption = createConsumptionCommandService(context.db, CLOCK);
+    await expect(consumption.confirmUse(OWNER_ID, { ...input, confirmEmpty: false }))
+      .rejects.toMatchObject({ kind: "INVALID_INPUT" });
+    await consumption.confirmUse(OWNER_ID, input);
+    await commands.unlock(OWNER_ID, { cycleId: fixture.cycleId, reason: "เปลี่ยนแผน", confirmation: "ปลดล็อก" });
+    expect(await service.getCycleStockCheck(OWNER_ID, fixture.cycleId, generation.generation)).toMatchObject({ kind: "HISTORY", writable: false });
+  });
 
   it("returns COUNT_REQUIRED for an active locked generation without counts", async () => {
     const fixture = await seedLockedPlanningScenario(context.db);

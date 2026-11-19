@@ -1,5 +1,6 @@
 import type { UnitCode } from "@/modules/units/domain/units";
 import type { ProductionTemplateSource } from "@/modules/production/domain/types";
+import type { IngredientKind } from "@/modules/inventory/domain/ingredient-kind";
 
 export type BatchPlanInput = Readonly<{
   orderedQuantity: string;
@@ -191,6 +192,7 @@ export type PlanningSourceInventoryItem = Readonly<{
   id: string;
   name: string;
   category: "INGREDIENT" | "PACKAGING" | "CONSUMABLE";
+  ingredientKind?: IngredientKind;
   baseUnit: UnitCode;
   price: Readonly<{
     id: string;

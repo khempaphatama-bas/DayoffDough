@@ -200,11 +200,15 @@ export function createShoppingQueryService(db: DatabaseClient) {
       const writable = isWritableActiveGeneration(cycle, snapshot);
       if (countRows.length === 0) {
         if (writable) {
+          const items = await loadShoppingSource(db, verifiedOwnerId, snapshot.id);
+          if (items.length === 0) {
+            return { kind: "NO_STOCK_REQUIRED", cycle: cycleHeader, generations, writable: false };
+          }
           return {
             kind: "COUNT_REQUIRED",
             cycle: cycleHeader,
             generations,
-            items: await loadShoppingSource(db, verifiedOwnerId, snapshot.id),
+            items,
             writable: true,
           };
         }

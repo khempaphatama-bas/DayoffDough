@@ -4,6 +4,7 @@ import { db } from "@/lib/db/client";
 import { createCycleService } from "@/modules/cycles/application/cycles";
 import { createDeliveryService } from "@/modules/delivery/application/delivery";
 import { createInventoryService } from "@/modules/inventory/application/inventory";
+import { isPrepOnly } from "@/modules/inventory/domain/ingredient-kind";
 import { createOrderService } from "@/modules/orders/application/orders";
 import { createProductService } from "@/modules/products/application/products";
 import { evaluateMasterDataReadiness } from "@/modules/readiness/domain/readiness";
@@ -30,12 +31,13 @@ export default async function DashboardPage() {
     throw new Error("Cycle summary not found");
   }
   const activeProducts = products.filter((product) => product.active);
+  const activeInventory = inventory.filter((item) => item.active);
+  const priceTrackedInventory = activeInventory.filter((item) => !isPrepOnly(item.ingredientKind));
   const readiness = evaluateMasterDataReadiness({
     settingsConfigured: settings !== null,
-    inventoryItemCount: inventory.filter((item) => item.active).length,
-    inventoryPricedCount: inventory.filter(
-      (item) => item.active && item.latestPrice !== null,
-    ).length,
+    inventoryItemCount: activeInventory.length,
+    inventoryPriceRequiredCount: priceTrackedInventory.length,
+    inventoryPricedCount: priceTrackedInventory.filter((item) => item.latestPrice !== null).length,
     productCount: activeProducts.length,
     activeRecipeCount: activeProducts.filter(
       (product) => product.activeRecipeVersionId !== null,

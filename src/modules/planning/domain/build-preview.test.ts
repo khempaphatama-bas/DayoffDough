@@ -296,6 +296,32 @@ function issueCodes(preview: ReturnType<typeof buildPlanningPreview>) {
 }
 
 describe("planning preview orchestration", () => {
+  it("mixed_recipe_only_costs_and_requires_tracked_material", () => {
+    const source = makeSource();
+    const recipe = source.products[0]!.activeRecipe!;
+    const prep = (["WATER", "ICE"] as const).map((ingredientKind, index) => ({
+      id: `prep-${index}`, name: ingredientKind, ingredientKind,
+      category: "INGREDIENT" as const, baseUnit: "g" as const, price: null,
+    }));
+    const mixedSource = {
+      ...withRecipe(source, { ingredients: [...recipe.ingredients, ...prep.map((item) => ({
+        recipeIngredientId: `line-${item.id}`, inventoryItemId: item.id, quantityInBaseUnit: "500",
+      }))] }),
+      inventoryItems: [...source.inventoryItems, ...prep],
+    };
+    const flourOnly = buildPlanningPreview(source);
+    const mixed = buildPlanningPreview(mixedSource);
+    expect(mixed.materialRequirements).toEqual(flourOnly.materialRequirements);
+    expect(mixed.inventoryPrices).toEqual(flourOnly.inventoryPrices);
+    expect(mixed.productCosts).toEqual(flourOnly.productCosts);
+    expect(mixed.cycleCost).toEqual(flourOnly.cycleCost);
+    expect(mixed.inputFingerprint).not.toBe(flourOnly.inputFingerprint);
+    const unpriced = buildPlanningPreview({ ...mixedSource, inventoryItems: mixedSource.inventoryItems.map((item) =>
+      item.id === INGREDIENT_ID ? { ...item, price: null } : item,
+    ) });
+    expect(unpriced.warnings.filter((issue) => issue.code === "MISSING_INVENTORY_PRICE").map((issue) => issue.sourceEntityId)).toEqual([INGREDIENT_ID]);
+    expect(unpriced.cycleCost.costComplete).toBe(false);
+  });
   it("blocks every planned product without a ready Product Template", () => {
     const preview = buildPlanningPreview({ ...makeSource(), productionTemplates: [] }, []);
 

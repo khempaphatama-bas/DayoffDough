@@ -12,6 +12,7 @@ import {
   inventoryItems,
   inventoryPrices,
 } from "@/modules/inventory/db/schema";
+import { isPrepOnly } from "@/modules/inventory/domain/ingredient-kind";
 import { orderItems, orders } from "@/modules/orders/db/schema";
 import { normalizeConfirmedDeliveryTime } from "@/modules/orders/domain/order-form";
 import type { PlanningSourceData } from "@/modules/planning/domain/types";
@@ -315,8 +316,11 @@ export async function loadPlanningSource(
             ),
           )
           .orderBy(asc(inventoryItems.id));
+  const priceTrackedItemIds = inventoryItemRows
+    .filter((item) => !isPrepOnly(item.ingredientKind))
+    .map((item) => item.id);
   const priceRows =
-    inventoryItemIds.length === 0
+    priceTrackedItemIds.length === 0
       ? []
       : await reader
           .select()
@@ -324,7 +328,7 @@ export async function loadPlanningSource(
           .where(
             and(
               eq(inventoryPrices.ownerId, verifiedOwnerId),
-              inArray(inventoryPrices.inventoryItemId, inventoryItemIds),
+              inArray(inventoryPrices.inventoryItemId, priceTrackedItemIds),
               lte(inventoryPrices.effectiveAt, asOf),
             ),
           )
@@ -520,6 +524,7 @@ export async function loadPlanningSource(
         id: item.id,
         name: item.name,
         category: item.category,
+        ingredientKind: item.ingredientKind,
         baseUnit: item.baseUnit as UnitCode,
         price: price
           ? {

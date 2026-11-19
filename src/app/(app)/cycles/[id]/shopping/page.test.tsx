@@ -153,6 +153,14 @@ const NO_PLAN: NoPlanView = {
 };
 
 describe("ShoppingPage", () => {
+  it("shows_no_count_needed_for_empty_generation", async () => {
+    mocks.getCycleStockCheck.mockResolvedValue({ kind: "NO_STOCK_REQUIRED", cycle: ACTIVE_CYCLE,
+      generations: [ACTIVE_GENERATION, SUPERSEDED_GENERATION], writable: false });
+    render(await ShoppingPage({ params: Promise.resolve({ id: CYCLE_ID }) }));
+    expect(screen.getByText("รอบนี้ไม่มีรายการที่ต้องนับสต๊อก")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "ยืนยันสต๊อกและสร้างรายการซื้อ" })).toBeNull();
+    expect(screen.getByRole("link", { name: "เปิดรายการซื้อรุ่น 2 · แทนที่แล้ว" })).toBeInTheDocument();
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.requireOwner.mockResolvedValue({

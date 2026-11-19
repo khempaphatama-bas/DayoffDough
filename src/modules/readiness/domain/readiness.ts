@@ -1,6 +1,7 @@
 export type MasterDataReadinessInput = Readonly<{
   settingsConfigured: boolean;
   inventoryItemCount: number;
+  inventoryPriceRequiredCount?: number;
   inventoryPricedCount: number;
   productCount: number;
   activeRecipeCount: number;
@@ -24,8 +25,9 @@ export type MasterDataReadiness = Readonly<{
 export function evaluateMasterDataReadiness(
   input: MasterDataReadinessInput,
 ): MasterDataReadiness {
+  const inventoryPriceRequiredCount = input.inventoryPriceRequiredCount ?? input.inventoryItemCount;
   const inventoryMissingPrice = Math.max(
-    input.inventoryItemCount - input.inventoryPricedCount,
+    inventoryPriceRequiredCount - input.inventoryPricedCount,
     0,
   );
   const productsMissingRecipe = Math.max(
@@ -84,7 +86,7 @@ export function evaluateMasterDataReadiness(
   ];
   const ready =
     input.settingsConfigured &&
-    input.inventoryPricedCount > 0 &&
+    (input.inventoryPricedCount > 0 || (input.inventoryItemCount > 0 && inventoryPriceRequiredCount === 0)) &&
     input.activeRecipeCount > 0 &&
     input.deliveryMethodCount > 0;
   return {

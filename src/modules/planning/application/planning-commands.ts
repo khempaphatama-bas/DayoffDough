@@ -1,8 +1,9 @@
 import { and, eq, isNull, max } from "drizzle-orm";
 import { z } from "zod";
-import { lockOwnedBakeCycle } from "@/lib/db/row-locks";
-import type { DatabaseClient } from "@/lib/db/types";
+import { lockOwnedBakeCycle, lockOwnedInventoryItems, lockOwnedProducts } from "@/lib/db/row-locks";
+import type { DatabaseClient, DatabaseTransaction } from "@/lib/db/types";
 import { bakeCycles } from "@/modules/cycles/db/schema";
+import { isPrepOnly } from "@/modules/inventory/domain/ingredient-kind";
 import { cyclePlanningSnapshots } from "@/modules/planning/db/schema";
 import { buildPlanningPreview } from "@/modules/planning/domain/build-preview";
 import { createPlanningFingerprint } from "@/modules/planning/domain/fingerprint";
@@ -12,7 +13,7 @@ import {
   unlockCycleInputSchema,
   type UnlockCycleInput,
 } from "@/modules/planning/domain/lock-form";
-import type { PlanningIssue } from "@/modules/planning/domain/types";
+import type { PlanningIssue, PlanningSourceData } from "@/modules/planning/domain/types";
 import { loadPlanningSource } from "./load-source";
 import type {
   PlanningClock,
@@ -54,6 +55,53 @@ export type PlanningCommandDependencies = Readonly<{
   persistCycleTaskGeneration?: PersistCycleTaskGeneration;
   assertCycleOperationsUnlockAllowed?: typeof assertCycleOperationsUnlockAllowed;
 }>;
+
+async function lockPlanningCatalog(
+  tx: DatabaseTransaction,
+  ownerId: string,
+  source: PlanningSourceData,
+): Promise<void> {
+  const orders = source.orders.filter((order) => order.fulfillmentStatus !== "CANCELLED");
+  const productIds = [...new Set(orders.flatMap((order) => order.items.map((item) => item.productId)))];
+  const deliveryMethodIds = new Set(orders.map((order) => order.deliveryMethodId));
+  const relevantProducts = new Map(source.products.map((product) => [product.id, product]));
+  const products = await lockOwnedProducts(tx, ownerId, productIds);
+  if (products.length !== productIds.length || products.some((product) => {
+    const planned = relevantProducts.get(product.id);
+    return !product.active || !planned || product.activeRecipeVersionId !== (planned.activeRecipe?.recipeVersionId ?? null);
+  })) throw new PlanningStaleError();
+
+  // Include prep-only inputs here even though they won't have stock rows:
+  // the saved recipe version still references them and prevents archiving.
+  const ingredientIds = new Set(products.flatMap((product) =>
+    (relevantProducts.get(product.id)?.activeRecipe?.ingredients ?? []).map((ingredient) => ingredient.inventoryItemId),
+  ));
+  const packagingIds = new Set(source.packagingRules.filter((rule) =>
+    rule.scope === "PRODUCT"
+      ? rule.productId !== null && productIds.includes(rule.productId)
+      : rule.deliveryMethodId !== null && deliveryMethodIds.has(rule.deliveryMethodId),
+  ).map((rule) => rule.inventoryItemId));
+  const itemIds = [...new Set([...ingredientIds, ...packagingIds])];
+  const items = await lockOwnedInventoryItems(tx, ownerId, itemIds);
+  if (items.length !== itemIds.length || items.some((item) =>
+    !item.active ||
+    (ingredientIds.has(item.id) && item.category !== "INGREDIENT") ||
+    (packagingIds.has(item.id) && (item.category === "INGREDIENT" || isPrepOnly(item.ingredientKind))),
+  )) throw new PlanningStaleError();
+}
+
+function rethrowPlanningLockError(error: unknown): never {
+  const visited = new Set<object>();
+  let current = error;
+  // Drizzle can wrap the PostgreSQL serialization error in `cause`.
+  while (typeof current === "object" && current !== null && !visited.has(current)) {
+    visited.add(current);
+    const candidate = current as { code?: unknown; cause?: unknown };
+    if (candidate.code === "40001") throw new PlanningStaleError();
+    current = candidate.cause;
+  }
+  throw error;
+}
 
 export function createPlanningCommandService(
   db: DatabaseClient,
@@ -220,6 +268,7 @@ export function createPlanningCommandService(
             verifiedInput.cycleId,
             lockedAt,
           );
+          await lockPlanningCatalog(tx, verifiedOwnerId, source);
           const authoritativeFingerprint = createPlanningFingerprint(source);
           if (authoritativeFingerprint !== verifiedInput.inputFingerprint) {
             throw new PlanningStaleError();
@@ -292,7 +341,7 @@ export function createPlanningCommandService(
           return planningSnapshot;
         },
         { isolationLevel: "repeatable read" },
-      );
+      ).catch(rethrowPlanningLockError);
     },
   };
 }

@@ -19,6 +19,9 @@ import {
 } from "@/modules/orders/application/orders";
 import { orderItems, orders } from "@/modules/orders/db/schema";
 import { products } from "@/modules/products/db/schema";
+import { createProductService } from "@/modules/products/application/products";
+import { inventoryItems } from "@/modules/inventory/db/schema";
+import { createInventoryService } from "@/modules/inventory/application/inventory";
 import {
   cycleCostSnapshots,
   cycleInventoryPriceSnapshots,
@@ -87,7 +90,7 @@ async function loadPlanningChildren(
     db.select().from(cycleCostSnapshots).where(
       eq(cycleCostSnapshots.planningSnapshotId, planningSnapshotId),
     ),
-  ]);
+  ] as const);
 }
 
 function editableOrderInput(
@@ -122,6 +125,47 @@ describe("planning command service", () => {
   });
 
   afterEach(async () => context.close());
+
+  it("locking_preserves_history_and_writes_no_prep_rows", async () => {
+    const scenario = await seedLockedPlanningScenario(context.db);
+    const before = await loadPlanningChildren(context.db, scenario.planningSnapshotId);
+    const commands = createPlanningCommandService(context.db, { now: () => RELOCKED_AT });
+    await commands.unlock(OWNER_ID, { cycleId: scenario.cycleId, reason: "เพิ่มน้ำ", confirmation: "ปลดล็อก" });
+    const productService = createProductService(context.db);
+    const recipeWithoutPrepId = before[3][0]!.sourceRecipeVersionId;
+    const inventory = createInventoryService(context.db);
+    const water = await inventory.createItem(OWNER_ID, {
+      name: "น้ำ", category: "INGREDIENT", ingredientKind: "WATER", baseUnit: "ml",
+    });
+    const ice = await inventory.createItem(OWNER_ID, {
+      name: "น้ำแข็ง", category: "INGREDIENT", ingredientKind: "ICE", baseUnit: "g",
+    });
+    const recipeWithPrep = await productService.createRecipeVersion(OWNER_ID, scenario.productId, {
+      versionCode: "v2", baseYieldQuantity: "6", yieldUnit: "piece", laborMinutesPerBatch: 30,
+      utilityCostSatangPerBatch: 2000, wasteAllowancePercent: "10", instructions: "ผสม พัก และอบ",
+      ingredients: [
+        { inventoryItemId: scenario.ingredientItemId, quantityInBaseUnit: "1000" },
+        { inventoryItemId: water.id, quantityInBaseUnit: "500" },
+        { inventoryItemId: ice.id, quantityInBaseUnit: "500" },
+      ],
+    });
+    await productService.activateRecipeVersion(OWNER_ID, scenario.productId, recipeWithPrep.id);
+    const preview = await createPlanningQueryService(context.db, { now: () => RELOCKED_AT }).preview(OWNER_ID, scenario.cycleId);
+    const next = await commands.lock(OWNER_ID, { cycleId: scenario.cycleId, inputFingerprint: preview.inputFingerprint,
+      lockRequestId: LOCK_REQUEST_ID, overrides: [] });
+    const children = await loadPlanningChildren(context.db, next.id);
+    expect(children[3].map((row) => row.sourceRecipeVersionId)).toEqual([recipeWithPrep.id]);
+    expect(children[5].map((row) => row.inventoryItemId).sort()).toEqual([scenario.ingredientItemId, scenario.packagingItemId].sort());
+    expect(children[6].map((row) => row.inventoryItemId)).toEqual([scenario.ingredientItemId]);
+    expect(next.costComplete).toBe(true);
+    expect(await loadPlanningChildren(context.db, scenario.planningSnapshotId)).toEqual(before);
+    // Switch the current recipe after locking: prep IDs have no requirements,
+    // so only the persisted recipe-version lineage can protect the live plan.
+    await productService.activateRecipeVersion(OWNER_ID, scenario.productId, recipeWithoutPrepId);
+    for (const item of [water, ice]) {
+      await expect(inventory.archiveItem(OWNER_ID, item.id)).rejects.toMatchObject({ code: "ACTIVE_PLAN" });
+    }
+  });
 
   it("invokes the unlock guard inside the transaction and leaves the active generation untouched on rejection", async () => {
     const scenario = await seedLockedPlanningScenario(context.db);
@@ -1115,7 +1159,7 @@ describe("planning command service", () => {
     expect(transactionConfigs).toEqual([{ isolationLevel: "repeatable read" }]);
   });
 
-  it("locks exactly the owned Bake Cycle row with FOR UPDATE", async () => {
+  it("locks the owned cycle, product, and recipe and packaging inventory before persisting", async () => {
     const loggedQueries: Array<Readonly<{
       sql: string;
       params: ReadonlyArray<unknown>;
@@ -1143,18 +1187,58 @@ describe("planning command service", () => {
       overrides: [],
     });
 
-    const cycleLocks = loggedQueries.filter(
-      (query) =>
-        query.sql.includes('from "bake_cycles"') &&
-        query.sql.includes("for update"),
+    const locks = loggedQueries.filter((query) => query.sql.includes("for update"));
+    const expectedLocks = [
+      ["bake_cycles", scenario.cycleId],
+      ["products", scenario.productId],
+      ...[scenario.ingredientItemId, scenario.packagingItemId].sort().map((id) => ["inventory_items", id]),
+    ];
+    expect(locks).toHaveLength(expectedLocks.length);
+    for (const [index, [table, id]] of expectedLocks.entries()) {
+      expect(locks[index]!.sql).toContain(`from "${table}"`);
+      expect(locks[index]!.sql).toContain(`("${table}"."owner_id" = $1 and "${table}"."id" = $2)`);
+      expect(locks[index]!.params.slice(0, 2)).toEqual([OWNER_ID, id]);
+    }
+    expect(loggedQueries.indexOf(locks.at(-1)!)).toBeLessThan(
+      loggedQueries.findIndex((query) => query.sql.startsWith('insert into "cycle_planning_snapshots"')),
     );
-    expect(cycleLocks).toHaveLength(1);
-    expect(cycleLocks[0]!.sql).toContain(
-      '("bake_cycles"."owner_id" = $1 and "bake_cycles"."id" = $2)',
-    );
-    expect(cycleLocks[0]!.params.slice(0, 2)).toEqual([
-      OWNER_ID,
-      scenario.cycleId,
+  });
+
+  it.each(["ingredientItemId", "packagingItemId"] as const)("rejects unavailable plan inventory (%s)", async (itemKey) => {
+    const scenario = await seedPlanningScenario(context.db);
+    const clock = { now: () => LOCKED_AT };
+    const preview = await createPlanningQueryService(context.db, clock).preview(OWNER_ID, scenario.cycleId);
+    // Catalog commands normally prevent this; model an already-inconsistent row.
+    await context.db.update(inventoryItems).set({ active: false }).where(eq(inventoryItems.id, scenario[itemKey]));
+
+    await expect(createPlanningCommandService(context.db, clock).lock(OWNER_ID, {
+      cycleId: scenario.cycleId, inputFingerprint: preview.inputFingerprint, lockRequestId: LOCK_REQUEST_ID, overrides: [],
+    })).rejects.toBeInstanceOf(PlanningStaleError);
+    expect(await context.db.select().from(cyclePlanningSnapshots)).toEqual([]);
+  });
+
+  it("surfaces a wrapped SQLSTATE 40001 as refreshable and rolls back the lock", async () => {
+    const scenario = await seedPlanningScenario(context.db);
+    const clock = { now: () => LOCKED_AT };
+    const preview = await createPlanningQueryService(context.db, clock).preview(OWNER_ID, scenario.cycleId);
+    // PGlite cannot run overlapping transactions; raise the same database error
+    // inside the real transaction to exercise Drizzle's error wrapping and rollback.
+    await context.db.execute(sql`
+      CREATE FUNCTION fail_planning_serialization() RETURNS trigger AS $$
+        BEGIN RAISE EXCEPTION 'serialization failure' USING ERRCODE = '40001'; END;
+      $$ LANGUAGE plpgsql
+    `);
+    await context.db.execute(sql`
+      CREATE TRIGGER fail_planning_serialization BEFORE INSERT ON cycle_task_generations
+      FOR EACH ROW EXECUTE FUNCTION fail_planning_serialization()
+    `);
+
+    await expect(createPlanningCommandService(context.db, clock).lock(OWNER_ID, {
+      cycleId: scenario.cycleId, inputFingerprint: preview.inputFingerprint, lockRequestId: LOCK_REQUEST_ID, overrides: [],
+    })).rejects.toBeInstanceOf(PlanningStaleError);
+    expect(await context.db.select().from(cyclePlanningSnapshots)).toEqual([]);
+    expect(await context.db.select({ status: bakeCycles.status }).from(bakeCycles)).toEqual([
+      { status: "OPEN" },
     ]);
   });
 
