@@ -75,8 +75,9 @@ export async function inventoryUrl(page: Page, name: string) {
 
 export async function expectStock(page: Page, url: string, quantity: string, unit = "g") {
   await page.goto(url);
+  const displayedUnit = unit === "piece" ? "ชิ้น" : unit;
   await expect(page.getByRole("article").filter({ hasText: "สต๊อกคงเหลือ" }).locator("p").last())
-    .toHaveText(`${quantity} ${unit}`);
+    .toHaveText(`${quantity} ${displayedUnit}`);
 }
 
 export async function countStock(page: Page, url: string, quantity: string, unit = "g") {

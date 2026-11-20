@@ -37,6 +37,7 @@ RECIPE_INVENTORY_PG_CONTROL=omit-recipe-create-product-lock node --test --test-n
 
 - Real PostgreSQL: **15/15** concurrency cases, each with an observed blocked backend and verified committed or rejected result. The negative control exited 1 as expected: two creates left six selectable versions without the guard.
 - Playwright: **6/6** maintenance and **2/2** master-data cases across phone and desktop, no skips. The maintenance checks include same-template draft reset, the sixth-version archive, both production-use paths including explicit empty confirmation, and save/disable actions that pass pointer hit testing.
+- Optional legacy consumption Playwright suite: **14/14** across both projects with exact translated stock-unit assertions and all 16 ordered migration hashes verified. One superseded local attempt was interrupted by host sleep; the awake rerun used the same timeouts.
 - Vitest: **1,634/1,634** in 140 files with two workers. TypeScript, lint, and the isolated production build exited 0. Lint reported 16 existing warnings outside the touched tests.
 - The local Operations page logged a pre-existing Thai time-format hydration recovery (`08:00 น.` on Node vs `08:00` in Chromium); it did not prevent production start or usage confirmation. No deployed-site behavior was verified.
 
