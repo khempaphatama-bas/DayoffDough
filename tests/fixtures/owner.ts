@@ -227,12 +227,14 @@ export async function createInventoryItem(
   input: Readonly<{
     name: string;
     category: "INGREDIENT" | "PACKAGING" | "CONSUMABLE";
+    ingredientKind?: "STANDARD";
     baseUnit?: "g" | "piece";
     purchaseLabel: string;
     packQuantity: string;
-  }>,
+  } | { name: string; category: "INGREDIENT"; ingredientKind: "WATER" | "ICE"; baseUnit?: "ml" | "l" | "g" | "kg" }>,
 ): Promise<void> {
   await clickVisibleLink(page, "วัตถุดิบ");
+  await expect(page).toHaveURL(/\/inventory$/);
   const addButton = page.getByRole("button", { name: "เพิ่มรายการ" });
   const nameInput = page.getByLabel("ชื่อรายการ");
   await expect(async () => {
@@ -241,14 +243,28 @@ export async function createInventoryItem(
     await expect(nameInput).toBeVisible({ timeout: 1_000 });
   }).toPass({ timeout: SERVER_ACTION_TIMEOUT });
   await nameInput.fill(input.name);
-  await page.getByLabel("ประเภท").selectOption(input.category);
-  await page.getByLabel("หน่วยฐาน").selectOption(input.baseUnit ?? "g");
-  await page.getByLabel("ชื่อหน่วยซื้อ").fill(input.purchaseLabel);
-  await page.getByLabel("ปริมาณต่อแพ็ก").fill(input.packQuantity);
-  await page.getByRole("button", { name: "บันทึกรายการ" }).click();
+  const kind = input.ingredientKind ?? "STANDARD";
+  await page.getByRole("combobox", { name: "ชนิดวัตถุดิบ", exact: true }).selectOption(kind);
+  if ("purchaseLabel" in input) {
+    await page.getByRole("combobox", { name: "ประเภท", exact: true }).selectOption(input.category);
+    await page.getByRole("combobox", { name: "หน่วยฐาน", exact: true }).selectOption(input.baseUnit ?? "g");
+    await page.getByLabel("ชื่อหน่วยซื้อ").fill(input.purchaseLabel);
+    await page.getByLabel("ปริมาณต่อแพ็ก").fill(input.packQuantity);
+  } else {
+    const baseUnit = page.getByRole("combobox", { name: "หน่วยฐาน", exact: true });
+    await expect(baseUnit).toHaveValue(kind === "WATER" ? "ml" : "g");
+    if (input.baseUnit) await baseUnit.selectOption(input.baseUnit);
+    await expect(page.getByLabel("ชื่อหน่วยซื้อ")).toHaveCount(0);
+  }
+  const saveResponse = page.waitForResponse(isCurrentPageServerAction(page), { timeout: SERVER_ACTION_TIMEOUT });
+  await page.getByRole("button", { name: "บันทึกรายการ", exact: true }).click();
+  const save = await saveResponse;
+  expect(save.ok()).toBe(true);
+  expect(await save.finished()).toBeNull();
   await expect(page.getByRole("main")).toContainText("บันทึกรายการแล้ว", {
     timeout: SERVER_ACTION_TIMEOUT,
   });
+  await expect(page.getByRole("link", { name: input.name, exact: true }).filter({ visible: true })).toBeVisible();
 }
 
 export async function addInventoryPrice(
@@ -329,20 +345,18 @@ export async function createRecipeVersion(
     "บันทึกเวอร์ชันสูตรแล้ว",
     { timeout: SERVER_ACTION_TIMEOUT },
   );
-  const productUrl = page.url();
-  const activationResponse = page.waitForResponse(
-    (response) =>
-      response.request().method() === "POST" &&
-      new URL(response.url()).pathname === new URL(productUrl).pathname,
-    { timeout: SERVER_ACTION_TIMEOUT },
-  );
+  await activateRecipeVersion(page, input.versionCode);
+}
+
+export async function activateRecipeVersion(page: Page, versionCode: string): Promise<void> {
+  const version = page.getByRole("article", { name: versionCode, exact: true });
+  const activationResponse = page.waitForResponse(isCurrentPageServerAction(page), { timeout: SERVER_ACTION_TIMEOUT });
   page.once("dialog", (dialog) => dialog.accept());
-  await page.getByRole("button", { name: "เปิดใช้เวอร์ชันนี้" }).click();
+  await version.getByRole("button", { name: "เปิดใช้เวอร์ชันนี้", exact: true }).click();
   const response = await activationResponse;
   expect(response.ok()).toBe(true);
   expect(await response.finished()).toBeNull();
-  await page.goto(productUrl);
-  await expect(page.getByRole("main")).toContainText("สูตรที่ใช้งานอยู่", {
+  await expect(version).toContainText("สูตรที่ใช้งานอยู่", {
     timeout: SERVER_ACTION_TIMEOUT,
   });
 }

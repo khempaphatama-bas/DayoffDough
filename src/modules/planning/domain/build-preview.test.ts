@@ -301,7 +301,7 @@ describe("planning preview orchestration", () => {
     const recipe = source.products[0]!.activeRecipe!;
     const prep = (["WATER", "ICE"] as const).map((ingredientKind, index) => ({
       id: `prep-${index}`, name: ingredientKind, ingredientKind,
-      category: "INGREDIENT" as const, baseUnit: "g" as const, price: null,
+      category: "INGREDIENT" as const, baseUnit: ingredientKind === "WATER" ? "ml" as const : "g" as const, price: null,
     }));
     const mixedSource = {
       ...withRecipe(source, { ingredients: [...recipe.ingredients, ...prep.map((item) => ({

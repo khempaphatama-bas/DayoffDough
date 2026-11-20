@@ -1,6 +1,5 @@
 import { PGlite } from "@electric-sql/pglite";
 import { sql } from "drizzle-orm";
-import { readMigrationFiles } from "drizzle-orm/migrator";
 import { drizzle, type PgliteDatabase } from "drizzle-orm/pglite";
 import { migrate } from "drizzle-orm/pglite/migrator";
 import { describe, expect, it } from "vitest";
@@ -116,8 +115,7 @@ describe("0015 recipe and inventory maintenance", () => {
       expect(ingredients).toHaveLength(1);
       const versions = await readVersions();
 
-      const migrations = readMigrationFiles({ migrationsFolder: "drizzle" });
-      await applyMigrationRange(db, 15, migrations.length - 1);
+      await applyMigrationRange(db, 15, 15);
 
       const selectable = async (ownerId: string, id: string) =>
         (await db.execute<{ version_code: string }>(sql`SELECT version_code FROM recipe_versions

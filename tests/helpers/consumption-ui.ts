@@ -28,8 +28,9 @@ export async function assertLocalLineage(page: Page, cycleUrl: string, previousF
   const connection = postgres(target, { max: 1, connect_timeout: 5 });
   try {
     const receipts = await connection`SELECT hash FROM drizzle.__drizzle_migrations ORDER BY created_at`;
-    expect(receipts.map(row => row.hash)).toEqual(readMigrationFiles({ migrationsFolder: "drizzle" }).map(row => row.hash));
-    expect(receipts).toHaveLength(15);
+    const migrations = readMigrationFiles({ migrationsFolder: "drizzle" });
+    expect(receipts).toHaveLength(migrations.length);
+    expect(receipts.map(row => row.hash)).toEqual(migrations.map(row => row.hash));
     const rows = await connection`SELECT cycle.consumption_policy, snapshot.input_fingerprint
       FROM bake_cycles cycle JOIN cycle_planning_snapshots snapshot
         ON snapshot.owner_id = cycle.owner_id AND snapshot.id = cycle.active_planning_snapshot_id
@@ -39,7 +40,7 @@ export async function assertLocalLineage(page: Page, cycleUrl: string, previousF
     const fingerprint = String(rows[0]!.input_fingerprint);
     expect(fingerprint).toMatch(/^[0-9a-f]{64}$/);
     if (previousFingerprint !== undefined) expect(fingerprint).toBe(previousFingerprint);
-    console.log("LOCAL_LINEAGE", previousFingerprint ? "15 migration hashes match; V1; snapshot fingerprint unchanged" : "15 migration hashes match; V1; snapshot fingerprint captured");
+    console.log("LOCAL_LINEAGE", `${migrations.length} migration hashes match; V1; snapshot fingerprint ${previousFingerprint ? "unchanged" : "captured"}`);
     return fingerprint;
   } finally { await connection.end(); }
 }
@@ -78,9 +79,9 @@ export async function expectStock(page: Page, url: string, quantity: string, uni
     .toHaveText(`${quantity} ${unit}`);
 }
 
-export async function countStock(page: Page, url: string, quantity: string) {
+export async function countStock(page: Page, url: string, quantity: string, unit = "g") {
   await page.goto(url);
-  await page.getByLabel("จำนวนที่นับได้", { exact: true }).fill(quantity);
+  await page.getByRole("spinbutton", { name: `จำนวนที่นับได้ (${unit})`, exact: true }).fill(quantity);
   await ownerAction(page, page, "บันทึกยอดนับ");
   await expect(page.getByText("อัปเดตยอดสต๊อกแล้ว", { exact: true })).toBeVisible();
   await page.reload();
