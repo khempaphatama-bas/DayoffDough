@@ -2,12 +2,14 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
+import { isPrepOnly, type IngredientKind } from "@/modules/inventory/domain/ingredient-kind";
 import { formatSatangAsBaht } from "@/modules/money/domain/money";
 
 type InventoryListItem = Readonly<{
   id: string;
   name: string;
   category: "INGREDIENT" | "PACKAGING" | "CONSUMABLE";
+  ingredientKind: IngredientKind;
   stockBalance: string;
   baseUnit: string;
   latestPackPriceSatang: number | null;
@@ -19,6 +21,16 @@ const CATEGORY_LABELS: Record<InventoryListItem["category"], string> = {
   PACKAGING: "บรรจุภัณฑ์",
   CONSUMABLE: "วัสดุสิ้นเปลือง",
 };
+
+function categoryLabel(item: InventoryListItem) {
+  if (item.ingredientKind === "WATER") return "น้ำ";
+  if (item.ingredientKind === "ICE") return "น้ำแข็ง";
+  return CATEGORY_LABELS[item.category];
+}
+
+function InactiveBadge() {
+  return <span className="rounded-full bg-stone-100 px-2 py-1 text-xs text-stone-600">ปิดใช้งาน</span>;
+}
 
 function Price({ satang }: Readonly<{ satang: number | null }>) {
   return satang === null ? (
@@ -63,14 +75,14 @@ export function InventoryList({ items }: Readonly<{ items: ReadonlyArray<Invento
                     <Link className="font-bold text-stone-900 underline decoration-amber-500 underline-offset-4" href={`/inventory/${item.id}`}>
                       {item.name}
                     </Link>
-                    <p className="mt-1 text-sm text-stone-500">{CATEGORY_LABELS[item.category]}</p>
+                    <p className="mt-1 text-sm text-stone-500">{categoryLabel(item)}</p>
                   </div>
-                  {!item.active ? <span className="rounded-full bg-stone-100 px-2 py-1 text-xs text-stone-500">ปิดใช้งาน</span> : null}
+                  {!item.active ? <InactiveBadge /> : null}
                 </div>
-                <dl className="mt-4 grid grid-cols-2 gap-3 text-sm">
+                {isPrepOnly(item.ingredientKind) ? <p className="mt-4 text-sm text-stone-600">ไม่คิดต้นทุนและไม่ต้องนับสต๊อก</p> : <dl className="mt-4 grid grid-cols-2 gap-3 text-sm">
                   <div><dt className="text-stone-500">คงเหลือ</dt><dd className="mt-1 font-semibold">{item.stockBalance} {item.baseUnit}</dd></div>
                   <div><dt className="text-stone-500">ราคาล่าสุด</dt><dd className="mt-1"><Price satang={item.latestPackPriceSatang} /></dd></div>
-                </dl>
+                </dl>}
               </article>
             ))}
           </div>
@@ -83,10 +95,12 @@ export function InventoryList({ items }: Readonly<{ items: ReadonlyArray<Invento
               <tbody>
                 {visibleItems.map((item) => (
                   <tr className="border-t border-stone-100" key={item.id}>
-                    <td className="px-5 py-4"><Link className="font-semibold text-stone-900 underline decoration-amber-500 underline-offset-4" href={`/inventory/${item.id}`}>{item.name}</Link></td>
-                    <td className="px-5 py-4 text-stone-600">{CATEGORY_LABELS[item.category]}</td>
-                    <td className="px-5 py-4">{item.stockBalance} {item.baseUnit}</td>
-                    <td className="px-5 py-4"><Price satang={item.latestPackPriceSatang} /></td>
+                    <td className="px-5 py-4"><div className="flex flex-wrap items-center gap-2"><Link className="font-semibold text-stone-900 underline decoration-amber-500 underline-offset-4" href={`/inventory/${item.id}`}>{item.name}</Link>{!item.active ? <InactiveBadge /> : null}</div></td>
+                    <td className="px-5 py-4 text-stone-600">{categoryLabel(item)}</td>
+                    {isPrepOnly(item.ingredientKind) ? <td className="px-5 py-4 text-stone-600" colSpan={2}>ไม่คิดต้นทุนและไม่ต้องนับสต๊อก</td> : <>
+                      <td className="px-5 py-4">{item.stockBalance} {item.baseUnit}</td>
+                      <td className="px-5 py-4"><Price satang={item.latestPackPriceSatang} /></td>
+                    </>}
                   </tr>
                 ))}
               </tbody>

@@ -1,47 +1,58 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useState } from "react";
 import Link from "next/link";
 import {
   addInventoryPriceAction,
   recordInventoryCountAction,
   type InventoryActionState,
 } from "@/app/(app)/inventory/actions";
+import { formatUnitLabel, type UnitCode } from "@/modules/units/domain/units";
 
 const INITIAL_STATE: InventoryActionState = { error: null, saved: false };
 
 export function PriceForm({
   itemId,
+  baseUnit,
   packBaseQuantity,
   defaultDate,
-}: Readonly<{ itemId: string; packBaseQuantity: string; defaultDate: string }>) {
-  const [state, formAction, pending] = useActionState(
-    addInventoryPriceAction,
-    INITIAL_STATE,
-  );
+}: Readonly<{ itemId: string; baseUnit: UnitCode; packBaseQuantity: string; defaultDate: string }>) {
+  const initial = { baseUnit, packPriceBaht: "", packBaseQuantity, effectiveDate: defaultDate, purchasedFrom: "", notes: "" };
+  const [draft, setDraft] = useState<typeof initial | null>(null);
+  // A revalidation can update defaults, but never reinterpret quantities already entered in a draft.
+  const fields = draft ?? initial;
+  const [state, formAction, pending] = useActionState(async (previous: InventoryActionState, data: FormData) => {
+    const result = await addInventoryPriceAction(previous, data);
+    if (result.saved) setDraft(null);
+    return result;
+  }, INITIAL_STATE);
+  function change(name: Exclude<keyof typeof initial, "baseUnit">, value: string) {
+    setDraft((current) => ({ ...(current ?? initial), [name]: value }));
+  }
   return (
     <form action={formAction} className="grid gap-4 rounded-3xl border border-stone-200 bg-white p-5 shadow-sm">
       <h2 className="text-xl font-bold text-stone-900">เพิ่มราคาซื้อ</h2>
       <input name="itemId" type="hidden" value={itemId} />
+      <input name="expectedBaseUnit" type="hidden" value={fields.baseUnit} />
       <label className="grid gap-2 text-sm font-semibold text-stone-700">
         ราคาต่อแพ็ก
-        <input className="min-h-11 rounded-xl border border-stone-300 px-4 text-base font-normal" inputMode="decimal" min="0" name="packPriceBaht" required step="0.01" type="number" />
+        <input className="min-h-11 rounded-xl border border-stone-300 px-4 text-base font-normal" inputMode="decimal" min="0" name="packPriceBaht" onChange={(event) => change("packPriceBaht", event.target.value)} required step="0.01" type="number" value={fields.packPriceBaht} />
       </label>
       <label className="grid gap-2 text-sm font-semibold text-stone-700">
-        ปริมาณฐานในแพ็ก
-        <input className="min-h-11 rounded-xl border border-stone-300 px-4 text-base font-normal" defaultValue={packBaseQuantity} inputMode="decimal" min="0.000001" name="packBaseQuantity" required step="0.000001" type="number" />
+        ปริมาณฐานในแพ็ก ({formatUnitLabel(fields.baseUnit)})
+        <input className="min-h-11 rounded-xl border border-stone-300 px-4 text-base font-normal" inputMode="decimal" min="0.000001" name="packBaseQuantity" onChange={(event) => change("packBaseQuantity", event.target.value)} required step="0.000001" type="number" value={fields.packBaseQuantity} />
       </label>
       <label className="grid gap-2 text-sm font-semibold text-stone-700">
         วันที่มีผล
-        <input className="min-h-11 rounded-xl border border-stone-300 px-4 text-base font-normal" defaultValue={defaultDate} name="effectiveDate" required type="date" />
+        <input className="min-h-11 rounded-xl border border-stone-300 px-4 text-base font-normal" name="effectiveDate" onChange={(event) => change("effectiveDate", event.target.value)} required type="date" value={fields.effectiveDate} />
       </label>
       <label className="grid gap-2 text-sm font-semibold text-stone-700">
         ซื้อจาก
-        <input className="min-h-11 rounded-xl border border-stone-300 px-4 text-base font-normal" name="purchasedFrom" />
+        <input className="min-h-11 rounded-xl border border-stone-300 px-4 text-base font-normal" name="purchasedFrom" onChange={(event) => change("purchasedFrom", event.target.value)} value={fields.purchasedFrom} />
       </label>
       <label className="grid gap-2 text-sm font-semibold text-stone-700">
         หมายเหตุราคา
-        <textarea className="min-h-20 rounded-xl border border-stone-300 px-4 py-3 text-base font-normal" name="notes" />
+        <textarea className="min-h-20 rounded-xl border border-stone-300 px-4 py-3 text-base font-normal" name="notes" onChange={(event) => change("notes", event.target.value)} value={fields.notes} />
       </label>
       {state.error ? <p className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-800" role="alert">{state.error}</p> : null}
       {state.saved ? <p className="rounded-xl bg-emerald-50 px-4 py-3 text-sm text-emerald-800" aria-live="polite">บันทึกราคาแล้ว</p> : null}
@@ -50,20 +61,24 @@ export function PriceForm({
   );
 }
 
-export function PhysicalCountForm({ itemId, blockers = [] }: Readonly<{ itemId: string; blockers?: readonly Readonly<{ cycleId: string; cycleName: string }>[] }>) {
-  const [state, formAction, pending] = useActionState(
-    recordInventoryCountAction,
-    INITIAL_STATE,
-  );
+export function PhysicalCountForm({ itemId, baseUnit, blockers = [] }: Readonly<{ itemId: string; baseUnit: UnitCode; blockers?: readonly Readonly<{ cycleId: string; cycleName: string }>[] }>) {
+  const [draft, setDraft] = useState<{ quantity: string; baseUnit: UnitCode } | null>(null);
+  const displayedUnit = draft?.baseUnit ?? baseUnit;
+  const [state, formAction, pending] = useActionState(async (previous: InventoryActionState, data: FormData) => {
+    const result = await recordInventoryCountAction(previous, data);
+    if (result.saved) setDraft(null);
+    return result;
+  }, INITIAL_STATE);
   // Render-time guidance is not authority; the action still rejects stale COUNTs.
   const pendingUse = state.blockers?.length ? state.blockers : blockers;
   return (
     <form action={formAction} className="grid gap-4 rounded-3xl border border-stone-200 bg-white p-5 shadow-sm">
       <h2 className="text-xl font-bold text-stone-900">นับสต๊อกจริง</h2>
       <input name="itemId" type="hidden" value={itemId} />
+      <input name="expectedBaseUnit" type="hidden" value={displayedUnit} />
       <label className="grid gap-2 text-sm font-semibold text-stone-700">
-        จำนวนที่นับได้
-        <input className="min-h-11 rounded-xl border border-stone-300 px-4 text-base font-normal" inputMode="decimal" min="0" name="countedQuantity" required step="0.000001" type="number" />
+        จำนวนที่นับได้ ({formatUnitLabel(displayedUnit)})
+        <input className="min-h-11 rounded-xl border border-stone-300 px-4 text-base font-normal" inputMode="decimal" min="0" name="countedQuantity" onChange={(event) => setDraft({ quantity: event.target.value, baseUnit: displayedUnit })} required step="0.000001" type="number" value={draft?.quantity ?? ""} />
       </label>
       {state.error ? <p className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-800" role="alert">{state.error}</p> : null}
       {pendingUse.length ? <div className="grid gap-2 rounded-xl bg-amber-50 p-4 text-sm text-amber-950">

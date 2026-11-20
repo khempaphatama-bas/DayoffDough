@@ -3,6 +3,7 @@ import { db } from "@/lib/db/client";
 import { createInventoryService } from "@/modules/inventory/application/inventory";
 import { InventoryForm } from "@/modules/inventory/ui/inventory-form";
 import { InventoryList } from "@/modules/inventory/ui/inventory-list";
+import { createInventoryItemAction } from "./actions";
 
 export default async function InventoryPage() {
   const owner = await requireOwner();
@@ -11,6 +12,7 @@ export default async function InventoryPage() {
     id: item.id,
     name: item.name,
     category: item.category,
+    ingredientKind: item.ingredientKind,
     stockBalance: item.stockBalance,
     baseUnit: item.baseUnit,
     latestPackPriceSatang: item.latestPrice?.packPriceSatang ?? null,
@@ -24,7 +26,7 @@ export default async function InventoryPage() {
         <h1 className="text-3xl font-bold tracking-tight text-stone-900">วัตถุดิบและบรรจุภัณฑ์</h1>
         <p className="mt-2 text-stone-600">เก็บขนาดแพ็ก ประวัติราคา และยอดที่นับได้จริง</p>
       </header>
-      <InventoryForm />
+      <InventoryForm action={createInventoryItemAction} />
       <InventoryList items={listItems} />
     </main>
   );
