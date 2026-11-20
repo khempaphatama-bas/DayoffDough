@@ -38,9 +38,18 @@ export function InventoryForm({ action, initialItem, editPolicy }: Readonly<{
     // Prep-only pack defaults are internal placeholders, not a purchase pack for a standard item.
     ...(isPrepOnly(initialItem.ingredientKind) ? { purchaseUnitLabel: "", baseQuantityPerPurchasePack: "" } : {}),
   } : EMPTY_DRAFT;
-  const fields = draft ?? initial;
   const identityLocked = editPolicy?.canChangeIdentity === false;
   const packLocked = editPolicy?.canChangePack === false;
+  // A save elsewhere can lock fields while this draft is still open. Submit the latest locked values,
+  // and never carry quantities entered under a different unit into the restored unit.
+  const unitRestored = identityLocked && draft !== null && draft.baseUnit !== initial.baseUnit;
+  const canonicalFields: Partial<Draft> = {
+    ...(identityLocked ? { category: initial.category, ingredientKind: initial.ingredientKind, baseUnit: initial.baseUnit } : {}),
+    ...(packLocked ? { purchaseUnitLabel: initial.purchaseUnitLabel } : {}),
+    ...(packLocked || unitRestored ? { baseQuantityPerPurchasePack: initial.baseQuantityPerPurchasePack } : {}),
+    ...(unitRestored ? { minimumStockQuantity: initial.minimumStockQuantity } : {}),
+  };
+  const fields = { ...(draft ?? initial), ...canonicalFields };
   const prepOnly = isPrepOnly(fields.ingredientKind);
   const categoryLocked = identityLocked || prepOnly;
   const [state, formAction, pending] = useActionState(async (previous: InventoryActionState, data: FormData) => {
@@ -50,7 +59,7 @@ export function InventoryForm({ action, initialItem, editPolicy }: Readonly<{
   }, INITIAL_STATE);
 
   function change(patch: Partial<Draft>) {
-    setDraft((current) => ({ ...(current ?? initial), ...patch }));
+    setDraft((current) => ({ ...(current ?? initial), ...canonicalFields, ...patch }));
   }
 
   function changeKind(ingredientKind: IngredientKind) {
@@ -71,7 +80,7 @@ export function InventoryForm({ action, initialItem, editPolicy }: Readonly<{
         </button>
       )}
       {open || initialItem ? (
-        <form className="grid gap-4 rounded-3xl border border-stone-200 bg-white p-5 shadow-sm md:grid-cols-2" onSubmit={(event) => {
+        <form className="grid gap-4 rounded-3xl border border-stone-200 bg-white p-5 shadow-sm md:grid-cols-2" method="post" onSubmit={(event) => {
           event.preventDefault();
           if (pending) return;
           const data = new FormData(event.currentTarget);
@@ -111,6 +120,7 @@ export function InventoryForm({ action, initialItem, editPolicy }: Readonly<{
             <input name="baseUnit" type="hidden" value={fields.baseUnit} />
             <p className="text-sm text-stone-600 md:col-span-2">รายการนี้ถูกใช้งานแล้ว หากต้องการเปลี่ยนหน่วยฐาน ประเภท หรือชนิด ให้เพิ่มรายการใหม่แทน</p>
           </> : null}
+          {unitRestored && !prepOnly ? <p className="rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-950 md:col-span-2" role="status">หน่วยฐานถูกล็อก จึงคืนค่าปริมาณต่อแพ็กและสต๊อกขั้นต่ำตามหน่วยเดิม กรุณาตรวจสอบก่อนบันทึก</p> : null}
           {prepOnly ? (
             <p className="rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-950 md:col-span-2">ไม่คิดต้นทุนและไม่ต้องนับสต๊อก</p>
           ) : <>

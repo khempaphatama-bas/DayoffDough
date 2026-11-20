@@ -81,12 +81,20 @@ it("updates the authenticated owner's item using the selected unit", async () =>
 
 it.each([
   ["ACTIVE_RECIPE", /เปลี่ยน.*สูตร/],
-  ["PACKAGING_RULE", /แก้ไข.*กฎบรรจุภัณฑ์/],
   ["ACTIVE_PLAN", /จบ.*รอบ/],
 ] as const)("guides the owner past the %s archive blocker", async (code, hint) => {
   mocks.archiveItem.mockRejectedValue(new InventoryMaintenanceError(code));
   expect(actions.archiveInventoryItemAction).toBeTypeOf("function");
   expect(await actions.archiveInventoryItemAction(INITIAL, itemForm())).toEqual({ error: expect.stringMatching(hint), saved: false });
+  expect(mocks.archiveItem).toHaveBeenCalledExactlyOnceWith(OWNER, ITEM);
+  expect(mocks.revalidatePath).not.toHaveBeenCalled();
+});
+
+it("points a packaging-rule archive blocker to inspection and an available new-item alternative", async () => {
+  mocks.archiveItem.mockRejectedValue(new InventoryMaintenanceError("PACKAGING_RULE"));
+  const result = await actions.archiveInventoryItemAction(INITIAL, itemForm());
+  expect(result).toMatchObject({ error: expect.stringMatching(/ดู.*กฎ.*หน้าการจัดส่ง.*เพิ่ม.*รายการใหม่/), saved: false });
+  expect(result.error).not.toMatch(/แก้ไข/);
   expect(mocks.archiveItem).toHaveBeenCalledExactlyOnceWith(OWNER, ITEM);
   expect(mocks.revalidatePath).not.toHaveBeenCalled();
 });
