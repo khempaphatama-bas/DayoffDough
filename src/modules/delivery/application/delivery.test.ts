@@ -87,6 +87,7 @@ describe("delivery and packaging configuration", () => {
       productId: focaccia.id,
       deliveryMethodId: null,
       inventoryItemId: focacciaBag.id,
+      expectedBaseUnit: "piece",
       consumptionBasis: "PER_PRODUCT_UNIT",
       quantityInBaseUnit: "1",
     });
@@ -95,6 +96,7 @@ describe("delivery and packaging configuration", () => {
       productId: focaccia.id,
       deliveryMethodId: null,
       inventoryItemId: focacciaBag.id,
+      expectedBaseUnit: "piece",
       consumptionBasis: "PER_ORDER",
       quantityInBaseUnit: "1",
     });
@@ -103,6 +105,7 @@ describe("delivery and packaging configuration", () => {
       productId: null,
       deliveryMethodId: kex.id,
       inventoryItemId: shippingBox.id,
+      expectedBaseUnit: "piece",
       consumptionBasis: "PER_DELIVERY",
       quantityInBaseUnit: "1",
     });
@@ -121,6 +124,7 @@ describe("delivery and packaging configuration", () => {
         productId: null,
         deliveryMethodId: kex.id,
         inventoryItemId: shippingBox.id,
+        expectedBaseUnit: "piece",
         consumptionBasis: "PER_PRODUCT_UNIT",
         quantityInBaseUnit: "1",
       }),
@@ -134,6 +138,7 @@ describe("delivery and packaging configuration", () => {
         productId: focaccia.id,
         deliveryMethodId: null,
         inventoryItemId: flour.id,
+        expectedBaseUnit: "g",
         consumptionBasis: "PER_PRODUCT_UNIT",
         quantityInBaseUnit: "1",
       }),
@@ -149,11 +154,11 @@ describe("delivery and packaging configuration", () => {
     });
     await expect(service.createPackagingRule(OWNER_ID, {
       scope: "PRODUCT", productId: focaccia.id, deliveryMethodId: null,
-      inventoryItemId: focacciaBag.id, consumptionBasis: "PER_PRODUCT_UNIT", quantityInBaseUnit: "1",
+      inventoryItemId: focacciaBag.id, expectedBaseUnit: "piece", consumptionBasis: "PER_PRODUCT_UNIT", quantityInBaseUnit: "1",
     })).rejects.toMatchObject({ code: "INACTIVE" });
     await expect(service.createPackagingRule(OWNER_ID, {
       scope: "DELIVERY_METHOD", productId: null, deliveryMethodId: kex.id,
-      inventoryItemId: ice.id, consumptionBasis: "PER_DELIVERY", quantityInBaseUnit: "1",
+      inventoryItemId: ice.id, expectedBaseUnit: "g", consumptionBasis: "PER_DELIVERY", quantityInBaseUnit: "1",
     })).rejects.toMatchObject({ code: "PREP_ONLY" });
     expect(await context.db.select().from(productPackagingRules)).toEqual([]);
   });
@@ -166,8 +171,17 @@ describe("delivery and packaging configuration", () => {
     for (const inventoryItemId of [shippingBox.id, randomUUID()]) {
       await expect(service.createPackagingRule(OTHER_OWNER_ID, {
         scope: "DELIVERY_METHOD", productId: null, deliveryMethodId: method.id,
-        inventoryItemId, consumptionBasis: "PER_DELIVERY", quantityInBaseUnit: "1",
+        inventoryItemId, expectedBaseUnit: "piece", consumptionBasis: "PER_DELIVERY", quantityInBaseUnit: "1",
       })).rejects.toMatchObject({ code: "NOT_FOUND" });
     }
+  });
+
+  it("does not write a rule when the caller omits the unit of its quantity", async () => {
+    // @ts-expect-error Runtime callers can omit a required field.
+    await expect(service.createPackagingRule(OWNER_ID, {
+      scope: "PRODUCT", productId: focaccia.id, deliveryMethodId: null,
+      inventoryItemId: focacciaBag.id, consumptionBasis: "PER_PRODUCT_UNIT", quantityInBaseUnit: "50",
+    })).rejects.toThrow("Invalid packaging rule");
+    expect(await context.db.select().from(productPackagingRules)).toEqual([]);
   });
 });

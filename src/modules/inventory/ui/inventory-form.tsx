@@ -129,7 +129,7 @@ export function InventoryForm({ action, initialItem, editPolicy }: Readonly<{
               <input className={INPUT} disabled={packLocked} name="purchaseUnitLabel" onChange={(event) => change({ purchaseUnitLabel: event.target.value })} required value={fields.purchaseUnitLabel} />
             </label>
             <label className={LABEL}>
-              ปริมาณต่อแพ็ก
+              ปริมาณต่อ{fields.purchaseUnitLabel.trim() || "แพ็ก"} ({fields.baseUnit === "l" ? "L" : formatUnitLabel(fields.baseUnit)})
               <input className={INPUT} disabled={packLocked} inputMode="decimal" min="0.000001" name="baseQuantityPerPurchasePack" onChange={(event) => change({ baseQuantityPerPurchasePack: event.target.value })} required step="0.000001" type="number" value={fields.baseQuantityPerPurchasePack} />
             </label>
             {packLocked ? <>

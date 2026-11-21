@@ -112,6 +112,13 @@ it("shows a copied inactive row and requires replacing or removing it before sav
   expect(save).toBeEnabled();
 });
 
+it("points a recipe without ingredient options to an available inventory action", () => {
+  render(editor({ ...source, ingredients: [] }, []));
+  const hint = screen.getByText(/ยังไม่มีวัตถุดิบให้เลือก/);
+  expect(hint).toHaveTextContent(/เพิ่มวัตถุดิบ.*หน้าคลังสินค้า/);
+  expect(hint).not.toHaveTextContent("เปิดใช้งาน");
+});
+
 it.each([
   [new RecipeMaintenanceError("ITEM_CHANGED"), "โหลดหน้าใหม่"],
   [new Error("private SQL failure"), "บันทึกเวอร์ชันสูตรไม่สำเร็จ"],

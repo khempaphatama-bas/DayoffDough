@@ -1,7 +1,8 @@
 import Decimal from "decimal.js";
 
 export type UnitDimension = "mass" | "volume" | "count";
-export type UnitCode = "mg" | "g" | "kg" | "ml" | "l" | "piece";
+export const unitCodes = ["mg", "g", "kg", "ml", "l", "piece"] as const;
+export type UnitCode = (typeof unitCodes)[number];
 
 type UnitDefinition = Readonly<{
   dimension: UnitDimension;

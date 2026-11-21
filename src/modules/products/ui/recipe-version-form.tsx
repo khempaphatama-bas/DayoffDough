@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useActionState, useId, useRef, useState } from "react";
+import { startTransition, useActionState, useId, useRef, useState } from "react";
 import {
   activateRecipeVersionWithFeedbackAction,
   archiveRecipeVersionAction,
@@ -97,7 +97,13 @@ function RecipeDraft({ productId, defaultYieldUnit, ingredientOptions, initialVe
   }
 
   return (
-    <form action={formAction} className="grid min-w-0 gap-4 rounded-3xl border border-stone-200 bg-white p-5 shadow-sm md:grid-cols-2">
+    <form className="grid min-w-0 gap-4 rounded-3xl border border-stone-200 bg-white p-5 shadow-sm md:grid-cols-2" method="post" onSubmit={(event) => {
+      event.preventDefault();
+      if (pending) return;
+      const data = new FormData(event.currentTarget);
+      // A rejected save must not trigger React's native reset of the draft selects.
+      startTransition(() => formAction(data));
+    }}>
       <input name="productId" type="hidden" value={productId} />
       <input name="ingredientCount" type="hidden" value={rows.length} />
       {initialVersion ? (
@@ -117,7 +123,7 @@ function RecipeDraft({ productId, defaultYieldUnit, ingredientOptions, initialVe
       <fieldset className="grid min-w-0 gap-4 rounded-2xl border border-stone-200 p-4 md:col-span-2">
         <legend className="px-2 font-bold text-stone-900">วัตถุดิบในสูตร</legend>
         {ingredientOptions.length === 0 ? (
-          <p className="text-sm text-amber-900">ยังไม่มีวัตถุดิบให้เลือก กรุณาเพิ่มหรือเปิดใช้งานวัตถุดิบในหน้าคลังสินค้าก่อนบันทึก</p>
+          <p className="text-sm text-amber-900">ยังไม่มีวัตถุดิบให้เลือก กรุณาเพิ่มวัตถุดิบในหน้าคลังสินค้าก่อนบันทึก</p>
         ) : rows.length === 0 ? (
           <p className="text-sm text-amber-900">กรุณาเพิ่มวัตถุดิบอย่างน้อย 1 รายการ</p>
         ) : rows.length > MAX_INGREDIENTS ? (

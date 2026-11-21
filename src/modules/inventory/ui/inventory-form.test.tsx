@@ -32,7 +32,7 @@ it.each([
   render(<InventoryForm action={action} />);
   await user.click(screen.getByRole("button", { name: "เพิ่มรายการ" }));
   expect(screen.getByLabelText("ชื่อหน่วยซื้อ")).toBeRequired();
-  expect(screen.getByLabelText("ปริมาณต่อแพ็ก")).toBeRequired();
+  expect(screen.getByLabelText("ปริมาณต่อแพ็ก (g)")).toBeRequired();
   expect(screen.getByLabelText("สต๊อกขั้นต่ำ")).toBeRequired();
   await user.selectOptions(screen.getByLabelText("ประเภท"), "PACKAGING");
   await user.selectOptions(screen.getByLabelText("ชนิดวัตถุดิบ"), screen.getByRole("option", { name: label }));
@@ -41,7 +41,7 @@ it.each([
   expect(within(units).getAllByRole("option").map((option) => option.textContent)).toEqual(options);
   expect(screen.getByText("ไม่คิดต้นทุนและไม่ต้องนับสต๊อก")).toBeVisible();
   expect(screen.queryByLabelText("ชื่อหน่วยซื้อ")).not.toBeInTheDocument();
-  expect(screen.queryByLabelText("ปริมาณต่อแพ็ก")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText(/^ปริมาณต่อ/)).not.toBeInTheDocument();
   expect(screen.queryByLabelText("สต๊อกขั้นต่ำ")).not.toBeInTheDocument();
   await user.type(screen.getByLabelText("ชื่อรายการ"), label);
   await user.click(screen.getByRole("button", { name: "บันทึกรายการ" }));
@@ -77,7 +77,7 @@ it("does not use a prep-only item's placeholder as a real purchase pack when swi
   await user.click(screen.getByRole("button", { name: "บันทึกรายการ" }));
   expect(action).not.toHaveBeenCalled();
   expect(screen.getByLabelText("ชื่อหน่วยซื้อ")).toHaveValue("");
-  expect(screen.getByLabelText("ปริมาณต่อแพ็ก")).toHaveValue(null);
+  expect(screen.getByLabelText("ปริมาณต่อแพ็ก (g)")).toHaveValue(null);
 });
 
 it("submits newly locked identity and pack from revalidation while retaining editable draft fields", async () => {
@@ -110,7 +110,7 @@ it("does not interpret quantities drafted in kg as g when only the unit becomes 
   const user = userEvent.setup();
   const view = render(<InventoryForm action={action} initialItem={flour} editPolicy={{ canChangeIdentity: true, canChangePack: true }} />);
   await user.selectOptions(screen.getByLabelText("หน่วยฐาน"), "kg");
-  const pack = screen.getByLabelText("ปริมาณต่อแพ็ก");
+  const pack = screen.getByLabelText("ปริมาณต่อถุง (kg)");
   const minimum = screen.getByLabelText("สต๊อกขั้นต่ำ");
   await user.clear(pack);
   await user.type(pack, "2");

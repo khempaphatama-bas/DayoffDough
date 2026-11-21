@@ -5,7 +5,9 @@ import { z } from "zod";
 import { requireOwner } from "@/lib/auth/require-owner";
 import { db } from "@/lib/db/client";
 import { createDeliveryService } from "@/modules/delivery/application/delivery";
+import { InventoryMaintenanceError } from "@/modules/inventory/application/inventory";
 import { parseBahtToSatang } from "@/modules/money/domain/money";
+import { unitCodes } from "@/modules/units/domain/units";
 
 export type DeliveryActionState = Readonly<{
   error: string | null;
@@ -24,6 +26,7 @@ const ruleSchema = z.object({
   productId: z.string(),
   deliveryMethodId: z.string(),
   inventoryItemId: z.string().uuid(),
+  expectedBaseUnit: z.enum(unitCodes),
   consumptionBasis: z.enum([
     "PER_PRODUCT_UNIT",
     "PER_ORDER",
@@ -104,6 +107,7 @@ export async function createPackagingRuleAction(
     productId: formData.get("productId") ?? "",
     deliveryMethodId: formData.get("deliveryMethodId") ?? "",
     inventoryItemId: formData.get("inventoryItemId"),
+    expectedBaseUnit: formData.get("expectedBaseUnit"),
     consumptionBasis: formData.get("consumptionBasis"),
     quantityInBaseUnit: formData.get("quantityInBaseUnit"),
     notes: formData.get("notes") ?? "",
@@ -118,6 +122,7 @@ export async function createPackagingRuleAction(
           ? parsed.data.deliveryMethodId
           : null,
       inventoryItemId: parsed.data.inventoryItemId,
+      expectedBaseUnit: parsed.data.expectedBaseUnit,
       consumptionBasis: parsed.data.consumptionBasis,
       quantityInBaseUnit: parsed.data.quantityInBaseUnit,
       notes: parsed.data.notes,
@@ -125,7 +130,10 @@ export async function createPackagingRuleAction(
     revalidatePath("/delivery");
     revalidatePath("/dashboard");
     return { error: null, saved: true };
-  } catch {
+  } catch (error) {
+    if (error instanceof InventoryMaintenanceError && error.code === "ITEM_CHANGED") {
+      return { error: "หน่วยของบรรจุภัณฑ์เปลี่ยนแล้ว กรุณาโหลดหน้าใหม่ เลือกรายการและตรวจสอบจำนวนก่อนบันทึกอีกครั้ง", saved: false };
+    }
     return { error: "บันทึกกฎไม่สำเร็จ กรุณาตรวจสอบขอบเขตและประเภทบรรจุภัณฑ์", saved: false };
   }
 }

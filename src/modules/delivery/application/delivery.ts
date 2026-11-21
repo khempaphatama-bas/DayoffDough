@@ -12,6 +12,7 @@ import {
 import { inventoryItems } from "@/modules/inventory/db/schema";
 import { assertStockableInventoryItem } from "@/modules/inventory/application/inventory";
 import { products } from "@/modules/products/db/schema";
+import { unitCodes, type UnitCode } from "@/modules/units/domain/units";
 
 export const VALID_PACKAGING_COMBINATIONS = [
   ["PRODUCT", "PER_PRODUCT_UNIT"],
@@ -36,6 +37,7 @@ export type PackagingRuleInput = Readonly<{
   productId: string | null;
   deliveryMethodId: string | null;
   inventoryItemId: string;
+  expectedBaseUnit: UnitCode;
   consumptionBasis: PackagingConsumptionBasis;
   quantityInBaseUnit: string;
   notes?: string;
@@ -102,6 +104,7 @@ const ruleSchema = z.object({
   productId: z.string().uuid().nullable(),
   deliveryMethodId: z.string().uuid().nullable(),
   inventoryItemId: z.string().uuid(),
+  expectedBaseUnit: z.enum(unitCodes),
   consumptionBasis: z.enum(packagingConsumptionBasis),
   quantityInBaseUnit: positiveDecimalSchema,
   notes: z.string().trim().max(2000).optional(),
@@ -217,14 +220,15 @@ export function createDeliveryService(db: DatabaseClient) {
         }
 
         const [packagingItem] = await lockOwnedInventoryItems(tx, ownerId, [parsed.data.inventoryItemId]);
-        assertStockableInventoryItem(packagingItem);
+        const { expectedBaseUnit, ...rule } = parsed.data;
+        assertStockableInventoryItem(packagingItem, expectedBaseUnit);
         if (packagingItem.category === "INGREDIENT") {
           throw new Error("Packaging item must be PACKAGING or CONSUMABLE");
         }
 
         const [row] = await tx
           .insert(productPackagingRules)
-          .values({ ownerId, ...parsed.data, notes: parsed.data.notes ?? null })
+          .values({ ownerId, ...rule, notes: rule.notes ?? null })
           .returning();
         if (!row) throw new Error("Failed to create packaging rule");
         return toRule(row);

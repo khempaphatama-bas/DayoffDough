@@ -143,6 +143,13 @@ test("copies_recipe_and_keeps_five_selectable", async ({ page }, info) => {
   await form.getByRole("button", { name: `ลบวัตถุดิบ ${iceIndex}`, exact: true }).click();
   await addLine(form, 3, { name: prep.ice, unit: "g", amount: "175" });
   await instructions.fill("ผสมสูตรปรับใหม่");
+  await form.getByRole("combobox", { name: "หน่วยผลผลิต", exact: true }).selectOption("kg");
+  await form.getByLabel("รหัสเวอร์ชัน", { exact: true }).fill("v1");
+  await ownerAction(page, form, "บันทึกเวอร์ชันสูตร");
+  await expect(form.getByRole("alert")).toContainText("รหัสเวอร์ชันนี้ถูกใช้แล้ว");
+  await expect(form.getByRole("combobox", { name: "หน่วยผลผลิต", exact: true })).toHaveValue("kg");
+  await expect(ingredient(form, 3).locator("option:checked")).toHaveText(`${prep.ice} (g)`);
+  await expect(quantity(form, 3)).toHaveValue("175");
   await saveRecipe(page, "v6");
   await expect(form.getByRole("status")).toContainText("สูตร v2 ถูกย้ายไปที่ประวัติ");
   await expect(selectable.getByRole("article")).toHaveCount(5);
@@ -158,6 +165,42 @@ test("copies_recipe_and_keeps_five_selectable", async ({ page }, info) => {
   await expect(old.getByRole("button", { name: "เปิดใช้เวอร์ชันนี้", exact: true })).toHaveCount(0);
   await expect(old.getByRole("link", { name: "ใช้สูตรนี้เป็นต้นแบบ", exact: true })).toBeVisible();
   await shot(history, info, "recipe-history");
+});
+
+test("requires_review_before_saving_a_rule_after_its_unit_changes", async ({ page }, info) => {
+  const run = `pack-${info.project.name}-${Date.now()}`, name = `กระดาษ ${run}`, product = `ขนมปัง ${run}`;
+  await loginAsOwner(page);
+  await createInventoryItem(page, { name, category: "PACKAGING", baseUnit: "g", purchaseLabel: "ห่อ", packQuantity: "1000" });
+  const itemUrl = await inventoryUrl(page, name);
+  await createProduct(page, { name: product, sellingPriceBaht: "100" });
+  await page.goto("/delivery");
+  const form = page.locator("form").filter({ has: page.getByRole("heading", { name: "เพิ่มกฎบรรจุภัณฑ์" }) });
+  const select = form.getByRole("combobox", { name: "รายการบรรจุภัณฑ์", exact: true });
+  await form.getByRole("combobox", { name: "สินค้า", exact: true }).selectOption({ label: product });
+  await select.selectOption({ label: `${name} (g)` });
+  await form.getByLabel("จำนวนที่ใช้ (g)", { exact: true }).fill("50");
+
+  const catalog = await page.context().newPage();
+  await catalog.goto(itemUrl);
+  const edit = catalog.locator("form").filter({ has: catalog.getByLabel("ชื่อรายการ", { exact: true }) });
+  await edit.getByRole("combobox", { name: "หน่วยฐาน", exact: true }).selectOption("kg");
+  await edit.getByLabel("ปริมาณต่อห่อ (kg)", { exact: true }).fill("1");
+  await ownerAction(catalog, edit, "บันทึกรายการ");
+  await expect(edit).toContainText("บันทึกรายการแล้ว");
+  await catalog.close();
+  await ownerAction(page, form, "บันทึกกฎบรรจุภัณฑ์");
+  await expect(form.getByRole("alert")).toContainText("โหลดหน้าใหม่");
+  await expect(form.getByLabel("จำนวนที่ใช้ (g)", { exact: true })).toHaveValue("50");
+  await expect(select.locator("option:checked")).toContainText(`${name} (g)`);
+
+  await page.reload();
+  const savedRule = page.getByRole("article").filter({ hasText: product }).filter({ hasText: name });
+  await expect(savedRule).toHaveCount(0);
+  await form.getByRole("combobox", { name: "สินค้า", exact: true }).selectOption({ label: product });
+  await select.selectOption({ label: `${name} (kg)` });
+  await form.getByLabel("จำนวนที่ใช้ (kg)", { exact: true }).fill("0.05");
+  await ownerAction(page, form, "บันทึกกฎบรรจุภัณฑ์");
+  await expect(savedRule).toContainText("0.05 kg");
 });
 
 async function readyRound(page: Page, run: string, product: string) {
@@ -310,7 +353,7 @@ test("edits_and_disables_inventory_with_clear_feedback", async ({ page }, info) 
   await expect(edit.getByRole("combobox", { name: "หน่วยฐาน", exact: true })).toBeDisabled();
   await edit.getByLabel("ชื่อรายการ", { exact: true }).fill(renamed);
   await edit.getByLabel("ชื่อหน่วยซื้อ", { exact: true }).fill("ถุงใหญ่");
-  await edit.getByLabel("ปริมาณต่อแพ็ก", { exact: true }).fill("1500");
+  await edit.getByLabel("ปริมาณต่อถุงใหญ่ (g)", { exact: true }).fill("1500");
   await edit.getByLabel("สต๊อกขั้นต่ำ", { exact: true }).fill("125");
   const notes = edit.getByRole("textbox", { name: "หมายเหตุ", exact: true });
   await notes.fill("ใช้ถุงใหญ่ครั้งถัดไป");
@@ -324,7 +367,7 @@ test("edits_and_disables_inventory_with_clear_feedback", async ({ page }, info) 
   await page.reload();
   await expect(page.getByRole("heading", { name: renamed, exact: true })).toBeVisible();
   await expect(edit.getByLabel("ชื่อหน่วยซื้อ", { exact: true })).toHaveValue("ถุงใหญ่");
-  await expect(edit.getByLabel("ปริมาณต่อแพ็ก", { exact: true })).toHaveValue("1500");
+  await expect(edit.getByLabel("ปริมาณต่อถุงใหญ่ (g)", { exact: true })).toHaveValue("1500");
   await expect(edit.getByLabel("สต๊อกขั้นต่ำ", { exact: true })).toHaveValue("125");
   await expect(notes).toHaveValue("ใช้ถุงใหญ่ครั้งถัดไป");
   const priceHistory = page.getByRole("listitem").filter({ hasText: "฿55.00" });

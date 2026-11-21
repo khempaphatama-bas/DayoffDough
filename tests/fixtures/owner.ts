@@ -249,7 +249,7 @@ export async function createInventoryItem(
     await page.getByRole("combobox", { name: "ประเภท", exact: true }).selectOption(input.category);
     await page.getByRole("combobox", { name: "หน่วยฐาน", exact: true }).selectOption(input.baseUnit ?? "g");
     await page.getByLabel("ชื่อหน่วยซื้อ").fill(input.purchaseLabel);
-    await page.getByLabel("ปริมาณต่อแพ็ก").fill(input.packQuantity);
+    await page.getByLabel(`ปริมาณต่อ${input.purchaseLabel} (${input.baseUnit === "piece" ? "ชิ้น" : "g"})`, { exact: true }).fill(input.packQuantity);
   } else {
     const baseUnit = page.getByRole("combobox", { name: "หน่วยฐาน", exact: true });
     await expect(baseUnit).toHaveValue(kind === "WATER" ? "ml" : "g");

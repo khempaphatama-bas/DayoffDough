@@ -71,5 +71,5 @@ test("dedicated Playwright discovery still lists all maintenance cases on both p
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /\[phone\].+recipe-inventory-maintenance\.spec\.ts/);
   assert.match(result.stdout, /\[desktop\].+recipe-inventory-maintenance\.spec\.ts/);
-  assert.match(result.stdout, /Total: 6 tests in 1 file/);
+  assert.match(result.stdout, /Total: 8 tests in 1 file/);
 });

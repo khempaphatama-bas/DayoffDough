@@ -46,8 +46,8 @@ it("prefills edit fields and submits the canonical values even when identity and
   expect(screen.getByLabelText("ชนิดวัตถุดิบ")).toBeDisabled();
   expect(screen.getByLabelText("ชื่อหน่วยซื้อ")).toBeDisabled();
   expect(screen.getByLabelText("ชื่อหน่วยซื้อ")).toHaveValue("ถุง");
-  expect(screen.getByLabelText("ปริมาณต่อแพ็ก")).toBeDisabled();
-  expect(screen.getByLabelText("ปริมาณต่อแพ็ก")).toHaveValue(1000);
+  expect(screen.getByLabelText("ปริมาณต่อถุง (g)")).toBeDisabled();
+  expect(screen.getByLabelText("ปริมาณต่อถุง (g)")).toHaveValue(1000);
   expect(screen.getByLabelText("สต๊อกขั้นต่ำ")).toBeEnabled();
   expect(screen.getByText(/หากต้องการเปลี่ยนหน่วย.*เพิ่มรายการใหม่/)).toBeVisible();
   await user.click(screen.getByRole("button", { name: "บันทึกรายการ" }));

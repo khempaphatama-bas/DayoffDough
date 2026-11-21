@@ -18,6 +18,7 @@ const modules = await applicationModules((source, code) => {
 });
 after(modules.close);
 const { createInventoryService: inventory } = await modules.load("src/modules/inventory/application/inventory.ts");
+const { createDeliveryService: delivery } = await modules.load("src/modules/delivery/application/delivery.ts");
 const { createProductService: products } = await modules.load(productPath);
 const { createPlanningCommandService: planning } = await modules.load(planningPath);
 const { createPlanningQueryService: queries } = await modules.load("src/modules/planning/application/planning-queries.ts");
@@ -165,15 +166,20 @@ for (const archiveFirst of [true, false]) race(`archive_vs_activate_and_unit_cha
   assert.equal(saved.versions.find(row => row.id === v.id).ingredients[0].itemActive, !archiveFirst);
 });
 
-for (const reference of ["price", "count", "recipe"]) for (const editFirst of [true, false]) {
+for (const reference of ["price", "count", "recipe", "packaging"]) for (const editFirst of [true, false]) {
   race(`archive_vs_activate_and_unit_change_vs_first_reference: ${editFirst ? "unit edit" : `first ${reference}`} wins against ${editFirst ? `stale ${reference} form` : "unit edit"}`, async h => {
-    const item = await createItem(h.db, "Flour");
+    const form = reference === "packaging" ? { ...itemForm("Wrapping paper"), category: "PACKAGING" } : itemForm("Flour");
+    const item = await inventory(h.db).createItem(owner, form);
     const product = await createProduct(h.db);
-    const edit = db => inventory(db).updateItem(owner, item.id, itemForm(item.name, "kg", "1"));
+    const edit = db => inventory(db).updateItem(owner, item.id, { ...form, baseUnit: "kg", baseQuantityPerPurchasePack: "1" });
     const use = {
       price: db => inventory(db).addPrice(owner, item.id, { packPriceSatang: 5000, packBaseQuantity: "1000", effectiveAt: date, expectedBaseUnit: "g" }),
       count: db => inventory(db).recordCount(owner, item.id, "20", date, "g"),
       recipe: db => version(db, product.id, "first", item.id),
+      packaging: db => delivery(db).createPackagingRule(owner, {
+        scope: "PRODUCT", productId: product.id, deliveryMethodId: null, consumptionBasis: "PER_PRODUCT_UNIT",
+        inventoryItemId: item.id, quantityInBaseUnit: "50", expectedBaseUnit: "g",
+      }),
     }[reference];
     const [, loser] = await ordered(h, editFirst ? `unit->${reference}` : `${reference}->unit`,
       editFirst ? edit : use, editFirst ? use : edit);
@@ -187,5 +193,10 @@ for (const reference of ["price", "count", "recipe"]) for (const editFirst of [t
     const recipe = await detail(h, product.id);
     assert.deepEqual(recipe.versions.map(row => [row.versionCode, row.ingredients[0].quantityInBaseUnit]),
       reference === "recipe" && !editFirst ? [["first", "20"]] : []);
+    if (reference === "packaging") {
+      const { rules } = await delivery(h.db).listDeliveryConfiguration(owner);
+      assert.deepEqual(rules.map(row => [row.productId, row.inventoryItemId, row.quantityInBaseUnit, row.inventoryBaseUnit]),
+        editFirst ? [] : [[product.id, item.id, "50", "g"]]);
+    }
   });
 }

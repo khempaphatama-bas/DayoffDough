@@ -1,6 +1,6 @@
 # Recipe and inventory maintenance: local release checks
 
-The application under test is `8bf9f7f835a39da547cc14c69007beddc0d5b3d3` plus this verification-only change. Production Auth, database, deploy, and migrations were not used in these checks.
+These checks cover the recipe/inventory maintenance branch, including the final fixes on top of `76f49c8c9e432e82f9bf71e3dc65ae2c5f999828`. Production Auth, database, deploy, and migrations were not used in these checks.
 
 ## Reproduce locally
 
@@ -36,9 +36,9 @@ RECIPE_INVENTORY_PG_CONTROL=omit-recipe-create-product-lock node --test --test-n
 
 ## Verified locally
 
-- Real PostgreSQL: **15/15** concurrency cases, each with an observed blocked backend and verified committed or rejected result. The negative control exited 1 as expected: two creates left six selectable versions without the guard.
+- Real PostgreSQL: **17/17** concurrency cases, each with an observed blocked backend and verified committed or rejected result. The two packaging cases prove a stale 50 g rule cannot become 50 kg, and an existing rule prevents changing the unit. The earlier cap negative control exited 1 as expected: two creates left six selectable versions without the guard.
 - Local test safety and discovery: **15/15** metadata/URL checks without starting a web server or connecting to a database. Missing credentials and bare URL delimiters are rejected.
-- Playwright: **6/6** maintenance and **2/2** master-data cases across phone and desktop, no skips. The maintenance checks include same-template draft reset, the sixth-version archive, both production-use paths including explicit empty confirmation, and save/disable actions that pass pointer hit testing.
+- Playwright: **8/8** maintenance and **2/2** master-data cases across phone and desktop, no skips. Maintenance includes same-template reset and duplicate-code retry, the sixth-version archive, a stale packaging form in a second tab that rejects 50 g before a reviewed 0.05 kg save, both production-use paths including empty confirmation, and inventory edit/disable with pointer hit testing.
 - Optional legacy consumption Playwright suite: **14/14** across both projects with exact translated stock-unit assertions and all 16 ordered migration hashes verified. One superseded local attempt was interrupted by host sleep; the awake rerun used the same timeouts.
 - Vitest: **1,634/1,634** in 140 files with two workers. TypeScript, lint, and the isolated production build exited 0. Lint reported 16 existing warnings outside the touched tests.
 - The local Operations page logged a pre-existing Thai time-format hydration recovery (`08:00 น.` on Node vs `08:00` in Chromium); it did not prevent production start or usage confirmation. No deployed-site behavior was verified.
