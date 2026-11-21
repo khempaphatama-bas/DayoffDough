@@ -11,12 +11,15 @@ function required(name: string) {
   return value;
 }
 
-function loopback(name: string, protocol: string, path: RegExp) {
+function loopback(name: string, protocol: "postgres:" | "http:", path: RegExp) {
   let url: URL;
   try { url = new URL(required(name)); } catch { throw new Error(`${name} must be an explicit local test URL`); }
+  // postgres.js falls back to inherited PG* credentials when either is absent.
+  const wrongCredentials = protocol === "postgres:" ? !url.username || !url.password : url.username || url.password;
   if (url.protocol !== protocol || url.hostname !== "127.0.0.1" || !url.port || Number(url.port) < 1
-    || !path.test(url.pathname) || url.search || url.hash || (protocol === "http:" && (url.username || url.password))) {
-    throw new Error(`${name} must identify the intended disposable loopback service with an explicit port`);
+    || !path.test(url.pathname) || /[?#]/.test(url.href) || wrongCredentials) {
+    const credentials = protocol === "postgres:" ? " with an explicit local test username and password" : " without URL credentials";
+    throw new Error(`${name} must identify the intended disposable loopback service on an explicit port${credentials}, without query or fragment delimiters`);
   }
   return url;
 }

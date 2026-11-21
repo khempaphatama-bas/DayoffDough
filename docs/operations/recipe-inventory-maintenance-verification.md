@@ -6,14 +6,15 @@ The application under test is `8bf9f7f835a39da547cc14c69007beddc0d5b3d3` plus th
 
 Use an isolated worktree without a `.env` file (including Next environment variants). Export the following only for test services; do not use store credentials:
 
-- `RECIPE_INVENTORY_LOCAL_PG_ADMIN_URL`: disposable PostgreSQL, in the form `postgres://…@127.0.0.1:<port>/postgres`, with no connection options.
-- `RECIPE_INVENTORY_LOCAL_PG_URL`: same local service, with an existing disposable database named `recipe_inventory_test_…`. The Playwright server runs the migration chain against this database before booting the app.
-- `RECIPE_INVENTORY_TEST_AUTH_URL` and `RECIPE_INVENTORY_TEST_AUTH_KEY`: a loopback HTTP Auth gateway with an explicit port and its test public key.
+- `RECIPE_INVENTORY_LOCAL_PG_ADMIN_URL`: disposable PostgreSQL, in the form `postgres://<test-user>:<test-password>@127.0.0.1:<port>/postgres`; explicit credentials are required, with no query or fragment delimiters.
+- `RECIPE_INVENTORY_LOCAL_PG_URL`: same local URL requirements, with an existing disposable database named `recipe_inventory_test_…`. The Playwright server runs the migration chain against this database before booting the app.
+- `RECIPE_INVENTORY_TEST_AUTH_URL` and `RECIPE_INVENTORY_TEST_AUTH_KEY`: a loopback HTTP Auth gateway with an explicit port and its test public key. The gateway URL accepts no query, fragment, or URL credentials.
 - `RECIPE_INVENTORY_TEST_OWNER_EMAIL` and `RECIPE_INVENTORY_TEST_OWNER_PASSWORD`: one dummy account in that Auth service.
 
-Leave `SUPABASE_DATABASE_CA_PEM` unset. Playwright runs Next on `127.0.0.1:3215` and will not reuse another process. Allocate a fresh disposable database for each browser batch: master-data checks global dashboard readiness; maintenance deliberately creates unpriced tracked items.
+Leave `SUPABASE_DATABASE_CA_PEM` unset. The dedicated Playwright config runs Next on `127.0.0.1:3215` and will not reuse another process. Default Playwright discovery excludes the dedicated maintenance spec. Allocate a fresh disposable database for each browser batch: master-data checks global dashboard readiness; maintenance deliberately creates unpriced tracked items.
 
 ```sh
+node --test tests/config/recipe-inventory-local.test.mjs
 node --test tests/postgres/recipe-inventory-concurrency.test.mjs
 pnpm exec playwright test --config=playwright.recipe-inventory.local.config.ts --project=phone --project=desktop tests/e2e/master-data.spec.ts
 pnpm exec playwright test --config=playwright.recipe-inventory.local.config.ts --project=phone --project=desktop tests/e2e/recipe-inventory-maintenance.spec.ts
@@ -36,6 +37,7 @@ RECIPE_INVENTORY_PG_CONTROL=omit-recipe-create-product-lock node --test --test-n
 ## Verified locally
 
 - Real PostgreSQL: **15/15** concurrency cases, each with an observed blocked backend and verified committed or rejected result. The negative control exited 1 as expected: two creates left six selectable versions without the guard.
+- Local test safety and discovery: **15/15** metadata/URL checks without starting a web server or connecting to a database. Missing credentials and bare URL delimiters are rejected.
 - Playwright: **6/6** maintenance and **2/2** master-data cases across phone and desktop, no skips. The maintenance checks include same-template draft reset, the sixth-version archive, both production-use paths including explicit empty confirmation, and save/disable actions that pass pointer hit testing.
 - Optional legacy consumption Playwright suite: **14/14** across both projects with exact translated stock-unit assertions and all 16 ordered migration hashes verified. One superseded local attempt was interrupted by host sleep; the awake rerun used the same timeouts.
 - Vitest: **1,634/1,634** in 140 files with two workers. TypeScript, lint, and the isolated production build exited 0. Lint reported 16 existing warnings outside the touched tests.

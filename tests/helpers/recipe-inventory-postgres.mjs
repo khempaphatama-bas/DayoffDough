@@ -17,8 +17,8 @@ export function validatedAdminUrl(raw) {
   let url;
   try { url = new URL(raw); } catch { /* Report the contract without echoing the value. */ }
   assert.ok(url?.protocol === "postgres:" && url.hostname === "127.0.0.1" && url.port
-    && Number(url.port) > 0 && url.pathname === "/postgres" && !url.search && !url.hash,
-  "RECIPE_INVENTORY_LOCAL_PG_ADMIN_URL requires postgres://…@127.0.0.1:<port>/postgres without options");
+    && Number(url.port) > 0 && url.pathname === "/postgres" && url.username && url.password && !/[?#]/.test(url.href),
+  "RECIPE_INVENTORY_LOCAL_PG_ADMIN_URL requires an explicit local test username and password, a loopback port, and /postgres without query or fragment delimiters");
   return url;
 }
 
